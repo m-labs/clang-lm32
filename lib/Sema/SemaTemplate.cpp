@@ -920,7 +920,8 @@ Sema::CheckClassTemplate(Scope *S, unsigned TagSpec, TagUseKind TUK,
     //   the class-key shall agree in kind with the original class
     //   template declaration (7.1.5.3).
     RecordDecl *PrevRecordDecl = PrevClassTemplate->getTemplatedDecl();
-    if (!isAcceptableTagRedeclaration(PrevRecordDecl, Kind, KWLoc, *Name)) {
+    if (!isAcceptableTagRedeclaration(PrevRecordDecl, Kind,
+                                      TUK == TUK_Definition,  KWLoc, *Name)) {
       Diag(KWLoc, diag::err_use_with_wrong_tag)
         << Name
         << FixItHint::CreateReplacement(KWLoc, PrevRecordDecl->getKindName());
@@ -2130,7 +2131,8 @@ TypeResult Sema::ActOnTagTemplateIdType(TagUseKind TUK,
     IdentifierInfo *Id = D->getIdentifier();
     assert(Id && "templated class must have an identifier");
     
-    if (!isAcceptableTagRedeclaration(D, TagKind, TagLoc, *Id)) {
+    if (!isAcceptableTagRedeclaration(D, TagKind, TUK == TUK_Definition,
+                                      TagLoc, *Id)) {
       Diag(TagLoc, diag::err_use_with_wrong_tag)
         << Result
         << FixItHint::CreateReplacement(SourceRange(TagLoc), D->getKindName());
@@ -2910,16 +2912,6 @@ bool Sema::CheckTemplateArgumentList(TemplateDecl *Template,
     // arguments, just break out now and we'll fill in the argument pack below.
     if ((*Param)->isTemplateParameterPack())
       break;
-
-    // If our template is a template template parameter that hasn't acquired
-    // its proper context yet (e.g., because we're using the template template
-    // parameter in the signature of a function template, before we've built
-    // the function template itself), don't attempt substitution of default
-    // template arguments at this point: we don't have enough context to
-    // do it properly.
-    if (isTemplateTemplateParameter && 
-        Template->getDeclContext()->isTranslationUnit())
-      break;
     
     // We have a default template argument that we will use.
     TemplateArgumentLoc Arg;
@@ -3511,9 +3503,11 @@ CheckTemplateArgumentAddressOfObjectOrFunction(Sema &S,
     return true;
   }
 
+  bool ObjCLifetimeConversion;
   if (ParamType->isPointerType() &&
       !ParamType->getAs<PointerType>()->getPointeeType()->isFunctionType() &&
-      S.IsQualificationConversion(ArgType, ParamType, false)) {
+      S.IsQualificationConversion(ArgType, ParamType, false, 
+                                  ObjCLifetimeConversion)) {
     // For pointer-to-object types, qualification conversions are
     // permitted.
   } else {
@@ -3873,8 +3867,9 @@ ExprResult Sema::CheckTemplateArgument(NonTypeTemplateParmDecl *Param,
       return Owned(Arg);
     }
 
+    bool ObjCLifetimeConversion;
     if (IsQualificationConversion(ArgType, ParamType.getNonReferenceType(),
-                                  false)) {
+                                  false, ObjCLifetimeConversion)) {
       Arg = ImpCastExprToType(Arg, ParamType, CK_NoOp, CastCategory(Arg)).take();
     } else if (!Context.hasSameUnqualifiedType(ArgType,
                                            ParamType.getNonReferenceType())) {
@@ -3941,9 +3936,11 @@ ExprResult Sema::CheckTemplateArgument(NonTypeTemplateParmDecl *Param,
   //        member, qualification conversions (4.4) are applied.
   assert(ParamType->isMemberPointerType() && "Only pointers to members remain");
 
+  bool ObjCLifetimeConversion;
   if (Context.hasSameUnqualifiedType(ParamType, ArgType)) {
     // Types match exactly: nothing more to do here.
-  } else if (IsQualificationConversion(ArgType, ParamType, false)) {
+  } else if (IsQualificationConversion(ArgType, ParamType, false, 
+                                       ObjCLifetimeConversion)) {
     Arg = ImpCastExprToType(Arg, ParamType, CK_NoOp, CastCategory(Arg)).take();
   } else {
     // We can't perform this conversion.
@@ -4051,8 +4048,10 @@ Sema::BuildExpressionFromDeclTemplateArgument(const TemplateArgument &Arg,
       // We might need to perform a trailing qualification conversion, since
       // the element type on the parameter could be more qualified than the
       // element type in the expression we constructed.
+      bool ObjCLifetimeConversion;
       if (IsQualificationConversion(((Expr*) RefExpr.get())->getType(),
-                                    ParamType.getUnqualifiedType(), false))
+                                    ParamType.getUnqualifiedType(), false,
+                                    ObjCLifetimeConversion))
         RefExpr = ImpCastExprToType(RefExpr.take(), ParamType.getUnqualifiedType(), CK_NoOp);
 
       assert(!RefExpr.isInvalid() &&
@@ -4775,7 +4774,7 @@ Sema::ActOnClassTemplateSpecialization(Scope *S, unsigned TagSpec,
   TagTypeKind Kind = TypeWithKeyword::getTagTypeKindForTypeSpec(TagSpec);
   assert(Kind != TTK_Enum && "Invalid enum tag in class template spec!");
   if (!isAcceptableTagRedeclaration(ClassTemplate->getTemplatedDecl(),
-                                    Kind, KWLoc,
+                                    Kind, TUK == TUK_Definition, KWLoc,
                                     *ClassTemplate->getIdentifier())) {
     Diag(KWLoc, diag::err_use_with_wrong_tag)
       << ClassTemplate
@@ -5746,7 +5745,7 @@ Sema::ActOnExplicitInstantiation(Scope *S,
   assert(Kind != TTK_Enum &&
          "Invalid enum tag in class template explicit instantiation!");
   if (!isAcceptableTagRedeclaration(ClassTemplate->getTemplatedDecl(),
-                                    Kind, KWLoc,
+                                    Kind, /*isDefinition*/false, KWLoc,
                                     *ClassTemplate->getIdentifier())) {
     Diag(KWLoc, diag::err_use_with_wrong_tag)
       << ClassTemplate

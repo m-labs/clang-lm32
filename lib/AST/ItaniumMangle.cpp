@@ -21,6 +21,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprObjC.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/ABI.h"
 #include "clang/Basic/SourceManager.h"
@@ -1122,6 +1123,12 @@ void CXXNameMangler::mangleLocalName(const NamedDecl *ND) {
   //              := Z <function encoding> E s [<discriminator>]
   // <discriminator> := _ <non-negative number>
   const DeclContext *DC = ND->getDeclContext();
+  if (isa<ObjCMethodDecl>(DC) && isa<FunctionDecl>(ND)) {
+    // Don't add objc method name mangling to locally declared function
+    mangleUnqualifiedName(ND);
+    return;
+  }
+
   Out << 'Z';
 
   if (const ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(DC)) {
@@ -1458,7 +1465,35 @@ void CXXNameMangler::mangleQualifiers(Qualifiers Quals) {
     Out << 'U' << ASString.size() << ASString;
   }
   
-  // FIXME: For now, just drop all extension qualifiers on the floor.
+  llvm::StringRef LifetimeName;
+  switch (Quals.getObjCLifetime()) {
+  // Objective-C ARC Extension:
+  //
+  //   <type> ::= U "__strong"
+  //   <type> ::= U "__weak"
+  //   <type> ::= U "__autoreleasing"
+  //   <type> ::= U "__unsafe_unretained"
+  case Qualifiers::OCL_None:
+    break;
+    
+  case Qualifiers::OCL_Weak:
+    LifetimeName = "__weak";
+    break;
+    
+  case Qualifiers::OCL_Strong:
+    LifetimeName = "__strong";
+    break;
+    
+  case Qualifiers::OCL_Autoreleasing:
+    LifetimeName = "__autoreleasing";
+    break;
+    
+  case Qualifiers::OCL_ExplicitNone:
+    LifetimeName = "__unsafe_unretained";
+    break;
+  }
+  if (!LifetimeName.empty())
+    Out << 'U' << LifetimeName.size() << LifetimeName;
 }
 
 void CXXNameMangler::mangleRefQualifier(RefQualifierKind RefQualifier) {
@@ -2083,6 +2118,7 @@ void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity) {
   case Expr::ObjCProtocolExprClass:
   case Expr::ObjCSelectorExprClass:
   case Expr::ObjCStringLiteralClass:
+  case Expr::ObjCIndirectCopyRestoreExprClass:
   case Expr::OffsetOfExprClass:
   case Expr::PredefinedExprClass:
   case Expr::ShuffleVectorExprClass:
@@ -2341,7 +2377,15 @@ void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity) {
     mangleExpression(cast<ImplicitCastExpr>(E)->getSubExpr(), Arity);
     break;
   }
-
+      
+  case Expr::ObjCBridgedCastExprClass: {
+    // Mangle ownership casts as a vendor extended operator __bridge, 
+    // __bridge_transfer, or __bridge_retain.
+    llvm::StringRef Kind = cast<ObjCBridgedCastExpr>(E)->getBridgeKindName();
+    Out << "v1U" << Kind.size() << Kind;
+  }
+  // Fall through to mangle the cast itself.
+      
   case Expr::CStyleCastExprClass:
   case Expr::CXXStaticCastExprClass:
   case Expr::CXXDynamicCastExprClass:

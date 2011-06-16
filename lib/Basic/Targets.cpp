@@ -84,15 +84,28 @@ static void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
   Builder.defineMacro("__MACH__");
   Builder.defineMacro("OBJC_NEW_PROPERTIES");
 
-  // __weak is always defined, for use in blocks and with objc pointers.
-  Builder.defineMacro("__weak", "__attribute__((objc_gc(weak)))");
+  if (!Opts.ObjCAutoRefCount) {
+    // __weak is always defined, for use in blocks and with objc pointers.
+    Builder.defineMacro("__weak", "__attribute__((objc_gc(weak)))");
 
-  // Darwin defines __strong even in C mode (just to nothing).
-  if (!Opts.ObjC1 || Opts.getGCMode() == LangOptions::NonGC)
-    Builder.defineMacro("__strong", "");
-  else
-    Builder.defineMacro("__strong", "__attribute__((objc_gc(strong)))");
-
+    // Darwin defines __strong even in C mode (just to nothing).
+    if (Opts.getGCMode() != LangOptions::NonGC)
+      Builder.defineMacro("__strong", "__attribute__((objc_gc(strong)))");
+    else
+      Builder.defineMacro("__strong", "");
+    
+    // __unsafe_unretained is defined to nothing in non-ARC mode. We even
+    // allow this in C, since one might have block pointers in structs that
+    // are used in pure C code and in Objective-C ARC.
+    Builder.defineMacro("__unsafe_unretained", "");
+    
+    // The Objective-C bridged cast keywords are defined to nothing in non-ARC
+    // mode; then they become normal, C-style casts.
+    Builder.defineMacro("__bridge", "");
+    Builder.defineMacro("__bridge_transfer", "");
+    Builder.defineMacro("__bridge_retained", "");
+  }
+  
   if (Opts.Static)
     Builder.defineMacro("__STATIC__");
   else
@@ -1206,7 +1219,7 @@ public:
   }
   virtual bool validateAsmConstraint(const char *&Name,
                                      TargetInfo::ConstraintInfo &info) const;
-  virtual std::string convertConstraint(const char Constraint) const;
+  virtual std::string convertConstraint(const char *&Constraint) const;
   virtual const char *getClobbers() const {
     return "~{dirflag},~{fpsr},~{flags}";
   }
@@ -1534,8 +1547,8 @@ X86TargetInfo::validateAsmConstraint(const char *&Name,
 
 
 std::string
-X86TargetInfo::convertConstraint(const char Constraint) const {
-  switch (Constraint) {
+X86TargetInfo::convertConstraint(const char *&Constraint) const {
+  switch (*Constraint) {
   case 'a': return std::string("{ax}");
   case 'b': return std::string("{bx}");
   case 'c': return std::string("{cx}");
@@ -1549,7 +1562,7 @@ X86TargetInfo::convertConstraint(const char Constraint) const {
   case 'u': // second from top of floating point stack.
     return std::string("{st(1)}"); // second from top of floating point stack.
   default:
-    return std::string(1, Constraint);
+    return std::string(1, *Constraint);
   }
 }
 } // end anonymous namespace
@@ -2122,8 +2135,30 @@ public:
     case 'P': // VFP Floating point register double precision
       Info.setAllowsRegister();
       return true;
+    case 'U': // a memory reference...
+      switch (Name[1]) {
+      case 'q': // ...ARMV4 ldrsb
+      case 'v': // ...VFP load/store (reg+constant offset)
+      case 'y': // ...iWMMXt load/store
+        Info.setAllowsMemory();
+        Name++;
+        return true;
+      }
     }
     return false;
+  }
+  std::string
+  virtual convertConstraint(const char *&Constraint) const {
+    std::string R;
+    switch (*Constraint) {
+    case 'U':   // Two-character constraint; add "^" hint for later parsing.
+      R = std::string("^") + std::string(Constraint, 2);
+      Constraint++;
+      break;
+    default:
+      return std::string(1, *Constraint);
+    }
+    return R;
   }
   virtual const char *getClobbers() const {
     // FIXME: Is this really right?

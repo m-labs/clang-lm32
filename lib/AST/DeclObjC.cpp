@@ -339,12 +339,14 @@ ObjCMethodDecl *ObjCMethodDecl::Create(ASTContext &C,
                                        bool isSynthesized,
                                        bool isDefined,
                                        ImplementationControl impControl,
+                                       bool HasRelatedResultType,
                                        unsigned numSelectorArgs) {
   return new (C) ObjCMethodDecl(beginLoc, endLoc,
                                 SelInfo, T, ResultTInfo, contextDecl,
                                 isInstance,
                                 isVariadic, isSynthesized, isDefined,
                                 impControl,
+                                HasRelatedResultType,
                                 numSelectorArgs);
 }
 
@@ -446,6 +448,7 @@ ObjCMethodFamily ObjCMethodDecl::getMethodFamily() const {
   case OMF_release:
   case OMF_autorelease:
   case OMF_retainCount:
+  case OMF_self:
     if (!isInstanceMethod())
       family = OMF_None;
     break;
@@ -471,8 +474,28 @@ void ObjCMethodDecl::createImplicitParams(ASTContext &Context,
   } else // we have a factory method.
     selfTy = Context.getObjCClassType();
 
-  setSelfDecl(ImplicitParamDecl::Create(Context, this, SourceLocation(),
-                                        &Context.Idents.get("self"), selfTy));
+  bool selfIsConsumed = false;
+  if (isInstanceMethod() && Context.getLangOptions().ObjCAutoRefCount) {
+    selfIsConsumed = hasAttr<NSConsumesSelfAttr>();
+
+    // 'self' is always __strong, although as a special case we don't
+    // actually retain it except in init methods.
+    Qualifiers qs;
+    qs.setObjCLifetime(Qualifiers::OCL_Strong);
+    selfTy = Context.getQualifiedType(selfTy, qs);
+
+    // In addition, 'self' is const unless this is an init method.
+    if (getMethodFamily() != OMF_init)
+      selfTy = selfTy.withConst();
+  }
+
+  ImplicitParamDecl *self
+    = ImplicitParamDecl::Create(Context, this, SourceLocation(),
+                                &Context.Idents.get("self"), selfTy);
+  setSelfDecl(self);
+
+  if (selfIsConsumed)
+    self->addAttr(new (Context) NSConsumedAttr(SourceLocation(), Context));
 
   setCmdDecl(ImplicitParamDecl::Create(Context, this, SourceLocation(),
                                        &Context.Idents.get("_cmd"),
