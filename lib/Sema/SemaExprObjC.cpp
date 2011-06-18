@@ -128,7 +128,8 @@ ExprResult Sema::BuildObjCEncodeExpression(SourceLocation AtLoc,
   if (EncodedType->isDependentType())
     StrTy = Context.DependentTy;
   else {
-    if (!EncodedType->getAsArrayTypeUnsafe()) // Incomplete array is handled.
+    if (!EncodedType->getAsArrayTypeUnsafe() && //// Incomplete array is handled.
+        !EncodedType->isVoidType()) // void is handled too.
       if (RequireCompleteType(AtLoc, EncodedType,
                          PDiag(diag::err_incomplete_type_objc_at_encode)
                              << EncodedTypeInfo->getTypeLoc().getSourceRange()))
@@ -1585,7 +1586,7 @@ Sema::CheckObjCARCConversion(SourceRange castRange, QualType castType,
                                     "converts between Objective-C and C pointers in -fobjc-arc"))
     return;
   
-  unsigned srcKind;
+  unsigned srcKind = 0;
   switch (exprACTC) {
     case ACTC_none:
       srcKind = (castExprType->isPointerType() ? 1 : 0);

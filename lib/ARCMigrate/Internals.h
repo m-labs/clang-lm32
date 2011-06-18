@@ -27,9 +27,11 @@ public:
   void push_back(const StoredDiagnostic &diag) { List.push_back(diag); }
 
   bool clearDiagnostic(llvm::ArrayRef<unsigned> IDs, SourceRange range);
-  bool hasDiagnostic(llvm::ArrayRef<unsigned> IDs, SourceRange range);
+  bool hasDiagnostic(llvm::ArrayRef<unsigned> IDs, SourceRange range) const;
 
-  void reportDiagnostics(Diagnostic &diags);
+  void reportDiagnostics(Diagnostic &diags) const;
+
+  bool hasErrors() const;
 };
 
 class TransformActions {

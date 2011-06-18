@@ -18,7 +18,7 @@ namespace arcmt {
 
 class CheckAction : public WrapperFrontendAction {
 protected:
-  virtual void ExecuteAction();
+  virtual bool BeginInvocation(CompilerInstance &CI);
 
 public:
   CheckAction(FrontendAction *WrappedAction);
@@ -26,18 +26,10 @@ public:
 
 class TransformationAction : public WrapperFrontendAction {
 protected:
-  virtual void ExecuteAction();
+  virtual bool BeginInvocation(CompilerInstance &CI);
 
 public:
   TransformationAction(FrontendAction *WrappedAction);
-};
-
-class InMemoryTransformationAction : public WrapperFrontendAction {
-protected:
-  virtual void ExecuteAction();
-
-public:
-  InMemoryTransformationAction(FrontendAction *WrappedAction);
 };
 
 }
