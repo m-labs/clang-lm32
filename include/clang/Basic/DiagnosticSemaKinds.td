@@ -2287,6 +2287,8 @@ def err_inline_declaration_block_scope : Error<
   "inline declaration of %0 not allowed in block scope">;
 def err_static_non_static : Error<
   "static declaration of %0 follows non-static declaration">;
+def warn_weak_import : Warning <
+  "an already-declared variable is made a weak_import declaration %0">;
 def warn_static_non_static : ExtWarn<
   "static declaration of %0 follows non-static declaration">;
 def err_non_static_static : Error<
@@ -2597,7 +2599,8 @@ def warn_arc_non_pod_class_with_object_member : Warning<
   "to make it ABI-compatible">, InGroup<AutomaticReferenceCountingABI>,
   DefaultIgnore;
 def warn_arc_retained_assign : Warning<
-  "cannot assign retained object to %select{weak|unsafe_unretained}0 variable">;
+  "assigning retained object to %select{weak|unsafe_unretained}0 variable">,
+  InGroup<ARCUnsafeRetainedAssign>;
 def warn_arc_trivial_member_function_with_object_member : Warning<
   "%0 cannot be shared between ARC and non-ARC "
   "code; add a non-trivial %select{copy constructor|copy assignment operator|"
@@ -2641,7 +2644,7 @@ def err_arc_multiple_method_decl : Error<
   "parameter type or attributes">;
 def warn_arc_retain_cycle : Warning<
   "capturing %0 strongly in this block is likely to lead to a retain cycle">,
-  InGroup<DiagGroup<"retain-cycles">>;
+  InGroup<ARCRetainCycles>;
 def note_arc_retain_cycle_owner : Note<
   "block will be retained by %select{the captured object|an object strongly "
   "retained by the captured object}0">;
@@ -2650,7 +2653,7 @@ def note_nontrivial_objc_lifetime : Note<
   "lifetime">;
 def warn_arc_object_memaccess : Warning<
   "%select{destination for|source of}0 this %1 call is a pointer to "
-  "lifetime-qualified type %2">, InGroup<DiagGroup<"non-pod-memaccess">>;
+  "lifetime-qualified type %2">, InGroup<ARCNonPodMemAccess>;
 
 def err_arc_strong_property_lifetime : Error<
   "existing ivar %1 for strong property %0 may not be "
@@ -3150,9 +3153,12 @@ def err_qualified_objc_catch_parm : Error<
   "@catch parameter declarator cannot be qualified">;
 def err_objc_pointer_cxx_catch_gnu : Error<
   "can't catch Objective C exceptions in C++ in the GNU runtime">;
-def err_objc_pointer_cxx_catch_fragile : Error<
-  "can't catch Objective C exceptions in C++ in the non-unified "
+def warn_objc_pointer_cxx_catch_fragile : Warning<
+  "catching Objective C id's exceptions in C++ in the non-unified "
   "exception model">;
+def err_objc_pointer_cxx_catch_fragile : Error<
+"can't catch Objective C exceptions in C++ in the non-unified "
+"exception model">;
 def err_objc_object_catch : Error<
   "can't catch an Objective C object by value">;
 def err_incomplete_type_objc_at_encode : Error<

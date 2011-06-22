@@ -3915,19 +3915,9 @@ InitializationSequence::Perform(Sema &S,
 
       }
     }
-
-    if (Kind.getKind() == InitializationKind::IK_Copy || Kind.isExplicitCast())
-      return ExprResult(Args.release()[0]);
-
-    if (Args.size() == 0)
-      return S.Owned((Expr *)0);
-
-    unsigned NumArgs = Args.size();
-    return S.Owned(new (S.Context) ParenListExpr(S.Context,
-                                                 SourceLocation(),
-                                                 (Expr **)Args.release(),
-                                                 NumArgs,
-                                                 SourceLocation()));
+    assert(Kind.getKind() == InitializationKind::IK_Copy ||
+           Kind.isExplicitCast());
+    return ExprResult(Args.release()[0]);
   }
 
   // No steps means no initialization.
@@ -4080,8 +4070,17 @@ InitializationSequence::Perform(Sema &S,
         return ExprError();
 
       // Materialize the temporary into memory.
-      CurInit = new (S.Context) MaterializeTemporaryExpr(CurInit.get(),
+      CurInit = new (S.Context) MaterializeTemporaryExpr(
+                                         Entity.getType().getNonReferenceType(),
+                                                         CurInit.get(),
                                      Entity.getType()->isLValueReferenceType());
+
+      // If we're binding to an Objective-C object that has lifetime, we
+      // need cleanups.
+      if (S.getLangOptions().ObjCAutoRefCount &&
+          CurInit.get()->getType()->isObjCLifetimeType())
+        S.ExprNeedsCleanups = true;
+            
       break;
 
     case SK_ExtraneousCopyToTemporary:

@@ -1985,6 +1985,22 @@ namespace {
     CallReleaseForObject(QualType type, llvm::Value *addr, bool precise)
       : ObjCReleasingCleanup(type, addr), precise(precise) {}
 
+    using ObjCReleasingCleanup::Emit;
+    static void Emit(CodeGenFunction &CGF, bool IsForEH,
+                     QualType type, llvm::Value *addr, bool precise) {
+      // EHScopeStack::Cleanup objects can never have their destructors called,
+      // so use placement new to construct our temporary object.
+      union {
+        void* align;
+        char data[sizeof(CallReleaseForObject)];
+      };
+      
+      CallReleaseForObject *Object
+        = new (&align) CallReleaseForObject(type, addr, precise);
+      Object->Emit(CGF, IsForEH);
+      (void)data[0];
+    }
+
     void release(CodeGenFunction &CGF, QualType type, llvm::Value *addr) {
       llvm::Value *ptr = CGF.Builder.CreateLoad(addr, "tmp");
       CGF.EmitARCRelease(ptr, precise);
@@ -2033,6 +2049,22 @@ namespace {
     CallWeakReleaseForObject(QualType type, llvm::Value *addr)
       : ObjCReleasingCleanup(type, addr) {}
 
+    using ObjCReleasingCleanup::Emit;
+    static void Emit(CodeGenFunction &CGF, bool IsForEH,
+                     QualType type, llvm::Value *addr) {
+      // EHScopeStack::Cleanup objects can never have their destructors called,
+      // so use placement new to construct our temporary object.
+      union {
+        void* align;
+        char data[sizeof(CallWeakReleaseForObject)];
+      };
+      
+      CallWeakReleaseForObject *Object
+        = new (&align) CallWeakReleaseForObject(type, addr);
+      Object->Emit(CGF, IsForEH);
+      (void)data[0];
+    }
+    
     void release(CodeGenFunction &CGF, QualType type, llvm::Value *addr) {
       CGF.EmitARCDestroyWeak(addr);
     }
@@ -2099,16 +2131,24 @@ void CodeGenFunction::EmitObjCAutoreleasePoolCleanup(llvm::Value *Ptr) {
 void CodeGenFunction::PushARCReleaseCleanup(CleanupKind cleanupKind,
                                             QualType type,
                                             llvm::Value *addr,
-                                            bool precise) {
-  EHStack.pushCleanup<CallReleaseForObject>(cleanupKind, type, addr, precise);
+                                            bool precise,
+                                            bool forFullExpr) {
+  if (forFullExpr)
+    pushFullExprCleanup<CallReleaseForObject>(cleanupKind, type, addr, precise);
+  else
+    EHStack.pushCleanup<CallReleaseForObject>(cleanupKind, type, addr, precise);
 }
 
 /// PushARCWeakReleaseCleanup - Enter a cleanup to perform a weak
 /// release on the given object or array of objects.
 void CodeGenFunction::PushARCWeakReleaseCleanup(CleanupKind cleanupKind,
                                                 QualType type,
-                                                llvm::Value *addr) {
-  EHStack.pushCleanup<CallWeakReleaseForObject>(cleanupKind, type, addr);
+                                                llvm::Value *addr,
+                                                bool forFullExpr) {
+  if (forFullExpr)
+    pushFullExprCleanup<CallWeakReleaseForObject>(cleanupKind, type, addr);
+  else
+    EHStack.pushCleanup<CallWeakReleaseForObject>(cleanupKind, type, addr);
 }
 
 /// PushARCReleaseCleanup - Enter a cleanup to perform a release on a
@@ -2229,6 +2269,31 @@ tryEmitARCRetainScalarExpr(CodeGenFunction &CGF, const Expr *e) {
   // The desired result type, if it differs from the type of the
   // ultimate opaque expression.
   const llvm::Type *resultType = 0;
+
+  // If we're loading retained from a __strong xvalue, we can avoid 
+  // an extra retain/release pair by zeroing out the source of this
+  // "move" operation.
+  if (e->isXValue() &&
+      e->getType().getObjCLifetime() == Qualifiers::OCL_Strong) {
+    // Emit the lvalue
+    LValue lv = CGF.EmitLValue(e);
+    
+    // Load the object pointer and cast it to the appropriate type.
+    QualType exprType = e->getType();
+    llvm::Value *result = CGF.EmitLoadOfLValue(lv, exprType).getScalarVal();
+    
+    if (resultType)
+      result = CGF.Builder.CreateBitCast(result, resultType);
+    
+    // Set the source pointer to NULL.
+    llvm::Value *null 
+      = llvm::ConstantPointerNull::get(
+                            cast<llvm::PointerType>(CGF.ConvertType(exprType)));
+    CGF.EmitStoreOfScalar(null, lv.getAddress(), lv.isVolatileQualified(),
+                          lv.getAlignment(), exprType);
+    
+    return TryEmitResult(result, true);
+  }
 
   while (true) {
     e = e->IgnoreParens();

@@ -525,11 +525,11 @@ typedef struct Bark Bark;
 @implementation Test30
 - (id) new { return 0; }
 - (void) Meth {
-  __weak id x = [Test30 new]; // expected-warning {{cannot assign retained object to weak variable}}
-  id __unsafe_unretained u = [Test30 new]; // expected-warning {{cannot assign retained object to unsafe_unretained variable}}
+  __weak id x = [Test30 new]; // expected-warning {{assigning retained object to weak variable}}
+  id __unsafe_unretained u = [Test30 new]; // expected-warning {{assigning retained object to unsafe_unretained variable}}
   id y = [Test30 new];
-  x = [Test30 new]; // expected-warning {{cannot assign retained object to weak variable}}
-  u = [Test30 new]; // expected-warning {{cannot assign retained object to unsafe_unretained variable}}
+  x = [Test30 new]; // expected-warning {{assigning retained object to weak variable}}
+  u = [Test30 new]; // expected-warning {{assigning retained object to unsafe_unretained variable}}
   y = [Test30 new];
 }
 @end
@@ -561,5 +561,14 @@ id Test32(__weak ITest32 *x) {
   x->ivar = 0; // expected-error {{dereferencing a __weak pointer is not allowed}}
   return y ? y->ivar     // expected-error {{dereferencing a __weak pointer is not allowed}}
            : (*x).ivar;  // expected-error {{dereferencing a __weak pointer is not allowed}}
+}
+
+// rdar://9619861
+extern int printf(const char*, ...);
+typedef long intptr_t;
+
+int Test33(id someid) {
+  printf( "Hello%ld", (intptr_t)someid);
+  return (int)someid;
 }
 
