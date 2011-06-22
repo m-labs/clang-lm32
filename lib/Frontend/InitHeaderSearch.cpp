@@ -920,8 +920,12 @@ AddDefaultCPlusPlusIncludePaths(const llvm::Triple &triple) {
 void InitHeaderSearch::AddDefaultSystemIncludePaths(const LangOptions &Lang,
                                                     const llvm::Triple &triple,
                                             const HeaderSearchOptions &HSOpts) {
-  if (Lang.CPlusPlus && HSOpts.UseStandardCXXIncludes)
-    AddDefaultCPlusPlusIncludePaths(triple);
+  if (Lang.CPlusPlus && HSOpts.UseStandardCXXIncludes) {
+    if (HSOpts.UseLibcxx)
+      AddPath("/usr/include/c++/v1", CXXSystem, true, false, false);
+    else
+      AddDefaultCPlusPlusIncludePaths(triple);
+  }
 
   AddDefaultCIncludePaths(triple, HSOpts);
 
@@ -1090,7 +1094,7 @@ void clang::ApplyHeaderSearchOptions(HeaderSearch &HS,
   for (unsigned i = 0, e = HSOpts.UserEntries.size(); i != e; ++i) {
     const HeaderSearchOptions::Entry &E = HSOpts.UserEntries[i];
     Init.AddPath(E.Path, E.Group, false, E.IsUserSupplied, E.IsFramework,
-                 !E.IsSysRootRelative);
+                 E.IgnoreSysRoot);
   }
 
   // Add entries from CPATH and friends.

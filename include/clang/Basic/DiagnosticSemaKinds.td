@@ -1535,7 +1535,13 @@ def note_ovl_candidate_arity : Note<"candidate "
 
 def note_ovl_candidate_deleted : Note<
     "candidate %select{function|function|constructor|"
-    "function |function |constructor ||||constructor (inherited)}0%1 "
+    "function |function |constructor |"
+    "constructor (the implicit default constructor)|"
+    "constructor (the implicit copy constructor)|"
+    "constructor (the implicit move constructor)|"
+    "function (the implicit copy assignment operator)|"
+    "function (the implicit move assignment operator)|"
+    "constructor (inherited)}0%1 "
     "has been explicitly %select{made unavailable|deleted}2">;
 
 // Giving the index of the bad argument really clutters this message, and
@@ -2777,6 +2783,11 @@ def warn_logical_instead_of_bitwise : Warning<
   "use of logical %0 with constant operand; switch to bitwise %1 or "
   "remove constant">, InGroup<DiagGroup<"constant-logical-operand">>;
 
+def warn_bitwise_and_in_bitwise_or : Warning<
+  "'&' within '|'">, InGroup<BitwiseOpParentheses>;
+def note_bitwise_and_in_bitwise_or_silence : Note<
+  "place parentheses around the '&' expression to silence this warning">;
+
 def warn_logical_and_in_logical_or : Warning<
   "'&&' within '||'">, InGroup<LogicalOpParentheses>;
 def note_logical_and_in_logical_or_silence : Note<
@@ -2999,7 +3010,7 @@ def warn_comparison_of_mixed_enum_types : Warning<
   InGroup<DiagGroup<"enum-compare">>;
 def warn_null_in_arithmetic_operation : Warning<
   "use of NULL in arithmetic operation">,
-  InGroup<DiagGroup<"null-arithmetic">>, DefaultIgnore;
+  InGroup<DiagGroup<"null-arithmetic">>;
 
 def err_invalid_this_use : Error<
   "invalid use of 'this' outside of a nonstatic member function">;

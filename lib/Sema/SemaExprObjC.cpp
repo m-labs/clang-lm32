@@ -63,7 +63,7 @@ ExprResult Sema::ParseObjCStringLiteral(SourceLocation *AtLocs,
 
     // Create the aggregate string with the appropriate content and location
     // information.
-    S = StringLiteral::Create(Context, &StrBuf[0], StrBuf.size(),
+    S = StringLiteral::Create(Context, StrBuf,
                               /*Wide=*/false, /*Pascal=*/false,
                               Context.getPointerType(Context.CharTy),
                               &StrLocs[0], StrLocs.size());
@@ -1550,9 +1550,71 @@ namespace {
   };
 }
 
+bool
+Sema::ValidObjCARCNoBridgeCastExpr(Expr *&Exp, QualType castType) {
+  Expr *NewExp = Exp->IgnoreParenCasts();
+  
+  if (!isa<ObjCMessageExpr>(NewExp) && !isa<ObjCPropertyRefExpr>(NewExp)
+      && !isa<CallExpr>(NewExp))
+    return false;
+  ObjCMethodDecl *method = 0;
+  bool MethodReturnsPlusOne = false;
+  
+  if (ObjCPropertyRefExpr *PRE = dyn_cast<ObjCPropertyRefExpr>(NewExp)) {
+    method = PRE->getExplicitProperty()->getGetterMethodDecl();
+  }
+  else if (ObjCMessageExpr *ME = dyn_cast<ObjCMessageExpr>(NewExp))
+    method = ME->getMethodDecl();
+  else {
+    CallExpr *CE = cast<CallExpr>(NewExp);
+    Decl *CallDecl = CE->getCalleeDecl();
+    if (!CallDecl)
+      return false;
+    if (CallDecl->hasAttr<CFReturnsNotRetainedAttr>())
+      return true;
+    MethodReturnsPlusOne = CallDecl->hasAttr<CFReturnsRetainedAttr>();
+    if (!MethodReturnsPlusOne) {
+      if (NamedDecl *ND = dyn_cast<NamedDecl>(CallDecl))
+        if (const IdentifierInfo *Id = ND->getIdentifier())
+          if (Id->isStr("__builtin___CFStringMakeConstantString"))
+            return true;
+    }
+  }
+  
+  if (!MethodReturnsPlusOne) {
+    if (!method)
+      return false;
+    if (method->hasAttr<CFReturnsNotRetainedAttr>())
+      return true;
+    MethodReturnsPlusOne = method->hasAttr<CFReturnsRetainedAttr>();
+    if (!MethodReturnsPlusOne) {
+      ObjCMethodFamily family = method->getSelector().getMethodFamily();
+      switch (family) {
+        case OMF_alloc:
+        case OMF_copy:
+        case OMF_mutableCopy:
+        case OMF_new:
+          MethodReturnsPlusOne = true;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+  
+  if (MethodReturnsPlusOne) {
+    TypeSourceInfo *TSInfo = 
+      Context.getTrivialTypeSourceInfo(castType, SourceLocation());
+    ExprResult ExpRes = BuildObjCBridgedCast(SourceLocation(), OBC_BridgeTransfer,
+                                             SourceLocation(), TSInfo, Exp);
+    Exp = ExpRes.take();
+  }
+  return true;
+}
+
 void 
 Sema::CheckObjCARCConversion(SourceRange castRange, QualType castType,
-                             Expr *castExpr, CheckedConversionKind CCK) {
+                             Expr *&castExpr, CheckedConversionKind CCK) {
   QualType castExprType = castExpr->getType();
   
   ARCConversionTypeClass exprACTC = classifyTypeForARCConversion(castExprType);
@@ -1606,6 +1668,10 @@ Sema::CheckObjCARCConversion(SourceRange castRange, QualType castType,
     
     if (castType->isObjCARCBridgableType() && 
         castExprType->isCARCBridgableType()) {
+      // explicit unbridged casts are allowed if the source of the cast is a 
+      // message sent to an objc method (or property access)
+      if (ValidObjCARCNoBridgeCastExpr(castExpr, castType))
+        return;
       Diag(loc, diag::err_arc_cast_requires_bridge)
         << 2
         << castExprType

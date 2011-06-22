@@ -240,6 +240,14 @@ public:
     return getTypeWidth(IntMaxType);
   }
 
+  /// getRegisterWidth - Return the "preferred" register width on this target.
+  uint64_t getRegisterWidth() const {
+    // Currently we assume the register width on the target matches the pointer
+    // width, we can introduce a new variable for this if/when some target wants
+    // it.
+    return LongWidth; 
+  }
+
   /// getUserLabelPrefix - This returns the default value of the
   /// __USER_LABEL_PREFIX__ macro, which is the prefix given to user symbols by
   /// default.  On most platforms this is "_", but it is "" on some, and "." on
@@ -394,6 +402,11 @@ public:
   struct GCCRegAlias {
     const char * const Aliases[5];
     const char * const Register;
+  };
+
+  struct AddlRegName {
+    const char * const Names[5];
+    const unsigned RegNum;
   };
 
   virtual bool useGlobalsForAutomaticVariables() const { return false; }
@@ -566,6 +579,11 @@ protected:
                               unsigned &NumNames) const = 0;
   virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
                                 unsigned &NumAliases) const = 0;
+  virtual void getGCCAddlRegNames(const AddlRegName *&Addl,
+				  unsigned &NumAddl) const {
+    Addl = 0;
+    NumAddl = 0;
+  }
   virtual bool validateAsmConstraint(const char *&Name,
                                      TargetInfo::ConstraintInfo &info) const= 0;
 };

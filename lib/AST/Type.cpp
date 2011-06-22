@@ -288,7 +288,6 @@ bool Type::isDerivedType() const {
     return false;
   }
 }
-
 bool Type::isClassType() const {
   if (const RecordType *RT = getAs<RecordType>())
     return RT->getDecl()->isClass();

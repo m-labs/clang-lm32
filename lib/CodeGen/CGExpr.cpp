@@ -207,6 +207,10 @@ EmitExprForReferenceBinding(CodeGenFunction &CGF, const Expr *E,
                             const NamedDecl *InitializedDecl) {
   ObjCARCReferenceLifetimeType = QualType();
   
+  // Look through expressions for materialized temporaries (for now).
+  if (isa<MaterializeTemporaryExpr>(E))
+    E = cast<MaterializeTemporaryExpr>(E)->GetTemporaryExpr();
+
   if (const CXXDefaultArgExpr *DAE = dyn_cast<CXXDefaultArgExpr>(E))
     E = DAE->getExpr();
   
@@ -667,6 +671,9 @@ LValue CodeGenFunction::EmitLValue(const Expr *E) {
   case Expr::CXXConstCastExprClass:
   case Expr::ObjCBridgedCastExprClass:
     return EmitCastLValue(cast<CastExpr>(E));
+      
+  case Expr::MaterializeTemporaryExprClass:
+    return EmitMaterializeTemporaryExpr(cast<MaterializeTemporaryExpr>(E));
   }
 }
 
@@ -2067,10 +2074,17 @@ LValue CodeGenFunction::EmitOpaqueValueLValue(const OpaqueValueExpr *e) {
   return getOpaqueLValueMapping(e);
 }
 
+LValue CodeGenFunction::EmitMaterializeTemporaryExpr(
+                                           const MaterializeTemporaryExpr *E) {
+  RValue RV = EmitReferenceBindingToExpr(E->GetTemporaryExpr(),
+                                         /*InitializedDecl=*/0);
+  return MakeAddrLValue(RV.getScalarVal(), E->getType());
+}
+
+
 //===--------------------------------------------------------------------===//
 //                             Expression Emission
 //===--------------------------------------------------------------------===//
-
 
 RValue CodeGenFunction::EmitCallExpr(const CallExpr *E, 
                                      ReturnValueSlot ReturnValue) {
@@ -2108,23 +2122,20 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
         DestroyedType->isObjCLifetimeType() &&
         (DestroyedType.getObjCLifetime() == Qualifiers::OCL_Strong ||
          DestroyedType.getObjCLifetime() == Qualifiers::OCL_Weak)) {
-          // Automatic Reference Counting:
-          //   If the pseudo-expression names a retainable object with weak or strong
-          //   lifetime, the object shall be released.
-      bool isNonGC = false;
+      // Automatic Reference Counting:
+      //   If the pseudo-expression names a retainable object with weak or
+      //   strong lifetime, the object shall be released.
       Expr *BaseExpr = PseudoDtor->getBase();
       llvm::Value *BaseValue = NULL;
       Qualifiers BaseQuals;
       
-      // If this is s.x, emit s as an lvalue.  If it is s->x, emit s as a scalar.
+      // If this is s.x, emit s as an lvalue. If it is s->x, emit s as a scalar.
       if (PseudoDtor->isArrow()) {
         BaseValue = EmitScalarExpr(BaseExpr);
         const PointerType *PTy = BaseExpr->getType()->getAs<PointerType>();
         BaseQuals = PTy->getPointeeType().getQualifiers();
       } else {
         LValue BaseLV = EmitLValue(BaseExpr);
-        if (BaseLV.isNonGC())
-          isNonGC = true;
         BaseValue = BaseLV.getAddress();
         QualType BaseTy = BaseExpr->getType();
         BaseQuals = BaseTy.getQualifiers();
@@ -2138,7 +2149,7 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
         
       case Qualifiers::OCL_Strong:
         EmitARCRelease(Builder.CreateLoad(BaseValue, 
-                          PseudoDtor->getDestroyedType().isVolatileQualified()), 
+                          PseudoDtor->getDestroyedType().isVolatileQualified()),
                        /*precise*/ true);
         break;
 

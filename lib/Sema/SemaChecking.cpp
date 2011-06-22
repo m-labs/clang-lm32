@@ -1857,7 +1857,7 @@ static bool isDynamicClassType(QualType T) {
   return false;
 }
 
-/// \brief If E is a sizeof expression returns the argument expression,
+/// \brief If E is a sizeof expression, returns its argument expression,
 /// otherwise returns NULL.
 static const Expr *getSizeOfExprArg(const Expr* E) {
   if (const UnaryExprOrTypeTraitExpr *SizeOf =
@@ -1868,7 +1868,7 @@ static const Expr *getSizeOfExprArg(const Expr* E) {
   return 0;
 }
 
-/// \brief If E is a sizeof expression returns the argument type.
+/// \brief If E is a sizeof expression, returns its argument type.
 static QualType getSizeOfArgType(const Expr* E) {
   if (const UnaryExprOrTypeTraitExpr *SizeOf =
       dyn_cast<UnaryExprOrTypeTraitExpr>(E))
@@ -2205,6 +2205,14 @@ static Expr *EvalAddr(Expr *E, llvm::SmallVectorImpl<DeclRefExpr *> &refVars) {
         return NULL;
   }
 
+  case Stmt::MaterializeTemporaryExprClass:
+    if (Expr *Result = EvalAddr(
+                         cast<MaterializeTemporaryExpr>(E)->GetTemporaryExpr(),
+                                refVars))
+      return Result;
+      
+    return E;
+      
   // Everything else: we simply don't reason about them.
   default:
     return NULL;
@@ -2305,6 +2313,14 @@ do {
 
     return EvalVal(M->getBase(), refVars);
   }
+
+  case Stmt::MaterializeTemporaryExprClass:
+    if (Expr *Result = EvalVal(
+                          cast<MaterializeTemporaryExpr>(E)->GetTemporaryExpr(),
+                               refVars))
+      return Result;
+      
+    return E;
 
   default:
     // Check that we don't return or take the address of a reference to a

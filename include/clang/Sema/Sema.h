@@ -1683,9 +1683,12 @@ public:
 
   DeclContextLookupResult LookupConstructors(CXXRecordDecl *Class);
   CXXConstructorDecl *LookupDefaultConstructor(CXXRecordDecl *Class);
-  CXXConstructorDecl *LookupCopyConstructor(CXXRecordDecl *Class,
-                                            unsigned Quals,
-                                            bool *ConstParam = 0);
+  CXXConstructorDecl *LookupCopyingConstructor(CXXRecordDecl *Class,
+                                               unsigned Quals,
+                                               bool *ConstParam = 0);
+  CXXMethodDecl *LookupCopyingAssignment(CXXRecordDecl *Class, unsigned Quals,
+                                         bool RValueThis, unsigned ThisQuals,
+                                         bool *ConstParam = 0);
   CXXDestructorDecl *LookupDestructor(CXXRecordDecl *Class);
 
   void ArgumentDependentLookup(DeclarationName Name, bool Operator,
@@ -5613,11 +5616,15 @@ public:
   ExprResult CXXCheckCStyleCast(SourceRange R, QualType CastTy, ExprValueKind &VK,
                                 Expr *CastExpr, CastKind &Kind,
                                 CXXCastPath &BasePath, bool FunctionalStyle);
-  
+    
+  /// \brief Checks for valid expressions which can be cast to an ObjC
+  /// pointer without needing a bridge cast.
+  bool ValidObjCARCNoBridgeCastExpr(Expr *&Exp, QualType castType);
+    
   /// \brief Checks for invalid conversions and casts between
   /// retainable pointers and other pointer kinds.
   void CheckObjCARCConversion(SourceRange castRange, QualType castType, 
-                              Expr *op, CheckedConversionKind CCK);
+                              Expr *&op, CheckedConversionKind CCK);
 
   /// checkRetainCycles - Check whether an Objective-C message send
   /// might create an obvious retain cycle.
