@@ -1069,6 +1069,91 @@ void MBlazeTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
 } // end anonymous namespace.
 
 namespace {
+// Mico32 abstract base class
+class Mico32TargetInfo : public TargetInfo {
+  static const char * const GCCRegNames[];
+  static const TargetInfo::GCCRegAlias GCCRegAliases[];
+
+public:
+  Mico32TargetInfo(const std::string& triple) : TargetInfo(triple) {
+    DescriptionString = "E-p:32:32:32-i8:8:8-i16:16:16";
+  }
+
+  virtual void getTargetBuiltins(const Builtin::Info *&Records,
+                                 unsigned &NumRecords) const {
+    // FIXME: Implement.
+    Records = 0;
+    NumRecords = 0;
+  }
+
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                MacroBuilder &Builder) const;
+
+  virtual const char *getVAListDeclaration() const {
+    return "typedef char* __builtin_va_list;";
+  }
+  virtual const char *getTargetPrefix() const {
+    return "mico32";
+  }
+  virtual void getGCCRegNames(const char * const *&Names,
+                              unsigned &NumNames) const;
+  virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                  unsigned &NumAliases) const {
+      // No aliases.
+      Aliases = 0;
+      NumAliases = 0;
+    }
+  virtual bool validateAsmConstraint(const char *&Name,
+                                     TargetInfo::ConstraintInfo &Info) const {
+    switch (*Name) {
+    default: return false;
+    case 'O': // Zero
+      return true;
+    case 'b': // Base register
+    case 'f': // Floating point register
+      Info.setAllowsRegister();
+      return true;
+    }
+  }
+  virtual const char *getClobbers() const {
+    return "";
+  }
+};
+
+/// Mico32TargetInfo::getTargetDefines - Return a set of the Mico32-specific
+/// #defines that are not tied to a specific subtarget.
+void Mico32TargetInfo::getTargetDefines(const LangOptions &Opts,
+                                     MacroBuilder &Builder) const {
+  // Target identification.
+  Builder.defineMacro("__mico32__");
+  Builder.defineMacro("_ARCH_MICO32");
+  Builder.defineMacro("__MICO32__");
+
+  // Target properties.
+  Builder.defineMacro("_BIG_ENDIAN");
+  Builder.defineMacro("__BIG_ENDIAN__");
+
+  // Subtarget options.
+  Builder.defineMacro("__REGISTER_PREFIX__", "");
+}
+
+
+const char * const Mico32TargetInfo::GCCRegNames[] = {
+  "r0",   "r1",   "r2",   "r3",   "r4",   "r5",   "r6",   "r7",
+  "r8",   "r9",   "r10",  "r11",  "r12",  "r13",  "r14",  "r15",
+  "r16",  "r17",  "r18",  "r19",  "r20",  "r21",  "r22",  "r23",
+  "r24",  "r25",  "r26",  "r27",  "r28",  "r29",  "r30",  "r31"
+};
+
+void Mico32TargetInfo::getGCCRegNames(const char * const *&Names,
+                                   unsigned &NumNames) const {
+  Names = GCCRegNames;
+  NumNames = llvm::array_lengthof(GCCRegNames);
+}
+
+} // end anonymous namespace.
+
+namespace {
 // Namespace for x86 abstract base class
 const Builtin::Info BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS) { #ID, TYPE, ATTRS, 0, ALL_LANGUAGES, false },
@@ -2800,6 +2885,9 @@ static TargetInfo *AllocateTarget(const std::string &T) {
 
   case llvm::Triple::mblaze:
     return new MBlazeTargetInfo(T);
+    
+  case llvm::Triple::mico32:
+    return new Mico32TargetInfo(T);
 
   case llvm::Triple::sparc:
     if (os == llvm::Triple::AuroraUX)

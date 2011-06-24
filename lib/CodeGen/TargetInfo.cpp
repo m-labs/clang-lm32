@@ -2852,6 +2852,28 @@ void MSP430TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
 }
 
 //===----------------------------------------------------------------------===//
+// Mico32 ABI Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+class Mico32TargetCodeGenInfo : public TargetCodeGenInfo {
+public:
+  Mico32TargetCodeGenInfo(CodeGenTypes &CGT)
+    : TargetCodeGenInfo(new DefaultABIInfo(CGT)) {}
+  void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
+                           CodeGen::CodeGenModule &M) const;
+};
+
+}
+
+void Mico32TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
+                                                  llvm::GlobalValue *GV,
+                                             CodeGen::CodeGenModule &M) const {
+}
+
+
+//===----------------------------------------------------------------------===//
 // MIPS ABI Implementation.  This works for both little-endian and
 // big-endian variants.
 //===----------------------------------------------------------------------===//
@@ -3005,6 +3027,9 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
 
   case llvm::Triple::mblaze:
     return *(TheTargetCodeGenInfo = new MBlazeTargetCodeGenInfo(Types));
+  
+  case llvm::Triple::mico32:
+    return *(TheTargetCodeGenInfo = new Mico32TargetCodeGenInfo(Types));
 
   case llvm::Triple::msp430:
     return *(TheTargetCodeGenInfo = new MSP430TargetCodeGenInfo(Types));
