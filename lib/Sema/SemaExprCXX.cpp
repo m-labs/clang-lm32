@@ -1144,7 +1144,7 @@ bool Sema::CheckAllocatedType(QualType AllocType, SourceLocation Loc,
       QualType BaseAllocType = Context.getBaseElementType(AT);
       if (BaseAllocType.getObjCLifetime() == Qualifiers::OCL_None &&
           BaseAllocType->isObjCLifetimeType())
-        return Diag(Loc, diag::err_arc_new_array_without_lifetime)
+        return Diag(Loc, diag::err_arc_new_array_without_ownership)
           << BaseAllocType;
     }
   }
@@ -3636,7 +3636,7 @@ QualType Sema::CXXCheckConditionalOperands(ExprResult &Cond, ExprResult &LHS, Ex
 
   // Extension: conditional operator involving vector types.
   if (LTy->isVectorType() || RTy->isVectorType())
-    return CheckVectorOperands(QuestionLoc, LHS, RHS);
+    return CheckVectorOperands(LHS, RHS, QuestionLoc, /*isCompAssign*/false);
 
   //   -- The second and third operands have arithmetic or enumeration type;
   //      the usual arithmetic conversions are performed to bring them to a

@@ -1315,6 +1315,13 @@ public:
                              bool IsForUsingDecl);
   bool IsOverload(FunctionDecl *New, FunctionDecl *Old, bool IsForUsingDecl);
 
+  /// \brief Checks availability of the function depending on the current
+  /// function context.Inside an unavailable function,unavailability is ignored.
+  ///
+  /// \returns true if \arg FD is unavailable and current context is inside
+  /// an available function, false otherwise.
+  bool isFunctionConsideredUnavailable(FunctionDecl *FD);
+
   ImplicitConversionSequence
   TryImplicitConversion(Expr *From, QualType ToType,
                         bool SuppressUserConversions,
@@ -2207,6 +2214,11 @@ public:
   
   ExprResult ActOnIdExpression(Scope *S, CXXScopeSpec &SS, UnqualifiedId &Name,
                                bool HasTrailingLParen, bool IsAddressOfOperand);
+
+  void DecomposeUnqualifiedId(const UnqualifiedId &Id,
+                              TemplateArgumentListInfo &Buffer,
+                              DeclarationNameInfo &NameInfo,
+                              const TemplateArgumentListInfo *&TemplateArgs);
 
   bool DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
                            CorrectTypoContext CTC = CTC_Unknown);
@@ -5547,7 +5559,8 @@ public:
                                   SourceLocation QuestionLoc);
 
   /// type checking for vector binary operators.
-  QualType CheckVectorOperands(SourceLocation l, ExprResult &lex, ExprResult &rex);
+  QualType CheckVectorOperands(ExprResult &lex, ExprResult &rex,
+                               SourceLocation Loc, bool isCompAssign);
   QualType CheckVectorCompareOperands(ExprResult &lex, ExprResult &rx,
                                       SourceLocation l, bool isRel);
 
