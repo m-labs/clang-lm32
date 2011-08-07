@@ -15,6 +15,7 @@
 #include "clang/Parse/Parser.h"
 #include "RAIIObjectsForParser.h"
 #include "clang/Sema/DeclSpec.h"
+#include "clang/Sema/Scope.h"
 #include "clang/Sema/ParsedTemplate.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -504,6 +505,266 @@ ExprResult Parser::ParseCXXIdExpression(bool isAddressOfOperand) {
   
 }
 
+/// ParseLambdaExpression - Parse a C++0x lambda expression.
+///
+///       lambda-expression:
+///         lambda-introducer lambda-declarator[opt] compound-statement
+///
+///       lambda-introducer:
+///         '[' lambda-capture[opt] ']'
+///
+///       lambda-capture:
+///         capture-default
+///         capture-list
+///         capture-default ',' capture-list
+///
+///       capture-default:
+///         '&'
+///         '='
+///
+///       capture-list:
+///         capture
+///         capture-list ',' capture
+///
+///       capture:
+///         identifier
+///         '&' identifier
+///         'this'
+///
+///       lambda-declarator:
+///         '(' parameter-declaration-clause ')' attribute-specifier[opt]
+///           'mutable'[opt] exception-specification[opt]
+///           trailing-return-type[opt]
+///
+ExprResult Parser::ParseLambdaExpression() {
+  // Parse lambda-introducer.
+  LambdaIntroducer Intro;
+
+  llvm::Optional<unsigned> DiagID(ParseLambdaIntroducer(Intro));
+  if (DiagID) {
+    Diag(Tok, DiagID.getValue());
+    SkipUntil(tok::r_square);
+  }
+
+  return ParseLambdaExpressionAfterIntroducer(Intro);
+}
+
+/// TryParseLambdaExpression - Use lookahead and potentially tentative
+/// parsing to determine if we are looking at a C++0x lambda expression, and parse
+/// it if we are.
+///
+/// If we are not looking at a lambda expression, returns ExprError().
+ExprResult Parser::TryParseLambdaExpression() {
+  assert(getLang().CPlusPlus0x
+         && Tok.is(tok::l_square)
+         && "Not at the start of a possible lambda expression.");
+
+  const Token Next = NextToken(), After = GetLookAheadToken(2);
+
+  // If lookahead indicates this is a lambda...
+  if (Next.is(tok::r_square) ||     // []
+      Next.is(tok::equal) ||        // [=
+      (Next.is(tok::amp) &&         // [&] or [&,
+       (After.is(tok::r_square) ||
+        After.is(tok::comma))) ||
+      (Next.is(tok::identifier) &&  // [identifier]
+       After.is(tok::r_square))) {
+    return ParseLambdaExpression();
+  }
+
+  // If lookahead indicates this is an Objective-C message...
+  if (Next.is(tok::identifier) && After.is(tok::identifier)) {
+    return ExprError();
+  }
+
+  LambdaIntroducer Intro;
+  if (TryParseLambdaIntroducer(Intro))
+    return ExprError();
+  return ParseLambdaExpressionAfterIntroducer(Intro);
+}
+
+/// ParseLambdaExpression - Parse a lambda introducer.
+///
+/// Returns a DiagnosticID if it hit something unexpected.
+llvm::Optional<unsigned> Parser::ParseLambdaIntroducer(LambdaIntroducer &Intro) {
+  typedef llvm::Optional<unsigned> DiagResult;
+
+  assert(Tok.is(tok::l_square) && "Lambda expressions begin with '['.");
+  Intro.Range.setBegin(ConsumeBracket());
+
+  bool first = true;
+
+  // Parse capture-default.
+  if (Tok.is(tok::amp) &&
+      (NextToken().is(tok::comma) || NextToken().is(tok::r_square))) {
+    Intro.Default = LCD_ByRef;
+    ConsumeToken();
+    first = false;
+  } else if (Tok.is(tok::equal)) {
+    Intro.Default = LCD_ByCopy;
+    ConsumeToken();
+    first = false;
+  }
+
+  while (Tok.isNot(tok::r_square)) {
+    if (!first) {
+      if (Tok.isNot(tok::comma))
+        return DiagResult(diag::err_expected_comma_or_rsquare);
+      ConsumeToken();
+    }
+
+    first = false;
+
+    // Parse capture.
+    LambdaCaptureKind Kind = LCK_ByCopy;
+    SourceLocation Loc;
+    IdentifierInfo* Id = 0;
+
+    if (Tok.is(tok::kw_this)) {
+      Kind = LCK_This;
+      Loc = ConsumeToken();
+    } else {
+      if (Tok.is(tok::amp)) {
+        Kind = LCK_ByRef;
+        ConsumeToken();
+      }
+
+      if (Tok.is(tok::identifier)) {
+        Id = Tok.getIdentifierInfo();
+        Loc = ConsumeToken();
+      } else if (Tok.is(tok::kw_this)) {
+        // FIXME: If we want to suggest a fixit here, will need to return more
+        // than just DiagnosticID. Perhaps full DiagnosticBuilder that can be
+        // Clear()ed to prevent emission in case of tentative parsing?
+        return DiagResult(diag::err_this_captured_by_reference);
+      } else {
+        return DiagResult(diag::err_expected_capture);
+      }
+    }
+
+    Intro.addCapture(Kind, Loc, Id);
+  }
+
+  Intro.Range.setEnd(MatchRHSPunctuation(tok::r_square,
+                                         Intro.Range.getBegin()));
+
+  return DiagResult();
+}
+
+/// TryParseLambdaExpression - Tentatively parse a lambda introducer.
+///
+/// Returns true if it hit something unexpected.
+bool Parser::TryParseLambdaIntroducer(LambdaIntroducer &Intro) {
+  TentativeParsingAction PA(*this);
+
+  llvm::Optional<unsigned> DiagID(ParseLambdaIntroducer(Intro));
+
+  if (DiagID) {
+    PA.Revert();
+    return true;
+  }
+
+  PA.Commit();
+  return false;
+}
+
+/// ParseLambdaExpressionAfterIntroducer - Parse the rest of a lambda
+/// expression.
+ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
+                     LambdaIntroducer &Intro) {
+  // Parse lambda-declarator[opt].
+  DeclSpec DS(AttrFactory);
+  Declarator D(DS, Declarator::PrototypeContext);
+
+  if (Tok.is(tok::l_paren)) {
+    ParseScope PrototypeScope(this,
+                              Scope::FunctionPrototypeScope |
+                              Scope::DeclScope);
+
+    SourceLocation DeclLoc = ConsumeParen(), DeclEndLoc;
+
+    // Parse parameter-declaration-clause.
+    ParsedAttributes Attr(AttrFactory);
+    llvm::SmallVector<DeclaratorChunk::ParamInfo, 16> ParamInfo;
+    SourceLocation EllipsisLoc;
+
+    if (Tok.isNot(tok::r_paren))
+      ParseParameterDeclarationClause(D, Attr, ParamInfo, EllipsisLoc);
+
+    DeclEndLoc = MatchRHSPunctuation(tok::r_paren, DeclLoc);
+
+    // Parse 'mutable'[opt].
+    SourceLocation MutableLoc;
+    if (Tok.is(tok::kw_mutable)) {
+      MutableLoc = ConsumeToken();
+      DeclEndLoc = MutableLoc;
+    }
+
+    // Parse exception-specification[opt].
+    ExceptionSpecificationType ESpecType = EST_None;
+    SourceRange ESpecRange;
+    llvm::SmallVector<ParsedType, 2> DynamicExceptions;
+    llvm::SmallVector<SourceRange, 2> DynamicExceptionRanges;
+    ExprResult NoexceptExpr;
+    ESpecType = MaybeParseExceptionSpecification(ESpecRange,
+                                                 DynamicExceptions,
+                                                 DynamicExceptionRanges,
+                                                 NoexceptExpr);
+
+    if (ESpecType != EST_None)
+      DeclEndLoc = ESpecRange.getEnd();
+
+    // Parse attribute-specifier[opt].
+    MaybeParseCXX0XAttributes(Attr, &DeclEndLoc);
+
+    // Parse trailing-return-type[opt].
+    ParsedType TrailingReturnType;
+    if (Tok.is(tok::arrow)) {
+      SourceRange Range;
+      TrailingReturnType = ParseTrailingReturnType(Range).get();
+      if (Range.getEnd().isValid())
+        DeclEndLoc = Range.getEnd();
+    }
+
+    PrototypeScope.Exit();
+
+    D.AddTypeInfo(DeclaratorChunk::getFunction(/*hasProto=*/true,
+                                           /*isVariadic=*/EllipsisLoc.isValid(),
+                                           EllipsisLoc,
+                                           ParamInfo.data(), ParamInfo.size(),
+                                           DS.getTypeQualifiers(),
+                                           /*RefQualifierIsLValueRef=*/true,
+                                           /*RefQualifierLoc=*/SourceLocation(),
+                                           MutableLoc,
+                                           ESpecType, ESpecRange.getBegin(),
+                                           DynamicExceptions.data(),
+                                           DynamicExceptionRanges.data(),
+                                           DynamicExceptions.size(),
+                                           NoexceptExpr.isUsable() ?
+                                             NoexceptExpr.get() : 0,
+                                           DeclLoc, DeclEndLoc, D,
+                                           TrailingReturnType),
+                  Attr, DeclEndLoc);
+  }
+
+  // Parse compound-statement.
+  if (Tok.is(tok::l_brace)) {
+    // FIXME: Rename BlockScope -> ClosureScope if we decide to continue using
+    // it.
+    ParseScope BodyScope(this, Scope::BlockScope | Scope::FnScope |
+                               Scope::BreakScope | Scope::ContinueScope |
+                               Scope::DeclScope);
+
+    StmtResult Stmt(ParseCompoundStatementBody());
+
+    BodyScope.Exit();
+  } else {
+    Diag(Tok, diag::err_expected_lambda_body);
+  }
+
+  return ExprEmpty();
+}
+
 /// ParseCXXCasts - This handles the various ways to cast expressions to another
 /// type.
 ///
@@ -538,7 +799,14 @@ ExprResult Parser::ParseCXXCasts() {
   if (ExpectAndConsume(tok::less, diag::err_expected_less_after, CastName))
     return ExprError();
 
-  TypeResult CastTy = ParseTypeName();
+  // Parse the common declaration-specifiers piece.
+  DeclSpec DS(AttrFactory);
+  ParseSpecifierQualifierList(DS);
+
+  // Parse the abstract-declarator, if present.
+  Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
+  ParseDeclarator(DeclaratorInfo);
+
   SourceLocation RAngleBracketLoc = Tok.getLocation();
 
   if (ExpectAndConsume(tok::greater, diag::err_expected_greater))
@@ -554,9 +822,9 @@ ExprResult Parser::ParseCXXCasts() {
   // Match the ')'.
   RParenLoc = MatchRHSPunctuation(tok::r_paren, LParenLoc);
 
-  if (!Result.isInvalid() && !CastTy.isInvalid())
+  if (!Result.isInvalid() && !DeclaratorInfo.isInvalidType())
     Result = Actions.ActOnCXXNamedCast(OpLoc, Kind,
-                                       LAngleBracketLoc, CastTy.get(),
+                                       LAngleBracketLoc, DeclaratorInfo,
                                        RAngleBracketLoc,
                                        LParenLoc, Result.take(), RParenLoc);
 
@@ -780,12 +1048,12 @@ ExprResult Parser::ParseThrowExpression() {
   case tok::r_brace:
   case tok::colon:
   case tok::comma:
-    return Actions.ActOnCXXThrow(ThrowLoc, 0);
+    return Actions.ActOnCXXThrow(getCurScope(), ThrowLoc, 0);
 
   default:
     ExprResult Expr(ParseAssignmentExpression());
     if (Expr.isInvalid()) return move(Expr);
-    return Actions.ActOnCXXThrow(ThrowLoc, Expr.take());
+    return Actions.ActOnCXXThrow(getCurScope(), ThrowLoc, Expr.take());
   }
 }
 
@@ -1748,7 +2016,7 @@ Parser::ParseCXXNewExpression(bool UseGlobal, SourceLocation Start) {
 
   SourceRange TypeIdParens;
   DeclSpec DS(AttrFactory);
-  Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
+  Declarator DeclaratorInfo(DS, Declarator::CXXNewContext);
   if (Tok.is(tok::l_paren)) {
     // If it turns out to be a placement, we change the type location.
     PlacementLParen = ConsumeParen();
@@ -1878,7 +2146,7 @@ void Parser::ParseDirectNewDeclarator(Declarator &D) {
 ///                   '(' expression-list ')'
 ///
 bool Parser::ParseExpressionListOrTypeId(
-                                   llvm::SmallVectorImpl<Expr*> &PlacementArgs,
+                                   SmallVectorImpl<Expr*> &PlacementArgs,
                                          Declarator &D) {
   // The '(' was already consumed.
   if (isTypeIdInParens()) {
@@ -2193,7 +2461,8 @@ Parser::ParseCXXAmbiguousParenExpression(ParenParseOption &ExprType,
       Result = ParseCastExpression(false/*isUnaryExpression*/,
                                    false/*isAddressofOperand*/,
                                    NotCastExpr,
-                                   ParsedType()/*TypeOfCast*/);
+                                   // type-id has priority.
+                                   true/*isTypeCast*/);
     }
 
     // If we parsed a cast-expression, it's really a type-id, otherwise it's
@@ -2212,7 +2481,11 @@ Parser::ParseCXXAmbiguousParenExpression(ParenParseOption &ExprType,
   ConsumeAnyToken();
 
   if (ParseAs >= CompoundLiteral) {
-    TypeResult Ty = ParseTypeName();
+    // Parse the type declarator.
+    DeclSpec DS(AttrFactory);
+    ParseSpecifierQualifierList(DS);
+    Declarator DeclaratorInfo(DS, Declarator::TypeNameContext);
+    ParseDeclarator(DeclaratorInfo);
 
     // Match the ')'.
     if (Tok.is(tok::r_paren))
@@ -2222,21 +2495,21 @@ Parser::ParseCXXAmbiguousParenExpression(ParenParseOption &ExprType,
 
     if (ParseAs == CompoundLiteral) {
       ExprType = CompoundLiteral;
+      TypeResult Ty = ParseTypeName();
       return ParseCompoundLiteralExpression(Ty.get(), LParenLoc, RParenLoc);
     }
 
     // We parsed '(' type-id ')' and the thing after it wasn't a '{'.
     assert(ParseAs == CastExpr);
 
-    if (Ty.isInvalid())
+    if (DeclaratorInfo.isInvalidType())
       return ExprError();
-
-    CastTy = Ty.get();
 
     // Result is what ParseCastExpression returned earlier.
     if (!Result.isInvalid())
-      Result = Actions.ActOnCastExpr(getCurScope(), LParenLoc, CastTy, RParenLoc,
-                                     Result.take());
+      Result = Actions.ActOnCastExpr(getCurScope(), LParenLoc,
+                                     DeclaratorInfo, CastTy,
+                                     RParenLoc, Result.take());
     return move(Result);
   }
 

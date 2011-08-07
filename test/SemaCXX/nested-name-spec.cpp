@@ -29,7 +29,7 @@ static int A::C::cx2 = 17; // expected-error{{'static' can}}
 class C2 {
   void m(); // expected-note{{member declaration nearly matches}}
 
-  void f(const int& parm); // expected-note{{member declaration nearly matches}}
+  void f(const int& parm); // expected-note{{type of 1st parameter of member declaration does not match definition ('const int &' vs 'int')}}
   void f(int) const; // expected-note{{member declaration nearly matches}}
   void f(float);
 
@@ -140,7 +140,7 @@ Operators::operator bool() {
 }
 
 namespace A {
-  void g(int&); // expected-note{{member declaration nearly matches}}
+  void g(int&); // expected-note{{type of 1st parameter of member declaration does not match definition ('int &' vs 'const int &')}}
 } 
 
 void A::f() {} // expected-error{{out-of-line definition of 'f' does not match any declaration in namespace 'A'}}
@@ -261,7 +261,7 @@ namespace PR8159 {
 
 namespace rdar7980179 {
   class A { void f0(); }; // expected-note {{previous}}
-  int A::f0() {} // expected-error {{out-of-line definition of 'rdar7980179::A::f0' differ from the declaration in the return type}}
+  int A::f0() {} // expected-error {{out-of-line definition of 'rdar7980179::A::f0' differs from the declaration in the return type}}
 }
 
 namespace alias = A;

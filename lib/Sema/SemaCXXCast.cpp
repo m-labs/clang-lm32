@@ -134,17 +134,23 @@ static TryCastResult TryReinterpretCast(Sema &Self, ExprResult &SrcExpr,
 /// ActOnCXXNamedCast - Parse {dynamic,static,reinterpret,const}_cast's.
 ExprResult
 Sema::ActOnCXXNamedCast(SourceLocation OpLoc, tok::TokenKind Kind,
-                        SourceLocation LAngleBracketLoc, ParsedType Ty,
+                        SourceLocation LAngleBracketLoc, Declarator &D,
                         SourceLocation RAngleBracketLoc,
                         SourceLocation LParenLoc, Expr *E,
                         SourceLocation RParenLoc) {
-  
-  TypeSourceInfo *DestTInfo;
-  QualType DestType = GetTypeFromParser(Ty, &DestTInfo);
-  if (!DestTInfo)
-    DestTInfo = Context.getTrivialTypeSourceInfo(DestType, SourceLocation());
 
-  return BuildCXXNamedCast(OpLoc, Kind, DestTInfo, move(E),
+  assert(!D.isInvalidType());
+
+  TypeSourceInfo *TInfo = GetTypeForDeclaratorCast(D, E->getType());
+  if (D.isInvalidType())
+    return ExprError();
+
+  if (getLangOptions().CPlusPlus) {
+    // Check that there are no default arguments (C++ only).
+    CheckExtraCXXDefaultArguments(D);
+  }
+
+  return BuildCXXNamedCast(OpLoc, Kind, TInfo, move(E),
                            SourceRange(LAngleBracketLoc, RAngleBracketLoc),
                            SourceRange(LParenLoc, RParenLoc));
 }
@@ -404,7 +410,7 @@ CastsAwayConstness(Sema &Self, QualType SrcType, QualType DestType,
 
   QualType UnwrappedSrcType = Self.Context.getCanonicalType(SrcType), 
            UnwrappedDestType = Self.Context.getCanonicalType(DestType);
-  llvm::SmallVector<Qualifiers, 8> cv1, cv2;
+  SmallVector<Qualifiers, 8> cv1, cv2;
 
   // Find the qualifiers. We only care about cvr-qualifiers for the 
   // purpose of this check, because other qualifiers (address spaces, 
@@ -436,7 +442,7 @@ CastsAwayConstness(Sema &Self, QualType SrcType, QualType DestType,
   QualType SrcConstruct = Self.Context.VoidTy;
   QualType DestConstruct = Self.Context.VoidTy;
   ASTContext &Context = Self.Context;
-  for (llvm::SmallVector<Qualifiers, 8>::reverse_iterator i1 = cv1.rbegin(),
+  for (SmallVector<Qualifiers, 8>::reverse_iterator i1 = cv1.rbegin(),
                                                           i2 = cv2.rbegin();
        i1 != cv1.rend(); ++i1, ++i2) {
     SrcConstruct

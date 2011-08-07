@@ -298,7 +298,7 @@ CheckExtVectorComponent(Sema &S, QualType baseType, ExprValueKind &VK,
     // We didn't get to the end of the string. This means the component names
     // didn't come from the same set *or* we encountered an illegal name.
     S.Diag(OpLoc, diag::err_ext_vector_component_name_illegal)
-      << llvm::StringRef(compStr, 1) << SourceRange(CompLoc);
+      << StringRef(compStr, 1) << SourceRange(CompLoc);
     return QualType();
   }
 
@@ -337,10 +337,14 @@ CheckExtVectorComponent(Sema &S, QualType baseType, ExprValueKind &VK,
   QualType VT = S.Context.getExtVectorType(vecType->getElementType(), CompSize);
   // Now look up the TypeDefDecl from the vector type. Without this,
   // diagostics look bad. We want extended vector types to appear built-in.
-  for (unsigned i = 0, E = S.ExtVectorDecls.size(); i != E; ++i) {
-    if (S.ExtVectorDecls[i]->getUnderlyingType() == VT)
-      return S.Context.getTypedefType(S.ExtVectorDecls[i]);
+  for (Sema::ExtVectorDeclsType::iterator 
+         I = S.ExtVectorDecls.begin(S.ExternalSource),
+         E = S.ExtVectorDecls.end(); 
+       I != E; ++I) {
+    if ((*I)->getUnderlyingType() == VT)
+      return S.Context.getTypedefType(*I);
   }
+  
   return VT; // should never get here (a typedef type should always be found).
 }
 
@@ -555,20 +559,24 @@ LookupMemberExprInRecord(Sema &SemaRef, LookupResult &R,
   // We didn't find anything with the given name, so try to correct
   // for typos.
   DeclarationName Name = R.getLookupName();
-  if (SemaRef.CorrectTypo(R, 0, &SS, DC, false, Sema::CTC_MemberLookup) &&
-      !R.empty() &&
-      (isa<ValueDecl>(*R.begin()) || isa<FunctionTemplateDecl>(*R.begin()))) {
+  TypoCorrection Corrected = SemaRef.CorrectTypo(R.getLookupNameInfo(),
+                                                 R.getLookupKind(), NULL,
+                                                 &SS, DC, false,
+                                                 Sema::CTC_MemberLookup);
+  NamedDecl *ND = Corrected.getCorrectionDecl();
+  R.clear();
+  if (ND && (isa<ValueDecl>(ND) || isa<FunctionTemplateDecl>(ND))) {
+    std::string CorrectedStr(
+        Corrected.getAsString(SemaRef.getLangOptions()));
+    std::string CorrectedQuotedStr(
+        Corrected.getQuoted(SemaRef.getLangOptions()));
+    R.setLookupName(Corrected.getCorrection());
+    R.addDecl(ND);
     SemaRef.Diag(R.getNameLoc(), diag::err_no_member_suggest)
-      << Name << DC << R.getLookupName() << SS.getRange()
-      << FixItHint::CreateReplacement(R.getNameLoc(),
-                                      R.getLookupName().getAsString());
-    if (NamedDecl *ND = R.getAsSingle<NamedDecl>())
-      SemaRef.Diag(ND->getLocation(), diag::note_previous_decl)
-        << ND->getDeclName();
-    return false;
-  } else {
-    R.clear();
-    R.setLookupName(Name);
+      << Name << DC << CorrectedQuotedStr << SS.getRange()
+      << FixItHint::CreateReplacement(R.getNameLoc(), CorrectedStr);
+    SemaRef.Diag(ND->getLocation(), diag::note_previous_decl)
+      << ND->getDeclName();
   }
 
   return false;
@@ -1068,10 +1076,10 @@ Sema::LookupMemberExpr(LookupResult &R, ExprResult &BaseExpr,
       // Attempt to correct for typos in ivar names.
       LookupResult Res(*this, R.getLookupName(), R.getNameLoc(),
                        LookupMemberName);
-      if (CorrectTypo(Res, 0, 0, IDecl, false, 
-                      IsArrow ? CTC_ObjCIvarLookup
-                              : CTC_ObjCPropertyLookup) &&
-          (IV = Res.getAsSingle<ObjCIvarDecl>())) {
+      TypoCorrection Corrected = CorrectTypo(
+          R.getLookupNameInfo(), LookupMemberName, NULL, NULL, IDecl, false,
+          IsArrow ? CTC_ObjCIvarLookup : CTC_ObjCPropertyLookup);
+      if ((IV = Corrected.getCorrectionDeclAs<ObjCIvarDecl>())) {
         Diag(R.getNameLoc(),
              diag::err_typecheck_member_reference_ivar_suggest)
           << IDecl->getDeclName() << MemberName << IV->getDeclName()
@@ -1080,6 +1088,13 @@ Sema::LookupMemberExpr(LookupResult &R, ExprResult &BaseExpr,
         Diag(IV->getLocation(), diag::note_previous_decl)
           << IV->getDeclName();
       } else {
+        if (IsArrow && IDecl->FindPropertyDeclaration(Member)) {
+          Diag(MemberLoc, 
+          diag::err_property_found_suggest)
+          << Member << BaseExpr.get()->getType()
+          << FixItHint::CreateReplacement(OpLoc, ".");
+          return ExprError();
+        }
         Res.clear();
         Res.setLookupName(Member);
 
@@ -1284,7 +1299,8 @@ Sema::LookupMemberExpr(LookupResult &R, ExprResult &BaseExpr,
     }
 
     // Normal property access.
-    return HandleExprPropertyRefExpr(OPT, BaseExpr.get(), MemberName, MemberLoc,
+    return HandleExprPropertyRefExpr(OPT, BaseExpr.get(), OpLoc, 
+                                     MemberName, MemberLoc,
                                      SourceLocation(), QualType(), false);
   }
 

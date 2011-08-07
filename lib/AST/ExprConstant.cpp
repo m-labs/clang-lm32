@@ -224,11 +224,10 @@ static APSInt HandleFloatToIntCast(QualType DestType, QualType SrcType,
   bool DestSigned = DestType->isSignedIntegerOrEnumerationType();
 
   // FIXME: Warning for overflow.
-  uint64_t Space[4];
+  APSInt Result(DestWidth, !DestSigned);
   bool ignored;
-  (void)Value.convertToInteger(Space, DestWidth, DestSigned,
-                               llvm::APFloat::rmTowardZero, &ignored);
-  return APSInt(llvm::APInt(DestWidth, 4, Space), !DestSigned);
+  (void)Value.convertToInteger(Result, llvm::APFloat::rmTowardZero, &ignored);
+  return Result;
 }
 
 static APFloat HandleFloatToFloatCast(QualType DestType, QualType SrcType,
@@ -406,6 +405,8 @@ public:
     { return StmtVisitorTy::Visit(E->getChosenSubExpr(Info.Ctx)); }
   RetTy VisitGenericSelectionExpr(const GenericSelectionExpr *E)
     { return StmtVisitorTy::Visit(E->getResultExpr()); }
+  RetTy VisitSubstNonTypeTemplateParmExpr(const SubstNonTypeTemplateParmExpr *E)
+    { return StmtVisitorTy::Visit(E->getReplacement()); }
 
   RetTy VisitBinaryConditionalOperator(const BinaryConditionalOperator *E) {
     OpaqueValueEvaluation opaque(Info, E->getOpaqueValue(), E->getCommon());
@@ -536,15 +537,7 @@ bool LValueExprEvaluator::VisitMemberExpr(const MemberExpr *E) {
   if (FD->getType()->isReferenceType())
     return false;
 
-  // FIXME: This is linear time.
-  unsigned i = 0;
-  for (RecordDecl::field_iterator Field = RD->field_begin(),
-                               FieldEnd = RD->field_end();
-       Field != FieldEnd; (void)++Field, ++i) {
-    if (*Field == FD)
-      break;
-  }
-
+  unsigned i = FD->getFieldIndex();
   Result.Offset += Info.Ctx.toCharUnitsFromBits(RL.getFieldOffset(i));
   return true;
 }
@@ -819,7 +812,7 @@ APValue VectorExprEvaluator::VisitCastExpr(const CastExpr* E) {
     }
 
     // Splat and create vector APValue.
-    llvm::SmallVector<APValue, 4> Elts(NElts, Result);
+    SmallVector<APValue, 4> Elts(NElts, Result);
     return APValue(&Elts[0], Elts.size());
   }
   case CK_BitCast: {
@@ -836,7 +829,7 @@ APValue VectorExprEvaluator::VisitCastExpr(const CastExpr* E) {
     assert((EltTy->isIntegerType() || EltTy->isRealFloatingType()) &&
            "Vectors must be composed of ints or floats");
 
-    llvm::SmallVector<APValue, 4> Elts;
+    SmallVector<APValue, 4> Elts;
     for (unsigned i = 0; i != NElts; ++i) {
       APSInt Tmp = Init.extOrTrunc(EltWidth);
 
@@ -869,7 +862,7 @@ VectorExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
   unsigned NumElements = VT->getNumElements();
 
   QualType EltTy = VT->getElementType();
-  llvm::SmallVector<APValue, 4> Elements;
+  SmallVector<APValue, 4> Elements;
 
   // If a vector is initialized with a single element, that value
   // becomes every element of the vector, not just the first.
@@ -933,7 +926,7 @@ VectorExprEvaluator::GetZeroVector(QualType T) {
     ZeroElement =
         APValue(APFloat::getZero(Info.Ctx.getFloatTypeSemantics(EltTy)));
 
-  llvm::SmallVector<APValue, 4> Elements(VT->getNumElements(), ZeroElement);
+  SmallVector<APValue, 4> Elements(VT->getNumElements(), ZeroElement);
   return APValue(&Elements[0], Elements.size());
 }
 
@@ -956,7 +949,7 @@ public:
     : ExprEvaluatorBaseTy(info), Result(result) {}
 
   bool Success(const llvm::APSInt &SI, const Expr *E) {
-    assert(E->getType()->isIntegralOrEnumerationType() && 
+    assert(E->getType()->isIntegralOrEnumerationType() &&
            "Invalid evaluation result.");
     assert(SI.isSigned() == E->getType()->isSignedIntegerOrEnumerationType() &&
            "Invalid evaluation result.");
@@ -1106,8 +1099,25 @@ static bool EvaluateInteger(const Expr* E, APSInt &Result, EvalInfo &Info) {
 
 bool IntExprEvaluator::CheckReferencedDecl(const Expr* E, const Decl* D) {
   // Enums are integer constant exprs.
-  if (const EnumConstantDecl *ECD = dyn_cast<EnumConstantDecl>(D))
-    return Success(ECD->getInitVal(), E);
+  if (const EnumConstantDecl *ECD = dyn_cast<EnumConstantDecl>(D)) {
+    // Check for signedness/width mismatches between E type and ECD value.
+    bool SameSign = (ECD->getInitVal().isSigned()
+                     == E->getType()->isSignedIntegerOrEnumerationType());
+    bool SameWidth = (ECD->getInitVal().getBitWidth()
+                      == Info.Ctx.getIntWidth(E->getType()));
+    if (SameSign && SameWidth)
+      return Success(ECD->getInitVal(), E);
+    else {
+      // Get rid of mismatch (otherwise Success assertions will fail)
+      // by computing a new value matching the type of E.
+      llvm::APSInt Val = ECD->getInitVal();
+      if (!SameSign)
+        Val.setIsSigned(!ECD->getInitVal().isSigned());
+      if (!SameWidth)
+        Val = Val.extOrTrunc(Info.Ctx.getIntWidth(E->getType()));
+      return Success(Val, E);
+    }
+  }
 
   // In C++, const, non-volatile integers initialized with ICEs are ICEs.
   // In C, they can also be folded, although they are not ICEs.
@@ -1290,9 +1300,9 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
                = dyn_cast<StringLiteral>(E->getArg(0)->IgnoreParenImpCasts())) {
       // The string literal may have embedded null characters. Find the first
       // one and truncate there.
-      llvm::StringRef Str = S->getString();
-      llvm::StringRef::size_type Pos = Str.find(0);
-      if (Pos != llvm::StringRef::npos)
+      StringRef Str = S->getString();
+      StringRef::size_type Pos = Str.find(0);
+      if (Pos != StringRef::npos)
         Str = Str.substr(0, Pos);
       
       return Success(Str.size(), E);
@@ -1810,6 +1820,7 @@ bool IntExprEvaluator::VisitCastExpr(const CastExpr *E) {
   case CK_UserDefinedConversion:
   case CK_ObjCProduceObject:
   case CK_ObjCConsumeObject:
+  case CK_ObjCReclaimReturnedObject:
     return false;
 
   case CK_LValueToRValue:
@@ -2316,6 +2327,7 @@ bool ComplexExprEvaluator::VisitCastExpr(const CastExpr *E) {
   case CK_IntegralComplexToBoolean:
   case CK_ObjCProduceObject:
   case CK_ObjCConsumeObject:
+  case CK_ObjCReclaimReturnedObject:
     llvm_unreachable("invalid cast kind for complex value");
 
   case CK_LValueToRValue:
@@ -2794,6 +2806,10 @@ static ICEDiag CheckICE(const Expr* E, ASTContext &Ctx) {
   case Expr::GNUNullExprClass:
     // GCC considers the GNU __null value to be an integral constant expression.
     return NoDiag();
+
+  case Expr::SubstNonTypeTemplateParmExprClass:
+    return
+      CheckICE(cast<SubstNonTypeTemplateParmExpr>(E)->getReplacement(), Ctx);
 
   case Expr::ParenExprClass:
     return CheckICE(cast<ParenExpr>(E)->getSubExpr(), Ctx);

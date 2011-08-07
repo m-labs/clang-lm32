@@ -1,4 +1,3 @@
-// RUN: %clang_cc1 -analyze -analyzer-checker=core -analyzer-store=basic -verify %s
 // RUN: %clang_cc1 -analyze -analyzer-checker=core -analyzer-store=region -verify %s
 
 typedef unsigned int NSUInteger;
@@ -22,4 +21,13 @@ NSUInteger f8(A* x){
   }
   
   return n;
+}
+
+
+// PR10163 -- don't warn for default-initialized float arrays.
+// (An additional test is in uninit-vals-ps-region.m)
+void test_PR10163(float);
+void PR10163 (void) {
+  float x[2] = {0};
+  test_PR10163(x[1]); // no-warning  
 }
