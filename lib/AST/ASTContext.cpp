@@ -221,9 +221,11 @@ ASTContext::ASTContext(const LangOptions& LOpts, SourceManager &SM,
   TemplateSpecializationTypes(this_()),
   DependentTemplateSpecializationTypes(this_()),
   SubstTemplateTemplateParmPacks(this_()),
-  GlobalNestedNameSpecifier(0), IsInt128Installed(false),
-  CFConstantStringTypeDecl(0), NSConstantStringTypeDecl(0),
-  ObjCFastEnumerationStateTypeDecl(0), FILEDecl(0), 
+  GlobalNestedNameSpecifier(0), 
+  Int128Decl(0), UInt128Decl(0),
+  ObjCIdDecl(0), ObjCSelDecl(0), ObjCClassDecl(0),
+  CFConstantStringTypeDecl(0),
+  FILEDecl(0), 
   jmp_bufDecl(0), sigjmp_bufDecl(0), BlockDescriptorType(0), 
   BlockDescriptorExtendedType(0), cudaConfigureCallDecl(0),
   NullTypeSourceInfo(QualType()),
@@ -235,9 +237,6 @@ ASTContext::ASTContext(const LangOptions& LOpts, SourceManager &SM,
   ExternalSource(0), Listener(0), PrintingPolicy(LOpts),
   LastSDM(0, 0),
   UniqueBlockByRefTypeID(0) {
-  ObjCIdRedefinitionType = QualType();
-  ObjCClassRedefinitionType = QualType();
-  ObjCSelRedefinitionType = QualType();    
   if (size_reserve > 0) Types.reserve(size_reserve);
   TUDecl = TranslationUnitDecl::Create(*this);
   InitBuiltinTypes();
@@ -348,6 +347,33 @@ void ASTContext::PrintStats() const {
   BumpAlloc.PrintStats();
 }
 
+TypedefDecl *ASTContext::getInt128Decl() const {
+  if (!Int128Decl) {
+    TypeSourceInfo *TInfo = getTrivialTypeSourceInfo(Int128Ty);
+    Int128Decl = TypedefDecl::Create(const_cast<ASTContext &>(*this), 
+                                     getTranslationUnitDecl(),
+                                     SourceLocation(),
+                                     SourceLocation(),
+                                     &Idents.get("__int128_t"),
+                                     TInfo);
+  }
+  
+  return Int128Decl;
+}
+
+TypedefDecl *ASTContext::getUInt128Decl() const {
+  if (!UInt128Decl) {
+    TypeSourceInfo *TInfo = getTrivialTypeSourceInfo(UnsignedInt128Ty);
+    UInt128Decl = TypedefDecl::Create(const_cast<ASTContext &>(*this), 
+                                     getTranslationUnitDecl(),
+                                     SourceLocation(),
+                                     SourceLocation(),
+                                     &Idents.get("__uint128_t"),
+                                     TInfo);
+  }
+  
+  return UInt128Decl;
+}
 
 void ASTContext::InitBuiltinType(CanQualType &R, BuiltinType::Kind K) {
   BuiltinType *Ty = new (*this, TypeAlignment) BuiltinType(K);
@@ -432,11 +458,6 @@ void ASTContext::InitBuiltinTypes() {
 
   BuiltinVaListType = QualType();
 
-  // "Builtin" typedefs set by Sema::ActOnTranslationUnitScope().
-  ObjCIdTypedefType = QualType();
-  ObjCClassTypedefType = QualType();
-  ObjCSelTypedefType = QualType();
-
   // Builtin types for 'id', 'Class', and 'SEL'.
   InitBuiltinType(ObjCBuiltinIdTy, BuiltinType::ObjCId);
   InitBuiltinType(ObjCBuiltinClassTy, BuiltinType::ObjCClass);
@@ -495,6 +516,24 @@ ASTContext::setInstantiatedFromStaticDataMember(VarDecl *Inst, VarDecl *Tmpl,
          "Already noted what static data member was instantiated from");
   InstantiatedFromStaticDataMember[Inst] 
     = new (*this) MemberSpecializationInfo(Tmpl, TSK, PointOfInstantiation);
+}
+
+FunctionDecl *ASTContext::getClassScopeSpecializationPattern(
+                                                     const FunctionDecl *FD){
+  assert(FD && "Specialization is 0");
+  llvm::DenseMap<const FunctionDecl*, FunctionDecl *>::const_iterator Pos
+    = ClassScopeSpecializationPattern.find(FD);
+  if (Pos == ClassScopeSpecializationPattern.end())
+    return 0;
+
+  return Pos->second;
+}
+
+void ASTContext::setClassScopeSpecializationPattern(FunctionDecl *FD,
+                                        FunctionDecl *Pattern) {
+  assert(FD && "Specialization is 0");
+  assert(Pattern && "Class scope specialization pattern is 0");
+  ClassScopeSpecializationPattern[FD] = Pattern;
 }
 
 NamedDecl *
@@ -1077,8 +1116,7 @@ void ASTContext::DeepCollectObjCIvars(const ObjCInterfaceDecl *OI,
     for (ObjCInterfaceDecl::ivar_iterator I = OI->ivar_begin(),
          E = OI->ivar_end(); I != E; ++I)
       Ivars.push_back(*I);
-  }
-  else {
+  } else {
     ObjCInterfaceDecl *IDecl = const_cast<ObjCInterfaceDecl *>(OI);
     for (const ObjCIvarDecl *Iv = IDecl->all_declared_ivar_begin(); Iv; 
          Iv= Iv->getNextIvar())
@@ -2723,8 +2761,7 @@ QualType ASTContext::getTypeOfExprType(Expr *tofExpr) const {
       // typeof(expr) type. Use that as our canonical type.
       toe = new (*this, TypeAlignment) TypeOfExprType(tofExpr,
                                           QualType((TypeOfExprType*)Canon, 0));
-    }
-    else {
+    } else {
       // Build a new, canonical typeof(expr) type.
       Canon
         = new (*this, TypeAlignment) DependentTypeOfExprType(*this, tofExpr);
@@ -2807,8 +2844,7 @@ QualType ASTContext::getDecltypeType(Expr *e) const {
       // decltype type. Use that as our canonical type.
       dt = new (*this, TypeAlignment) DecltypeType(e, DependentTy,
                                        QualType((DecltypeType*)Canon, 0));
-    }
-    else {
+    } else {
       // Build a new, canonical typeof(expr) type.
       Canon = new (*this, TypeAlignment) DependentDecltypeType(*this, e);
       DependentDecltypeTypes.InsertNode(Canon, InsertPos);
@@ -3639,82 +3675,6 @@ void ASTContext::setCFConstantStringType(QualType T) {
   CFConstantStringTypeDecl = Rec->getDecl();
 }
 
-// getNSConstantStringType - Return the type used for constant NSStrings.
-QualType ASTContext::getNSConstantStringType() const {
-  if (!NSConstantStringTypeDecl) {
-    NSConstantStringTypeDecl =
-    CreateRecordDecl(*this, TTK_Struct, TUDecl,
-                     &Idents.get("__builtin_NSString"));
-    NSConstantStringTypeDecl->startDefinition();
-    
-    QualType FieldTypes[3];
-    
-    // const int *isa;
-    FieldTypes[0] = getPointerType(IntTy.withConst());
-    // const char *str;
-    FieldTypes[1] = getPointerType(CharTy.withConst());
-    // unsigned int length;
-    FieldTypes[2] = UnsignedIntTy;
-    
-    // Create fields
-    for (unsigned i = 0; i < 3; ++i) {
-      FieldDecl *Field = FieldDecl::Create(*this, NSConstantStringTypeDecl,
-                                           SourceLocation(),
-                                           SourceLocation(), 0,
-                                           FieldTypes[i], /*TInfo=*/0,
-                                           /*BitWidth=*/0,
-                                           /*Mutable=*/false,
-                                           /*HasInit=*/false);
-      Field->setAccess(AS_public);
-      NSConstantStringTypeDecl->addDecl(Field);
-    }
-    
-    NSConstantStringTypeDecl->completeDefinition();
-  }
-  
-  return getTagDeclType(NSConstantStringTypeDecl);
-}
-
-void ASTContext::setNSConstantStringType(QualType T) {
-  const RecordType *Rec = T->getAs<RecordType>();
-  assert(Rec && "Invalid NSConstantStringType");
-  NSConstantStringTypeDecl = Rec->getDecl();
-}
-
-QualType ASTContext::getObjCFastEnumerationStateType() const {
-  if (!ObjCFastEnumerationStateTypeDecl) {
-    ObjCFastEnumerationStateTypeDecl =
-      CreateRecordDecl(*this, TTK_Struct, TUDecl,
-                       &Idents.get("__objcFastEnumerationState"));
-    ObjCFastEnumerationStateTypeDecl->startDefinition();
-
-    QualType FieldTypes[] = {
-      UnsignedLongTy,
-      getPointerType(ObjCIdTypedefType),
-      getPointerType(UnsignedLongTy),
-      getConstantArrayType(UnsignedLongTy,
-                           llvm::APInt(32, 5), ArrayType::Normal, 0)
-    };
-
-    for (size_t i = 0; i < 4; ++i) {
-      FieldDecl *Field = FieldDecl::Create(*this,
-                                           ObjCFastEnumerationStateTypeDecl,
-                                           SourceLocation(),
-                                           SourceLocation(), 0,
-                                           FieldTypes[i], /*TInfo=*/0,
-                                           /*BitWidth=*/0,
-                                           /*Mutable=*/false,
-                                           /*HasInit=*/false);
-      Field->setAccess(AS_public);
-      ObjCFastEnumerationStateTypeDecl->addDecl(Field);
-    }
-
-    ObjCFastEnumerationStateTypeDecl->completeDefinition();
-  }
-
-  return getTagDeclType(ObjCFastEnumerationStateTypeDecl);
-}
-
 QualType ASTContext::getBlockDescriptorType() const {
   if (BlockDescriptorType)
     return getTagDeclType(BlockDescriptorType);
@@ -3752,12 +3712,6 @@ QualType ASTContext::getBlockDescriptorType() const {
   BlockDescriptorType = T;
 
   return getTagDeclType(BlockDescriptorType);
-}
-
-void ASTContext::setBlockDescriptorType(QualType T) {
-  const RecordType *Rec = T->getAs<RecordType>();
-  assert(Rec && "Invalid BlockDescriptorType");
-  BlockDescriptorType = Rec->getDecl();
 }
 
 QualType ASTContext::getBlockDescriptorExtendedType() const {
@@ -3801,12 +3755,6 @@ QualType ASTContext::getBlockDescriptorExtendedType() const {
   BlockDescriptorExtendedType = T;
 
   return getTagDeclType(BlockDescriptorExtendedType);
-}
-
-void ASTContext::setBlockDescriptorExtendedType(QualType T) {
-  const RecordType *Rec = T->getAs<RecordType>();
-  assert(Rec && "Invalid BlockDescriptorType");
-  BlockDescriptorExtendedType = Rec->getDecl();
 }
 
 bool ASTContext::BlockRequiresCopying(QualType Ty) const {
@@ -3881,12 +3829,6 @@ ASTContext::BuildByRefType(StringRef DeclName, QualType Ty) const {
   T->completeDefinition();
 
   return getPointerType(getTagDeclType(T));
-}
-
-void ASTContext::setObjCFastEnumerationStateType(QualType T) {
-  const RecordType *Rec = T->getAs<RecordType>();
-  assert(Rec && "Invalid ObjCFAstEnumerationStateType");
-  ObjCFastEnumerationStateTypeDecl = Rec->getDecl();
 }
 
 // This returns true if a type has been typedefed to BOOL:
@@ -4151,6 +4093,7 @@ void ASTContext::getObjCEncodingForPropertyDecl(const ObjCPropertyDecl *PD,
     case ObjCPropertyDecl::Assign: break;
     case ObjCPropertyDecl::Copy:   S += ",C"; break;
     case ObjCPropertyDecl::Retain: S += ",&"; break;
+    case ObjCPropertyDecl::Weak:   S += ",W"; break;
     }
   }
 
@@ -4622,7 +4565,9 @@ void ASTContext::getObjCEncodingForStructureImpl(RecordDecl *RDecl,
   std::multimap<uint64_t, NamedDecl *>::iterator
     CurLayObj = FieldOrBaseOffsets.begin();
 
-  if (CurLayObj != FieldOrBaseOffsets.end() && CurLayObj->first != 0) {
+  if ((CurLayObj != FieldOrBaseOffsets.end() && CurLayObj->first != 0) ||
+      (CurLayObj == FieldOrBaseOffsets.end() &&
+         CXXRec && CXXRec->isDynamicClass())) {
     assert(CXXRec && CXXRec->isDynamicClass() &&
            "Offset 0 was empty but no VTable ?");
     if (FD) {
@@ -4716,20 +4661,48 @@ void ASTContext::setBuiltinVaListType(QualType T) {
   BuiltinVaListType = T;
 }
 
-void ASTContext::setObjCIdType(QualType T) {
-  ObjCIdTypedefType = T;
+TypedefDecl *ASTContext::getObjCIdDecl() const {
+  if (!ObjCIdDecl) {
+    QualType T = getObjCObjectType(ObjCBuiltinIdTy, 0, 0);
+    T = getObjCObjectPointerType(T);
+    TypeSourceInfo *IdInfo = getTrivialTypeSourceInfo(T);
+    ObjCIdDecl = TypedefDecl::Create(const_cast<ASTContext &>(*this),
+                                     getTranslationUnitDecl(),
+                                     SourceLocation(), SourceLocation(),
+                                     &Idents.get("id"), IdInfo);
+  }
+  
+  return ObjCIdDecl;
 }
 
-void ASTContext::setObjCSelType(QualType T) {
-  ObjCSelTypedefType = T;
+TypedefDecl *ASTContext::getObjCSelDecl() const {
+  if (!ObjCSelDecl) {
+    QualType SelT = getPointerType(ObjCBuiltinSelTy);
+    TypeSourceInfo *SelInfo = getTrivialTypeSourceInfo(SelT);
+    ObjCSelDecl = TypedefDecl::Create(const_cast<ASTContext &>(*this),
+                                      getTranslationUnitDecl(),
+                                      SourceLocation(), SourceLocation(),
+                                      &Idents.get("SEL"), SelInfo);
+  }
+  return ObjCSelDecl;
 }
 
 void ASTContext::setObjCProtoType(QualType QT) {
   ObjCProtoType = QT;
 }
 
-void ASTContext::setObjCClassType(QualType T) {
-  ObjCClassTypedefType = T;
+TypedefDecl *ASTContext::getObjCClassDecl() const {
+  if (!ObjCClassDecl) {
+    QualType T = getObjCObjectType(ObjCBuiltinClassTy, 0, 0);
+    T = getObjCObjectPointerType(T);
+    TypeSourceInfo *ClassInfo = getTrivialTypeSourceInfo(T);
+    ObjCClassDecl = TypedefDecl::Create(const_cast<ASTContext &>(*this),
+                                        getTranslationUnitDecl(),
+                                        SourceLocation(), SourceLocation(),
+                                        &Idents.get("Class"), ClassInfo);
+  }
+  
+  return ObjCClassDecl;
 }
 
 void ASTContext::setObjCConstantStringInterface(ObjCInterfaceDecl *Decl) {
@@ -5272,8 +5245,7 @@ void getIntersectionOfProtocols(ASTContext &Context,
     for (unsigned i = 0; i < RHSNumProtocols; ++i)
       if (InheritedProtocolSet.count(RHSProtocols[i]))
         IntersectionOfProtocols.push_back(RHSProtocols[i]);
-  }
-  else {
+  } else {
     llvm::SmallPtrSet<ObjCProtocolDecl *, 8> RHSInheritedProtocols;
     Context.CollectInheritedProtocols(RHS->getInterface(),
                                       RHSInheritedProtocols);
@@ -6168,7 +6140,11 @@ static QualType DecodeTypeFromStr(const char *&Str, const ASTContext &Context,
     assert(!RequiresICE && "Can't require complex ICE");
     Type = Context.getComplexType(ElementType);
     break;
-  }      
+  }  
+  case 'Y' : {
+    Type = Context.getPointerDiffType();
+    break;
+  }
   case 'P':
     Type = Context.getFILEType();
     if (Type.isNull()) {
@@ -6483,5 +6459,6 @@ size_t ASTContext::getSideTableAllocatedMemory() const {
     + llvm::capacity_in_bytes(InstantiatedFromUnnamedFieldDecl)
     + llvm::capacity_in_bytes(OverriddenMethods)
     + llvm::capacity_in_bytes(Types)
-    + llvm::capacity_in_bytes(VariableArrayTypes);
+    + llvm::capacity_in_bytes(VariableArrayTypes)
+    + llvm::capacity_in_bytes(ClassScopeSpecializationPattern);
 }

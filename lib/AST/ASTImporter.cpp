@@ -59,6 +59,7 @@ namespace {
     QualType VisitFunctionNoProtoType(const FunctionNoProtoType *T);
     QualType VisitFunctionProtoType(const FunctionProtoType *T);
     // FIXME: UnresolvedUsingType
+    QualType VisitParenType(const ParenType *T);
     QualType VisitTypedefType(const TypedefType *T);
     QualType VisitTypeOfExprType(const TypeOfExprType *T);
     // FIXME: DependentTypeOfExprType
@@ -1550,6 +1551,14 @@ QualType ASTNodeImporter::VisitFunctionProtoType(const FunctionProtoType *T) {
                                                  ArgTypes.size(), EPI);
 }
 
+QualType ASTNodeImporter::VisitParenType(const ParenType *T) {
+  QualType ToInnerType = Importer.Import(T->getInnerType());
+  if (ToInnerType.isNull())
+    return QualType();
+    
+  return Importer.getToContext().getParenType(ToInnerType);
+}
+
 QualType ASTNodeImporter::VisitTypedefType(const TypedefType *T) {
   TypedefNameDecl *ToDecl
              = dyn_cast_or_null<TypedefNameDecl>(Importer.Import(T->getDecl()));
@@ -2459,7 +2468,8 @@ Decl *ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
                                             NameInfo, T, TInfo, 
                                             FromConstructor->isExplicit(),
                                             D->isInlineSpecified(), 
-                                            D->isImplicit());
+                                            D->isImplicit(),
+                                            D->isConstexpr());
   } else if (isa<CXXDestructorDecl>(D)) {
     ToFunction = CXXDestructorDecl::Create(Importer.getToContext(),
                                            cast<CXXRecordDecl>(DC),
@@ -2475,6 +2485,7 @@ Decl *ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
                                            NameInfo, T, TInfo,
                                            D->isInlineSpecified(),
                                            FromConversion->isExplicit(),
+                                           D->isConstexpr(),
                                            Importer.Import(D->getLocEnd()));
   } else if (CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(D)) {
     ToFunction = CXXMethodDecl::Create(Importer.getToContext(), 
@@ -2484,6 +2495,7 @@ Decl *ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
                                        Method->isStatic(),
                                        Method->getStorageClassAsWritten(),
                                        Method->isInlineSpecified(),
+                                       D->isConstexpr(),
                                        Importer.Import(D->getLocEnd()));
   } else {
     ToFunction = FunctionDecl::Create(Importer.getToContext(), DC,
@@ -2491,7 +2503,8 @@ Decl *ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
                                       NameInfo, T, TInfo, D->getStorageClass(),
                                       D->getStorageClassAsWritten(),
                                       D->isInlineSpecified(),
-                                      D->hasWrittenPrototype());
+                                      D->hasWrittenPrototype(),
+                                      D->isConstexpr());
   }
 
   // Import the qualifier, if any.
@@ -2915,6 +2928,7 @@ Decl *ASTNodeImporter::VisitObjCMethodDecl(ObjCMethodDecl *D) {
                              D->isInstanceMethod(),
                              D->isVariadic(),
                              D->isSynthesized(),
+                             D->isImplicit(),
                              D->isDefined(),
                              D->getImplementationControl(),
                              D->hasRelatedResultType());

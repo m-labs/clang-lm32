@@ -343,6 +343,10 @@ public:
   }
     
   // C++
+  Value *VisitMaterializeTemporaryExpr(const MaterializeTemporaryExpr *E) {
+    return EmitLoadOfLValue(E);
+  }
+    
   Value *VisitCXXDefaultArgExpr(CXXDefaultArgExpr *DAE) {
     return Visit(DAE->getExpr());
   }

@@ -593,10 +593,7 @@ Parser::ParseExternalDeclaration(ParsedAttributesWithRange &attrs,
     break;
   }
   case tok::at:
-    // @ is not a legal token unless objc is enabled, no need to check for ObjC.
-    /// FIXME: ParseObjCAtDirectives should return a DeclGroup for things like
-    /// @class foo, bar;
-    SingleDecl = ParseObjCAtDirectives();
+    return ParseObjCAtDirectives();
     break;
   case tok::minus:
   case tok::plus:
@@ -811,6 +808,11 @@ Parser::ParseDeclarationOrFunctionDefinition(ParsedAttributes &attrs,
                                              AccessSpecifier AS) {
   ParsingDeclSpec DS(*this);
   DS.takeAttributesFrom(attrs);
+  // Must temporarily exit the objective-c container scope for
+  // parsing c constructs and re-enter objc container scope
+  // afterwards.
+  ObjCDeclContextSwitch ObjCDC(*this);
+    
   return ParseDeclarationOrFunctionDefinition(DS, AS);
 }
 

@@ -893,6 +893,18 @@ public:
     return DeclKind == Decl::Block;
   }
 
+  bool isObjCContainer() const {
+    switch (DeclKind) {
+        case Decl::ObjCCategory:
+        case Decl::ObjCCategoryImpl:
+        case Decl::ObjCImplementation:
+        case Decl::ObjCInterface:
+        case Decl::ObjCProtocol:
+            return true;
+    }
+    return false;
+  }
+
   bool isFunctionOrMethod() const {
     switch (DeclKind) {
     case Decl::Block:
@@ -1263,14 +1275,6 @@ public:
   /// the lookup tables because it can be easily recovered by walking
   /// the declaration chains.
   void makeDeclVisibleInContext(NamedDecl *D, bool Recoverable = true);
-
-  /// \brief Deserialize all the visible declarations from external storage.
-  ///
-  /// Name lookup deserializes visible declarations lazily, thus a DeclContext
-  /// may not have a complete name lookup table. This function deserializes
-  /// the rest of visible declarations from the external storage and completes
-  /// the name lookup table.
-  void MaterializeVisibleDeclsFromExternalStorage();
 
   /// udir_iterator - Iterates through the using-directives stored
   /// within this context.

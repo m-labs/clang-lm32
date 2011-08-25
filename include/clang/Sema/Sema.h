@@ -489,6 +489,11 @@ public:
   /// have been declared.
   bool GlobalNewDeleteDeclared;
 
+
+  /// A flag that is set when parsing a -dealloc method and no [super dealloc]
+  /// call was found yet.
+  bool ObjCShouldCallSuperDealloc;
+
   /// \brief The set of declarations that have been referenced within
   /// a potentially evaluated expression.
   typedef SmallVector<std::pair<SourceLocation, Decl *>, 10>
@@ -1002,7 +1007,8 @@ public:
                                      LookupResult &Previous,
                                      MultiTemplateParamsArg TemplateParamLists,
                                      bool IsFunctionDefinition,
-                                     bool &Redeclaration);
+                                     bool &Redeclaration,
+                                     bool &AddToScope);
   bool AddOverriddenMethods(CXXRecordDecl *DC, CXXMethodDecl *MD);
   void DiagnoseHiddenVirtualMethods(CXXRecordDecl *DC, CXXMethodDecl *MD);
   void CheckFunctionDeclaration(Scope *S,
@@ -1153,9 +1159,9 @@ public:
   bool CheckNontrivialField(FieldDecl *FD);
   void DiagnoseNontrivial(const RecordType* Record, CXXSpecialMember mem);
   CXXSpecialMember getSpecialMember(const CXXMethodDecl *MD);
-  void ActOnLastBitfield(SourceLocation DeclStart, Decl *IntfDecl, 
+  void ActOnLastBitfield(SourceLocation DeclStart, 
                          SmallVectorImpl<Decl *> &AllIvarDecls);
-  Decl *ActOnIvar(Scope *S, SourceLocation DeclStart, Decl *IntfDecl,
+  Decl *ActOnIvar(Scope *S, SourceLocation DeclStart,
                   Declarator &D, Expr *BitfieldWidth,
                   tok::ObjCKeywordKind visibility);
 
@@ -1170,6 +1176,8 @@ public:
   /// struct, or union).
   void ActOnTagStartDefinition(Scope *S, Decl *TagDecl);
 
+  void ActOnObjCContainerStartDefinition(Decl *IDecl);
+
   /// ActOnStartCXXMemberDeclarations - Invoked when we have parsed a
   /// C++ record definition's base-specifiers clause and are starting its
   /// member declarations.
@@ -1181,6 +1189,8 @@ public:
   /// the definition of a tag (enumeration, class, struct, or union).
   void ActOnTagFinishDefinition(Scope *S, Decl *TagDecl,
                                 SourceLocation RBraceLoc);
+
+  void ActOnObjCContainerFinishDefinition(Decl *IDecl);
 
   /// ActOnTagDefinitionError - Invoked when there was an unrecoverable
   /// error parsing the definition of a tag.
@@ -1844,7 +1854,6 @@ public:
   /// Called by ActOnProperty to handle @property declarations in
   ////  class extensions.
   Decl *HandlePropertyInClassExtension(Scope *S,
-                                       ObjCCategoryDecl *CDecl,
                                        SourceLocation AtLoc,
                                        FieldDeclarator &FD,
                                        Selector GetterSel,
@@ -1903,11 +1912,6 @@ public:
                                   bool &IncompleteImpl,
                                   bool ImmediateClass,
                                   bool WarnExactMatch=false);
-
-  /// MatchMethodsInClassAndItsProtocol - Check that any redeclaration of
-  /// method in protocol in its qualified class match in their type and
-  /// issue warnings otherwise.
-  void MatchMethodsInClassAndItsProtocol(const ObjCInterfaceDecl *CDecl);
 
   /// CheckCategoryVsClassMethodMatches - Checks that methods implemented in
   /// category matches with those implemented in its primary class and
@@ -4997,7 +5001,7 @@ public:
                                          IdentifierInfo *CatName,
                                          SourceLocation CatLoc);
 
-  Decl *ActOnForwardClassDeclaration(SourceLocation Loc,
+  DeclGroupPtrTy ActOnForwardClassDeclaration(SourceLocation Loc,
                                      IdentifierInfo **IdentList,
                                      SourceLocation *IdentLocs,
                                      unsigned NumElts);
@@ -5048,7 +5052,7 @@ public:
   void MatchOneProtocolPropertiesInClass(Decl *CDecl,
                                          ObjCProtocolDecl *PDecl);
 
-  void ActOnAtEnd(Scope *S, SourceRange AtEnd, Decl *classDecl,
+  void ActOnAtEnd(Scope *S, SourceRange AtEnd,
                   Decl **allMethods = 0, unsigned allNum = 0,
                   Decl **allProperties = 0, unsigned pNum = 0,
                   DeclGroupPtrTy *allTUVars = 0, unsigned tuvNum = 0);
@@ -5056,7 +5060,6 @@ public:
   Decl *ActOnProperty(Scope *S, SourceLocation AtLoc,
                       FieldDeclarator &FD, ObjCDeclSpec &ODS,
                       Selector GetterSel, Selector SetterSel,
-                      Decl *ClassCategory,
                       bool *OverridingProperty,
                       tok::ObjCKeywordKind MethodImplKind,
                       DeclContext *lexicalDC = 0);
@@ -5064,7 +5067,7 @@ public:
   Decl *ActOnPropertyImplDecl(Scope *S,
                               SourceLocation AtLoc,
                               SourceLocation PropertyLoc,
-                              bool ImplKind,Decl *ClassImplDecl,
+                              bool ImplKind,
                               IdentifierInfo *PropertyId,
                               IdentifierInfo *PropertyIvar,
                               SourceLocation PropertyIvarLoc);
@@ -5095,7 +5098,7 @@ public:
     SourceLocation BeginLoc, // location of the + or -.
     SourceLocation EndLoc,   // location of the ; or {.
     tok::TokenKind MethodType,
-    Decl *ClassDecl, ObjCDeclSpec &ReturnQT, ParsedType ReturnType,
+    ObjCDeclSpec &ReturnQT, ParsedType ReturnType,
     SourceLocation SelectorStartLoc, Selector Sel,
     // optional arguments. The number of types/arguments is obtained
     // from the Sel.getNumArgs().
@@ -5841,14 +5844,13 @@ public:
                                           CXXCtorInitializer** Initializers,
                                           unsigned NumInitializers);
   
-  void CodeCompleteObjCAtDirective(Scope *S, Decl *ObjCImpDecl,
-                                   bool InInterface);
+  void CodeCompleteObjCAtDirective(Scope *S);
   void CodeCompleteObjCAtVisibility(Scope *S);
   void CodeCompleteObjCAtStatement(Scope *S);
   void CodeCompleteObjCAtExpression(Scope *S);
   void CodeCompleteObjCPropertyFlags(Scope *S, ObjCDeclSpec &ODS);
-  void CodeCompleteObjCPropertyGetter(Scope *S, Decl *ClassDecl);
-  void CodeCompleteObjCPropertySetter(Scope *S, Decl *ClassDecl);
+  void CodeCompleteObjCPropertyGetter(Scope *S);
+  void CodeCompleteObjCPropertySetter(Scope *S);
   void CodeCompleteObjCPassingType(Scope *S, ObjCDeclSpec &DS, 
                                    bool IsParameter);
   void CodeCompleteObjCMessageReceiver(Scope *S);
@@ -5885,14 +5887,12 @@ public:
   void CodeCompleteObjCImplementationCategory(Scope *S,
                                               IdentifierInfo *ClassName,
                                               SourceLocation ClassNameLoc);
-  void CodeCompleteObjCPropertyDefinition(Scope *S, Decl *ObjCImpDecl);
+  void CodeCompleteObjCPropertyDefinition(Scope *S);
   void CodeCompleteObjCPropertySynthesizeIvar(Scope *S,
-                                              IdentifierInfo *PropertyName,
-                                              Decl *ObjCImpDecl);
+                                              IdentifierInfo *PropertyName);
   void CodeCompleteObjCMethodDecl(Scope *S,
                                   bool IsInstanceMethod,
-                                  ParsedType ReturnType,
-                                  Decl *IDecl);
+                                  ParsedType ReturnType);
   void CodeCompleteObjCMethodDeclSelector(Scope *S, 
                                           bool IsInstanceMethod,
                                           bool AtParameterName,
@@ -5977,6 +5977,9 @@ private:
   void CheckMemaccessArguments(const CallExpr *Call, CheckedMemoryFunction CMF,
                                IdentifierInfo *FnName);
 
+  void CheckStrlcpycatArguments(const CallExpr *Call,
+                                IdentifierInfo *FnName);
+
   void CheckReturnStackAddr(Expr *RetValExp, QualType lhsType,
                             SourceLocation ReturnLoc);
   void CheckFloatComparison(SourceLocation loc, Expr* lex, Expr* rex);
@@ -6006,6 +6009,8 @@ public:
   /// itself and in routines directly invoked from the parser and *never* from
   /// template substitution or instantiation.
   Scope *getCurScope() const { return CurScope; }
+    
+  Decl *getObjCDeclContext() const;
 };
 
 /// \brief RAII object that enters a new expression evaluation context.

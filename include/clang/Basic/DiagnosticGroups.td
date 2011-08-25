@@ -73,7 +73,7 @@ def : DiagGroup<"int-to-pointer-cast">;
 def : DiagGroup<"invalid-pch">;
 def LiteralRange : DiagGroup<"literal-range">;
 def LocalTypeTemplateArgs : DiagGroup<"local-type-template-args">;
-def : DiagGroup<"main">;
+def Main : DiagGroup<"main">;
 def MissingBraces : DiagGroup<"missing-braces">;
 def MissingDeclarations: DiagGroup<"missing-declarations">;
 def : DiagGroup<"missing-format-attribute">;
@@ -96,6 +96,7 @@ def OutOfLineDeclaration : DiagGroup<"out-of-line-declaration">;
 def : DiagGroup<"overflow">;
 def OverlengthStrings : DiagGroup<"overlength-strings">;
 def OverloadedVirtual : DiagGroup<"overloaded-virtual">;
+def ObjCMissingSuperCalls : DiagGroup<"objc-missing-super-calls">;
 def Packed : DiagGroup<"packed">;
 def Padded : DiagGroup<"padded">;
 def PointerArith : DiagGroup<"pointer-arith">;
@@ -155,6 +156,7 @@ def UnknownPragmas : DiagGroup<"unknown-pragmas">;
 def UnknownAttributes : DiagGroup<"attributes">;
 def UnnamedTypeTemplateArgs : DiagGroup<"unnamed-type-template-args">;
 def UnusedArgument : DiagGroup<"unused-argument">;
+def UnusedComparison : DiagGroup<"unused-comparison">;
 def UnusedExceptionParameter : DiagGroup<"unused-exception-parameter">;
 def UnneededInternalDecl : DiagGroup<"unneeded-internal-declaration">;
 def UnneededMemberFunction : DiagGroup<"unneeded-member-function">;
@@ -164,7 +166,7 @@ def UnusedMemberFunction : DiagGroup<"unused-member-function",
 def UnusedLabel : DiagGroup<"unused-label">;
 def UnusedParameter : DiagGroup<"unused-parameter">;
 def UnusedResult : DiagGroup<"unused-result">;
-def UnusedValue    : DiagGroup<"unused-value", [UnusedResult]>;
+def UnusedValue : DiagGroup<"unused-value", [UnusedComparison, UnusedResult]>;
 def UnusedVariable : DiagGroup<"unused-variable">;
 def UsedButMarkedUnused : DiagGroup<"used-but-marked-unused">;
 def ReadOnlySetterAttrs : DiagGroup<"readonly-setter-attrs">;
@@ -187,6 +189,7 @@ def Selector : DiagGroup<"selector">;
 def NonfragileAbi2 : DiagGroup<"nonfragile-abi2">;
 def Protocol : DiagGroup<"protocol">;
 def SuperSubClassMismatch : DiagGroup<"super-class-method-mismatch">;
+def OverridingMethodMismatch : DiagGroup<"overriding-method-mismatch">;
 def : DiagGroup<"variadic-macros">;
 def VariadicMacros : DiagGroup<"variadic-macros">;
 def VectorConversions : DiagGroup<"vector-conversions">;      // clang specific
@@ -271,10 +274,14 @@ def Most : DiagGroup<"most", [
     UnknownPragmas,
     Unused,
     VolatileRegisterVar,
+    ObjCMissingSuperCalls,
     OverloadedVirtual
  ]>;
 
-// -Wall is -Wmost -Wparentheses
+// Thread Safety warnings 
+def : DiagGroup<"thread-safety">;
+
+// -Wall is -Wmost -Wparentheses -Wtop-level-comparison
 def : DiagGroup<"all", [Most, Parentheses]>;
 
 // Aliases.

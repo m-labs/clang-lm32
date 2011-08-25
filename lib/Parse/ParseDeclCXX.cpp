@@ -52,7 +52,8 @@ Decl *Parser::ParseNamespace(unsigned Context,
                              SourceLocation InlineLoc) {
   assert(Tok.is(tok::kw_namespace) && "Not a namespace!");
   SourceLocation NamespaceLoc = ConsumeToken();  // eat the 'namespace'.
-
+  ObjCDeclContextSwitch ObjCDC(*this);
+    
   if (Tok.is(tok::code_completion)) {
     Actions.CodeCompleteNamespaceDecl(getCurScope());
     ConsumeCodeCompletionToken();
@@ -89,7 +90,6 @@ Decl *Parser::ParseNamespace(unsigned Context,
     if (InlineLoc.isValid())
       Diag(InlineLoc, diag::err_inline_namespace_alias)
           << FixItHint::CreateRemoval(InlineLoc);
-
     return ParseNamespaceAlias(NamespaceLoc, IdentLoc, Ident, DeclEnd);
   }
 
@@ -317,7 +317,8 @@ Decl *Parser::ParseUsingDirectiveOrDeclaration(unsigned Context,
                                              ParsedAttributesWithRange &attrs,
                                                Decl **OwnedType) {
   assert(Tok.is(tok::kw_using) && "Not using token");
-
+  ObjCDeclContextSwitch ObjCDC(*this);
+  
   // Eat 'using'.
   SourceLocation UsingLoc = ConsumeToken();
 
@@ -344,7 +345,7 @@ Decl *Parser::ParseUsingDirectiveOrDeclaration(unsigned Context,
   ProhibitAttributes(attrs);
 
   return ParseUsingDeclaration(Context, TemplateInfo, UsingLoc, DeclEnd,
-                               AS_none, OwnedType);
+                                    AS_none, OwnedType);
 }
 
 /// ParseUsingDirective - Parse C++ using-directive, assumes
@@ -1264,7 +1265,8 @@ void Parser::ParseClassSpecifier(tok::TokenKind TagTokKind,
     case tok::kw_typedef:         // struct foo {...} typedef   x;
     case tok::kw_register:        // struct foo {...} register  x;
     case tok::kw_auto:            // struct foo {...} auto      x;
-    case tok::kw_mutable:         // struct foo {...} mutable      x;
+    case tok::kw_mutable:         // struct foo {...} mutable   x;
+    case tok::kw_constexpr:       // struct foo {...} constexpr x;
       // As shown above, type qualifiers and storage class specifiers absolutely
       // can occur after class specifiers according to the grammar.  However,
       // almost no one actually writes code like this.  If we see one of these,

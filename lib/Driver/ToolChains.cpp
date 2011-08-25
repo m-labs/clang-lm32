@@ -211,7 +211,8 @@ Tool &Darwin::SelectTool(const Compilation &C, const JobAction &JA,
         types::isCXX(Inputs[0]->getType()) &&
         getTriple().getOS() == llvm::Triple::Darwin &&
         getTriple().getArch() == llvm::Triple::x86 &&
-        C.getArgs().getLastArg(options::OPT_fapple_kext))
+        (C.getArgs().getLastArg(options::OPT_fapple_kext) ||
+         C.getArgs().getLastArg(options::OPT_mkernel)))
       Key = JA.getKind();
     else
       Key = Action::AnalyzeJobClass;
@@ -254,6 +255,8 @@ Tool &Darwin::SelectTool(const Compilation &C, const JobAction &JA,
       T = new tools::darwin::Lipo(*this); break;
     case Action::DsymutilJobClass:
       T = new tools::darwin::Dsymutil(*this); break;
+    case Action::VerifyJobClass:
+      T = new tools::darwin::VerifyDebug(*this); break;
     }
   }
 
@@ -361,8 +364,8 @@ void DarwinClang::AddLinkSearchPathArgs(const ArgList &Args,
 
 void DarwinClang::AddLinkARCArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
-  
-  CmdArgs.push_back("-force_load");    
+
+  CmdArgs.push_back("-force_load");
   llvm::sys::Path P(getDriver().ClangExecutable);
   P.eraseComponent(); // 'clang'
   P.eraseComponent(); // 'bin'
@@ -384,13 +387,13 @@ void DarwinClang::AddLinkARCArgs(const ArgList &Args,
 }
 
 void DarwinClang::AddLinkRuntimeLib(const ArgList &Args,
-                                    ArgStringList &CmdArgs, 
+                                    ArgStringList &CmdArgs,
                                     const char *DarwinStaticLib) const {
   llvm::sys::Path P(getDriver().ResourceDir);
   P.appendComponent("lib");
   P.appendComponent("darwin");
   P.appendComponent(DarwinStaticLib);
-  
+
   // For now, allow missing resource libraries to support developers who may
   // not have compiler-rt checked out or integrated into their build.
   bool Exists;
@@ -490,6 +493,21 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
   Arg *iOSSimVersion = Args.getLastArg(
     options::OPT_mios_simulator_version_min_EQ);
 
+  // If no '-miphoneos-version-min' specified, see if we can set the default
+  // based on isysroot.
+  if (!iOSVersion) {
+    if (const Arg *A = Args.getLastArg(options::OPT_isysroot)) {
+      StringRef first, second;
+      StringRef isysroot = A->getValue(Args);
+      llvm::tie(first, second) = isysroot.split(StringRef("SDKs/iPhoneOS"));
+      if (second != "") {
+        const Option *O = Opts.getOption(options::OPT_miphoneos_version_min_EQ);
+        iOSVersion = Args.MakeJoinedArg(0, O, second.substr(0,3));
+        Args.append(iOSVersion);
+      }
+    }
+  }
+
   // FIXME: HACK! When compiling for the simulator we don't get a
   // '-miphoneos-version-min' to help us know whether there is an ARC runtime
   // or not; try to parse a __IPHONE_OS_VERSION_MIN_REQUIRED
@@ -499,7 +517,7 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
            ie = Args.filtered_end(); it != ie; ++it) {
       StringRef define = (*it)->getValue(Args);
       if (define.startswith(SimulatorVersionDefineName())) {
-        unsigned Major, Minor, Micro;
+        unsigned Major = 0, Minor = 0, Micro = 0;
         if (GetVersionFromSimulatorDefine(define, Major, Minor, Micro) &&
             Major < 10 && Minor < 100 && Micro < 100) {
           ARCRuntimeForSimulator = Major < 5 ? ARCSimulator_NoARCRuntime
@@ -765,7 +783,6 @@ DerivedArgList *Darwin::TranslateArgs(const DerivedArgList &Args,
     case options::OPT_fapple_kext:
       DAL->append(A);
       DAL->AddFlagArg(A, Opts.getOption(options::OPT_static));
-      DAL->AddFlagArg(A, Opts.getOption(options::OPT_static));
       break;
 
     case options::OPT_dependency_file:
@@ -783,12 +800,6 @@ DerivedArgList *Darwin::TranslateArgs(const DerivedArgList &Args,
       DAL->AddFlagArg(A, Opts.getOption(options::OPT_g_Flag));
       DAL->AddFlagArg(A,
              Opts.getOption(options::OPT_feliminate_unused_debug_symbols));
-      break;
-
-    case options::OPT_fterminated_vtables:
-    case options::OPT_findirect_virtual_calls:
-      DAL->AddFlagArg(A, Opts.getOption(options::OPT_fapple_kext));
-      DAL->AddFlagArg(A, Opts.getOption(options::OPT_static));
       break;
 
     case options::OPT_shared:
@@ -999,6 +1010,8 @@ Tool &Generic_GCC::SelectTool(const Compilation &C,
       T = new tools::darwin::Lipo(*this); break;
     case Action::DsymutilJobClass:
       T = new tools::darwin::Dsymutil(*this); break;
+    case Action::VerifyJobClass:
+      T = new tools::darwin::VerifyDebug(*this); break;
     }
   }
 
@@ -1362,7 +1375,7 @@ static bool HasMultilib(llvm::Triple::ArchType Arch, enum LinuxDistro Distro) {
   }
   if (Arch == llvm::Triple::ppc64)
     return true;
-  if ((Arch == llvm::Triple::x86 || Arch == llvm::Triple::ppc) && 
+  if ((Arch == llvm::Triple::x86 || Arch == llvm::Triple::ppc) &&
       IsDebianBased(Distro))
     return true;
   return false;
@@ -1555,6 +1568,9 @@ Linux::Linux(const HostInfo &Host, const llvm::Triple &Triple)
     else if (!llvm::sys::fs::exists("/usr/lib/x86_64-linux-gnu/gcc",
              Exists) && Exists)
       GccTriple = "x86_64-linux-gnu";
+    else if (!llvm::sys::fs::exists("/usr/lib64/gcc/x86_64-slackware-linux", Exists)
+            && Exists)
+      GccTriple = "x86_64-slackware-linux";
   } else if (Arch == llvm::Triple::x86) {
     if (!llvm::sys::fs::exists("/usr/lib/gcc/i686-linux-gnu", Exists) && Exists)
       GccTriple = "i686-linux-gnu";
@@ -1584,14 +1600,14 @@ Linux::Linux(const HostInfo &Host, const llvm::Triple &Triple)
                                Exists) && Exists)
       GccTriple = "powerpc64-unknown-linux-gnu";
     else if (!llvm::sys::fs::exists("/usr/lib64/gcc/"
-                                    "powerpc64-unknown-linux-gnu", Exists) && 
+                                    "powerpc64-unknown-linux-gnu", Exists) &&
              Exists)
       GccTriple = "powerpc64-unknown-linux-gnu";
   }
 
   std::string Base = findGCCBaseLibDir(GccTriple);
   path_list &Paths = getFilePaths();
-  bool Is32Bits = (getArch() == llvm::Triple::x86 || 
+  bool Is32Bits = (getArch() == llvm::Triple::x86 ||
                    getArch() == llvm::Triple::ppc);
 
   std::string Suffix;
@@ -1764,6 +1780,7 @@ Tool &Windows::SelectTool(const Compilation &C, const JobAction &JA,
     case Action::BindArchClass:
     case Action::LipoJobClass:
     case Action::DsymutilJobClass:
+    case Action::VerifyJobClass:
       assert(0 && "Invalid tool kind.");
     case Action::PreprocessJobClass:
     case Action::PrecompileJobClass:

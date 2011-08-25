@@ -171,6 +171,16 @@ enum ModuleKind {
   MK_MainFile  ///< File is a PCH file treated as the actual main file.
 };
 
+/// \brief Information about the contents of a DeclContext.
+struct DeclContextInfo {
+  DeclContextInfo() 
+    : NameLookupTableData(), LexicalDecls(), NumLexicalDecls() {}
+
+  void *NameLookupTableData; // an ASTDeclContextNameLookupTable.
+  const KindDeclIDPair *LexicalDecls;
+  unsigned NumLexicalDecls;
+};
+
 /// \brief Information about a module that has been loaded by the ASTReader.
 ///
 /// Each instance of the Module class corresponds to a single AST file, which 
@@ -190,6 +200,10 @@ public:
   /// \brief The file name of the module file.
   std::string FileName;
   
+  /// \brief Whether this module has been directly imported by the
+  /// user.
+  bool DirectlyImported;
+
   /// \brief The memory buffer that stores the data associated with
   /// this AST file.
   llvm::OwningPtr<llvm::MemoryBuffer> Buffer;
@@ -383,6 +397,13 @@ public:
   /// indexed by the C++ base specifier set ID (-1).
   const uint32_t *CXXBaseSpecifiersOffsets;
 
+  typedef llvm::DenseMap<const DeclContext *, DeclContextInfo>
+      DeclContextInfosMap;
+
+  /// \brief Information about the lexical and visible declarations
+  /// for each DeclContext.
+  DeclContextInfosMap DeclContextInfos;
+
   // === Types ===
   
   /// \brief The number of types in this AST file.
@@ -418,7 +439,11 @@ public:
   
   /// \brief List of modules which this module depends on
   llvm::SetVector<Module *> Imports;
-  
+
+  /// \brief Determine whether this module was directly imported at
+  /// any point during translation.
+  bool isDirectlyImported() const { return DirectlyImported; }
+
   /// \brief Dump debugging output for this module.
   void dump();
 };
@@ -474,10 +499,6 @@ public:
   /// the first module loaded.
   Module &getPrimaryModule() const { return *Chain[0]; }
 
-  /// \brief Returns the latest module associated with the manager, that is,
-  /// the last module loaded
-  Module &getLastModule() { return *Chain.back(); }
-
   /// \brief Returns the module associated with the given index
   Module &operator[](unsigned Index) const { return *Chain[Index]; }
 
@@ -490,16 +511,71 @@ public:
   /// \brief Number of modules loaded
   unsigned size() const { return Chain.size(); }
 
-  /// \brief Creates a new module and adds it to the list of known modules
-  Module &addModule(StringRef FileName, ModuleKind Type);
+  /// \brief Attempts to create a new module and add it to the list of known
+  /// modules.
+  ///
+  /// \param FileName The file name of the module to be loaded.
+  ///
+  /// \param Type The kind of module being loaded.
+  ///
+  /// \param ImportedBy The module that is importing this module, or NULL if
+  /// this module is imported directly by the user.
+  ///
+  /// \param ErrorStr Will be set to a non-empty string if any errors occurred
+  /// while trying to load the module.
+  ///
+  /// \return A pointer to the module that corresponds to this file name,
+  /// and a boolean indicating whether the module was newly added.
+  std::pair<Module *, bool> 
+  addModule(StringRef FileName, ModuleKind Type, Module *ImportedBy,
+            std::string &ErrorStr);
   
   /// \brief Add an in-memory buffer the list of known buffers
   void addInMemoryBuffer(StringRef FileName, llvm::MemoryBuffer *Buffer);
 
-  /// \brief Exports the list of loaded modules with their corresponding names
-  void exportLookup(SmallVector<ModuleOffset, 16> &Target);
+  /// \brief Visit each of the modules.
+  ///
+  /// This routine visits each of the modules, starting with the
+  /// "root" modules that no other loaded modules depend on, and
+  /// proceeding to the leaf modules, visiting each module only once
+  /// during the traversal.
+  ///
+  /// This traversal is intended to support various "lookup"
+  /// operations that can find data in any of the loaded modules.
+  ///
+  /// \param Visitor A visitor function that will be invoked with each
+  /// module and the given user data pointer. The return value must be
+  /// convertible to bool; when false, the visitation continues to
+  /// modules that the current module depends on. When true, the
+  /// visitation skips any modules that the current module depends on.
+  ///
+  /// \param UserData User data associated with the visitor object, which
+  /// will be passed along to the visitor.
+  void visit(bool (*Visitor)(Module &M, void *UserData), void *UserData);
+
+  /// \brief Visit each of the modules with a depth-first traversal.
+  ///
+  /// This routine visits each of the modules known to the module
+  /// manager using a depth-first search, starting with the first
+  /// loaded module. The traversal invokes the callback both before
+  /// traversing the children (preorder traversal) and after
+  /// traversing the children (postorder traversal).
+  ///
+  /// \param Visitor A visitor function that will be invoked with each
+  /// module and given a \c Preorder flag that indicates whether we're
+  /// visiting the module before or after visiting its children.  The
+  /// visitor may return true at any time to abort the depth-first
+  /// visitation.
+  ///
+  /// \param UserData User data ssociated with the visitor object,
+  /// which will be passed along to the user.
+  void visitDepthFirst(bool (*Visitor)(Module &M, bool Preorder, 
+                                       void *UserData), 
+                       void *UserData);
 };
 
+class ReadMethodPoolVisitor;
+  
 } // end namespace serialization
   
 /// \brief Reads an AST files chain containing the contents of a translation
@@ -534,6 +610,7 @@ public:
   friend class TypeLocReader;
   friend class ASTWriter;
   friend class ASTUnit; // ASTUnit needs to remap source locations.
+  friend class serialization::ReadMethodPoolVisitor;
   
   typedef serialization::Module Module;
   typedef serialization::ModuleKind ModuleKind;
@@ -622,20 +699,6 @@ private:
   /// \brief Declarations that have been replaced in a later file in the chain.
   DeclReplacementMap ReplacedDecls;
 
-  /// \brief Information about the contents of a DeclContext.
-  struct DeclContextInfo {
-    Module *F;
-    void *NameLookupTableData; // a ASTDeclContextNameLookupTable.
-    const serialization::KindDeclIDPair *LexicalDecls;
-    unsigned NumLexicalDecls;
-  };
-  // In a full chain, there could be multiple updates to every decl context,
-  // so this is a vector. However, typically a chain is only two elements long,
-  // with only one file containing updates, so there will be only one update
-  // per decl context.
-  typedef SmallVector<DeclContextInfo, 1> DeclContextInfos;
-  typedef llvm::DenseMap<const DeclContext *, DeclContextInfos>
-      DeclContextOffsetsMap;
   // Updates for visible decls can occur for other contexts than just the
   // TU, and when we read those update records, the actual context will not
   // be available yet (unless it's the TU), so have this pending map using the
@@ -643,10 +706,6 @@ private:
   typedef SmallVector<std::pair<void *, Module*>, 1> DeclContextVisibleUpdates;
   typedef llvm::DenseMap<serialization::DeclID, DeclContextVisibleUpdates>
       DeclContextVisibleUpdatesPending;
-
-  /// \brief Offsets of the lexical and visible declarations for each
-  /// DeclContext.
-  DeclContextOffsetsMap DeclContextOffsets;
 
   /// \brief Updates to the visible declarations of declaration contexts that
   /// haven't been loaded yet.
@@ -667,9 +726,10 @@ private:
   FirstLatestDeclIDMap FirstLatestDeclIDs;
 
   /// \brief Read the records that describe the contents of declcontexts.
-  bool ReadDeclContextStorage(llvm::BitstreamCursor &Cursor,
+  bool ReadDeclContextStorage(Module &M, 
+                              llvm::BitstreamCursor &Cursor,
                               const std::pair<uint64_t, uint64_t> &Offsets,
-                              DeclContextInfo &Info);
+                              serialization::DeclContextInfo &Info);
 
   /// \brief A vector containing identifiers that have already been
   /// loaded.
@@ -1007,7 +1067,8 @@ private:
 
   void MaybeAddSystemRootToFilename(std::string &Filename);
 
-  ASTReadResult ReadASTCore(StringRef FileName, ModuleKind Type);
+  ASTReadResult ReadASTCore(StringRef FileName, ModuleKind Type,
+                            Module *ImportedBy);
   ASTReadResult ReadASTBlock(Module &F);
   bool CheckPredefinesBuffers();
   bool ParseLineTable(Module &F, SmallVectorImpl<uint64_t> &Record);
@@ -1029,6 +1090,7 @@ private:
   void LoadedDecl(unsigned Index, Decl *D);
   Decl *ReadDeclRecord(serialization::DeclID ID);
   RecordLocation DeclCursorForID(serialization::DeclID ID);
+  void loadDeclUpdateRecords(serialization::DeclID ID, Decl *D);
   
   RecordLocation getLocalBitOffset(uint64_t GlobalOffset);
   uint64_t getGlobalBitOffset(Module &M, uint32_t LocalOffset);
@@ -1103,8 +1165,7 @@ public:
             bool DisableValidation = false, bool DisableStatCache = false);
   ~ASTReader();
 
-  /// \brief Load the precompiled header designated by the given file
-  /// name.
+  /// \brief Load the AST file designated by the given file name.
   ASTReadResult ReadAST(const std::string &FileName, ModuleKind Type);
 
   /// \brief Checks that no file that is stored in PCH is out-of-sync with
@@ -1130,11 +1191,15 @@ public:
     ModuleMgr.addInMemoryBuffer(FileName, Buffer);
   }
 
-  /// \brief Retrieve the name of the named (primary) AST file
-  const std::string &getFileName() const {
-    return ModuleMgr.getPrimaryModule().FileName;
-  }
+  /// \brief Retrieve the module manager.
+  ModuleManager &getModuleManager() { return ModuleMgr; }
 
+  /// \brief Retrieve the preprocessor.
+  Preprocessor &getPreprocessor() const {
+    assert(PP && "ASTReader does not have a preprocessor");
+    return *PP;
+  }
+  
   /// \brief Retrieve the name of the original source file name
   const std::string &getOriginalSourceFile() { return OriginalFileName; }
 
@@ -1221,9 +1286,6 @@ public:
   /// \brief Reads a declarator info from the given record.
   TypeSourceInfo *GetTypeSourceInfo(Module &F,
                                     const RecordData &Record, unsigned &Idx);
-
-  /// \brief Resolve and return the translation unit declaration.
-  TranslationUnitDecl *GetTranslationUnitDecl();
 
   /// \brief Resolve a type ID into a type, potentially building a new
   /// type.
@@ -1314,8 +1376,6 @@ public:
   virtual DeclContext::lookup_result
   FindExternalVisibleDeclsByName(const DeclContext *DC,
                                  DeclarationName Name);
-
-  virtual void MaterializeVisibleDecls(const DeclContext *DC);
 
   /// \brief Read all of the declarations lexically stored in a
   /// declaration context.

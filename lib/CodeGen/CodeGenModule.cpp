@@ -66,6 +66,7 @@ CodeGenModule::CodeGenModule(ASTContext &C, const CodeGenOptions &CGO,
     TBAA(0),
     VTables(*this), ObjCRuntime(0), DebugInfo(0), ARCData(0), RRData(0),
     CFConstantStringClassRef(0), ConstantStringClassRef(0),
+    NSConstantStringType(0),
     VMContext(M.getContext()),
     NSConcreteGlobalBlockDecl(0), NSConcreteStackBlockDecl(0),
     NSConcreteGlobalBlock(0), NSConcreteStackBlock(0),
@@ -142,6 +143,9 @@ void CodeGenModule::Release() {
 
   if (getCodeGenOpts().EmitGcovArcs || getCodeGenOpts().EmitGcovNotes)
     EmitCoverageFile();
+
+  if (DebugInfo)
+    DebugInfo->finalize();
 }
 
 void CodeGenModule::UpdateCompletedType(const TagDecl *TD) {
@@ -468,14 +472,19 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   if (!Features.Exceptions && !Features.ObjCNonFragileABI)
     F->addFnAttr(llvm::Attribute::NoUnwind);
 
-  if (D->hasAttr<AlwaysInlineAttr>())
-    F->addFnAttr(llvm::Attribute::AlwaysInline);
-
-  if (D->hasAttr<NakedAttr>())
+  if (D->hasAttr<NakedAttr>()) {
+    // Naked implies noinline: we should not be inlining such functions.
     F->addFnAttr(llvm::Attribute::Naked);
+    F->addFnAttr(llvm::Attribute::NoInline);
+  }
 
   if (D->hasAttr<NoInlineAttr>())
     F->addFnAttr(llvm::Attribute::NoInline);
+
+  // (noinline wins over always_inline, and we can't specify both in IR)
+  if (D->hasAttr<AlwaysInlineAttr>() &&
+      !F->hasFnAttr(llvm::Attribute::NoInline))
+    F->addFnAttr(llvm::Attribute::AlwaysInline);
 
   if (isa<CXXConstructorDecl>(D) || isa<CXXDestructorDecl>(D))
     F->setUnnamedAddr(true);
@@ -1800,6 +1809,16 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   return GV;
 }
 
+static RecordDecl *
+CreateRecordDecl(const ASTContext &Ctx, RecordDecl::TagKind TK,
+                 DeclContext *DC, IdentifierInfo *Id) {
+  SourceLocation Loc;
+  if (Ctx.getLangOptions().CPlusPlus)
+    return CXXRecordDecl::Create(Ctx, TK, DC, Loc, Loc, Id);
+  else
+    return RecordDecl::Create(Ctx, TK, DC, Loc, Loc, Id);
+}
+
 llvm::Constant *
 CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   unsigned StringLength = 0;
@@ -1838,11 +1857,40 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
         llvm::ConstantExpr::getGetElementPtr(GV, Zeros);
     }
   }
-  
-  QualType NSTy = getContext().getNSConstantStringType();
-  
-  llvm::StructType *STy =
-  cast<llvm::StructType>(getTypes().ConvertType(NSTy));
+
+  if (!NSConstantStringType) {
+    // Construct the type for a constant NSString.
+    RecordDecl *D = CreateRecordDecl(Context, TTK_Struct, 
+                                     Context.getTranslationUnitDecl(),
+                                   &Context.Idents.get("__builtin_NSString"));
+    D->startDefinition();
+      
+    QualType FieldTypes[3];
+    
+    // const int *isa;
+    FieldTypes[0] = Context.getPointerType(Context.IntTy.withConst());
+    // const char *str;
+    FieldTypes[1] = Context.getPointerType(Context.CharTy.withConst());
+    // unsigned int length;
+    FieldTypes[2] = Context.UnsignedIntTy;
+    
+    // Create fields
+    for (unsigned i = 0; i < 3; ++i) {
+      FieldDecl *Field = FieldDecl::Create(Context, D,
+                                           SourceLocation(),
+                                           SourceLocation(), 0,
+                                           FieldTypes[i], /*TInfo=*/0,
+                                           /*BitWidth=*/0,
+                                           /*Mutable=*/false,
+                                           /*HasInit=*/false);
+      Field->setAccess(AS_public);
+      D->addDecl(Field);
+    }
+    
+    D->completeDefinition();
+    QualType NSTy = Context.getTagDeclType(D);
+    NSConstantStringType = cast<llvm::StructType>(getTypes().ConvertType(NSTy));
+  }
   
   std::vector<llvm::Constant*> Fields(3);
   
@@ -1870,7 +1918,7 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   Fields[2] = llvm::ConstantInt::get(Ty, StringLength);
   
   // The struct.
-  C = llvm::ConstantStruct::get(STy, Fields);
+  C = llvm::ConstantStruct::get(NSConstantStringType, Fields);
   GV = new llvm::GlobalVariable(getModule(), C->getType(), true,
                                 llvm::GlobalVariable::PrivateLinkage, C,
                                 "_unnamed_nsstring_");
@@ -1883,6 +1931,41 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   Entry.setValue(GV);
   
   return GV;
+}
+
+QualType CodeGenModule::getObjCFastEnumerationStateType() {
+  if (ObjCFastEnumerationStateType.isNull()) {
+    RecordDecl *D = CreateRecordDecl(Context, TTK_Struct, 
+                                     Context.getTranslationUnitDecl(),
+                      &Context.Idents.get("__objcFastEnumerationState"));
+    D->startDefinition();
+    
+    QualType FieldTypes[] = {
+      Context.UnsignedLongTy,
+      Context.getPointerType(Context.getObjCIdType()),
+      Context.getPointerType(Context.UnsignedLongTy),
+      Context.getConstantArrayType(Context.UnsignedLongTy,
+                           llvm::APInt(32, 5), ArrayType::Normal, 0)
+    };
+    
+    for (size_t i = 0; i < 4; ++i) {
+      FieldDecl *Field = FieldDecl::Create(Context,
+                                           D,
+                                           SourceLocation(),
+                                           SourceLocation(), 0,
+                                           FieldTypes[i], /*TInfo=*/0,
+                                           /*BitWidth=*/0,
+                                           /*Mutable=*/false,
+                                           /*HasInit=*/false);
+      Field->setAccess(AS_public);
+      D->addDecl(Field);
+    }
+    
+    D->completeDefinition();
+    ObjCFastEnumerationStateType = Context.getTagDeclType(D);
+  }
+  
+  return ObjCFastEnumerationStateType;
 }
 
 /// GetStringForStringLiteral - Return the appropriate bytes for a
@@ -2060,8 +2143,10 @@ void CodeGenModule::EmitObjCIvarInitializations(ObjCImplementationDecl *D) {
     Selector cxxSelector = getContext().Selectors.getSelector(0, &II);
     ObjCMethodDecl *DTORMethod =
       ObjCMethodDecl::Create(getContext(), D->getLocation(), D->getLocation(),
-                             cxxSelector, getContext().VoidTy, 0, D, true,
-                             false, true, false, ObjCMethodDecl::Required);
+                             cxxSelector, getContext().VoidTy, 0, D,
+                             /*isInstance=*/true, /*isVariadic=*/false,
+                          /*isSynthesized=*/true, /*isImplicitlyDeclared=*/true,
+                             /*isDefined=*/false, ObjCMethodDecl::Required);
     D->addInstanceMethod(DTORMethod);
     CodeGenFunction(*this).GenerateObjCCtorDtorMethod(D, DTORMethod, false);
     D->setHasCXXStructors(true);
@@ -2079,7 +2164,11 @@ void CodeGenModule::EmitObjCIvarInitializations(ObjCImplementationDecl *D) {
                                                 D->getLocation(),
                                                 D->getLocation(), cxxSelector,
                                                 getContext().getObjCIdType(), 0, 
-                                                D, true, false, true, false,
+                                                D, /*isInstance=*/true,
+                                                /*isVariadic=*/false,
+                                                /*isSynthesized=*/true,
+                                                /*isImplicitlyDeclared=*/true,
+                                                /*isDefined=*/false,
                                                 ObjCMethodDecl::Required);
   D->addInstanceMethod(CTORMethod);
   CodeGenFunction(*this).GenerateObjCCtorDtorMethod(D, CTORMethod, true);

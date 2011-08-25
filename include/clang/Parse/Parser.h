@@ -186,6 +186,8 @@ public:
 
   const Token &getCurToken() const { return Tok; }
   Scope *getCurScope() const { return Actions.getCurScope(); }
+    
+  Decl  *getObjCDeclContext() const { return Actions.getObjCDeclContext(); }
   
   // Type forwarding.  All of these are statically 'void*', but they may all be
   // different actual classes based on the actions in place.
@@ -501,6 +503,23 @@ private:
     }
   };
 
+  /// ObjCDeclContextSwitch - An object used to switch context from
+  /// an objective-c decl context to its enclosing decl context and
+  /// back.
+  class ObjCDeclContextSwitch {
+    Parser &P;
+    Decl *DC;
+  public:
+    explicit ObjCDeclContextSwitch(Parser &p) : P(p), 
+               DC(p.getObjCDeclContext()) {
+      if (DC)
+        P.Actions.ActOnObjCContainerFinishDefinition(DC);
+    }
+    ~ObjCDeclContextSwitch() {
+      if (DC)
+        P.Actions.ActOnObjCContainerStartDefinition(DC);
+    }
+  };
 
   SourceLocation MatchRHSPunctuation(tok::TokenKind RHSTok,
                                      SourceLocation LHSLoc);
@@ -1041,8 +1060,8 @@ private:
   ExprResult ParseAsmStringLiteral();
 
   // Objective-C External Declarations
-  Decl *ParseObjCAtDirectives();
-  Decl *ParseObjCAtClassDeclaration(SourceLocation atLoc);
+  Parser::DeclGroupPtrTy ParseObjCAtDirectives();
+  Parser::DeclGroupPtrTy ParseObjCAtClassDeclaration(SourceLocation atLoc);
   Decl *ParseObjCAtInterfaceDeclaration(SourceLocation atLoc,
                                         ParsedAttributes &prefixAttrs);
   void ParseObjCClassInstanceVariables(Decl *interfaceDecl,
@@ -1054,8 +1073,8 @@ private:
                                    SourceLocation &LAngleLoc,
                                    SourceLocation &EndProtoLoc);
   bool ParseObjCProtocolQualifiers(DeclSpec &DS);
-  void ParseObjCInterfaceDeclList(Decl *interfaceDecl,
-                                  tok::ObjCKeywordKind contextKey);
+  void ParseObjCInterfaceDeclList(tok::ObjCKeywordKind contextKey,
+                                  Decl *CDecl);
   Decl *ParseObjCAtProtocolDeclaration(SourceLocation atLoc,
                                        ParsedAttributes &prefixAttrs);
 
@@ -1086,14 +1105,13 @@ private:
   
   ParsedType ParseObjCTypeName(ObjCDeclSpec &DS, ObjCTypeNameContext Context);
   void ParseObjCMethodRequirement();
-  Decl *ParseObjCMethodPrototype(Decl *classOrCat,
+  Decl *ParseObjCMethodPrototype(
             tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword,
             bool MethodDefinition = true);
   Decl *ParseObjCMethodDecl(SourceLocation mLoc, tok::TokenKind mType,
-                                Decl *classDecl,
             tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword,
             bool MethodDefinition=true);
-  void ParseObjCPropertyAttribute(ObjCDeclSpec &DS, Decl *ClassDecl);
+  void ParseObjCPropertyAttribute(ObjCDeclSpec &DS);
 
   Decl *ParseObjCMethodDefinition();
 
@@ -1690,6 +1708,13 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
                                   SourceLocation AvailabilityLoc,
                                   ParsedAttributes &attrs,
                                   SourceLocation *endLoc);
+
+  bool IsThreadSafetyAttribute(llvm::StringRef AttrName);
+  void ParseThreadSafetyAttribute(IdentifierInfo &AttrName,
+                                  SourceLocation AttrNameLoc,
+                                  ParsedAttributes &Attrs,
+                                  SourceLocation *EndLoc);
+
 
   void ParseTypeofSpecifier(DeclSpec &DS);
   void ParseDecltypeSpecifier(DeclSpec &DS);

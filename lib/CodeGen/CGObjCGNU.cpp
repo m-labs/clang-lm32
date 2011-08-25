@@ -621,7 +621,7 @@ class CGObjCGNUstep : public CGObjCGNU {
         // void *__cxa_begin_catch(void *e)
         EnterCatchFn.init(&CGM, "__cxa_begin_catch", PtrTy, PtrTy, NULL);
         // void __cxa_end_catch(void)
-        EnterCatchFn.init(&CGM, "__cxa_end_catch", VoidTy, NULL);
+        ExitCatchFn.init(&CGM, "__cxa_end_catch", VoidTy, NULL);
         // void _Unwind_Resume_or_Rethrow(void*)
         ExceptionReThrowFn.init(&CGM, "_Unwind_Resume_or_Rethrow", VoidTy, PtrTy, NULL);
       }
@@ -1235,8 +1235,7 @@ llvm::Constant *CGObjCGNU::GenerateMethodList(const StringRef &ClassName,
                                                          Methods);
 
   // Structure containing list pointer, array and array count
-  llvm::StructType *ObjCMethodListTy =
-    llvm::StructType::createNamed(VMContext, "");
+  llvm::StructType *ObjCMethodListTy = llvm::StructType::create(VMContext);
   llvm::Type *NextPtrTy = llvm::PointerType::getUnqual(ObjCMethodListTy);
   ObjCMethodListTy->setBody(
       NextPtrTy,

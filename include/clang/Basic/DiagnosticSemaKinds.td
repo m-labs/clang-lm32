@@ -264,8 +264,9 @@ def err_types_compatible_p_in_cplusplus : Error<
   "__builtin_types_compatible_p is not valid in C++">;
 def warn_builtin_unknown : Warning<"use of unknown builtin %0">, DefaultError;
 def warn_dyn_class_memaccess : Warning<
-  "%select{destination for|source of}0 this %1 call is a pointer to dynamic "
-  "class %2; vtable pointer will be overwritten">, 
+  "%select{destination for|source of|first operand of|second operand of}0 this "
+  "%1 call is a pointer to dynamic class %2; vtable pointer will be "
+  "%select{overwritten|copied|moved|compared}3">,
   InGroup<DiagGroup<"dynamic-class-memaccess">>;
 def note_bad_memaccess_silence : Note<
   "explicitly cast the pointer to silence this warning">;
@@ -278,18 +279,27 @@ def warn_sizeof_pointer_type_memaccess : Warning<
   "argument to 'sizeof' in %0 call is the same pointer type %1 as the "
   "%select{destination|source}2; expected %3 or an explicit length">,
   InGroup<DiagGroup<"sizeof-pointer-memaccess">>;
+def warn_strlcpycat_wrong_size : Warning<
+  "size argument in %0 call appears to be size of the source; expected the size of "
+  "the destination">,
+  DefaultIgnore,
+  InGroup<DiagGroup<"strlcpy-strlcat-size">>;
+def note_strlcpycat_wrong_size : Note<
+  "change size argument to be the size of the destination">;
 
 /// main()
 // static/inline main() are not errors in C, just in C++.
 def warn_unusual_main_decl : Warning<"'main' should not be declared "
-    "%select{static|inline|static or inline}0">;
+    "%select{static|inline|static or inline}0">,
+    InGroup<Main>;
 def err_unusual_main_decl : Error<"'main' is not allowed to be declared "
     "%select{static|inline|static or inline}0">;
 def err_main_template_decl : Error<"'main' cannot be a template">;
 def err_main_returns_nonint : Error<"'main' must return 'int'">;
 def err_main_surplus_args : Error<"too many parameters (%0) for 'main': "
     "must be 0, 2, or 3">;
-def warn_main_one_arg : Warning<"only one parameter on 'main' declaration">;
+def warn_main_one_arg : Warning<"only one parameter on 'main' declaration">,
+    InGroup<Main>;
 def err_main_arg_wrong : Error<"%select{first|second|third|fourth}0 "
     "parameter of 'main' (%select{argument count|argument array|environment|"
     "platform-specific data}0) must be of type %1">;
@@ -383,32 +393,72 @@ def note_undef_method_impl : Note<"method definition for %0 not found">;
 def note_required_for_protocol_at : 
   Note<"required for direct or indirect protocol %0">;
 
+def warn_conflicting_overriding_ret_types : Warning<
+  "conflicting return type in "
+  "declaration of %0: %1 vs %2">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
+
 def warn_conflicting_ret_types : Warning<
   "conflicting return type in "
-  "%select{implementation|declaration}3 of %0: %1 vs %2">;
+  "implementation of %0: %1 vs %2">;
+
+def warn_conflicting_overriding_ret_type_modifiers : Warning<
+  "conflicting distributed object modifiers on return type "
+  "in declaration of %0">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
+
 def warn_conflicting_ret_type_modifiers : Warning<
   "conflicting distributed object modifiers on return type "
-  "in %select{implementation|declaration}1 of %0">,
+  "in implementation of %0">,
   InGroup<DiagGroup<"distributed-object-modifiers">>;
+
+def warn_non_covariant_overriding_ret_types : Warning<
+  "conflicting return type in "
+  "declaration of %0: %1 vs %2">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
+
 def warn_non_covariant_ret_types : Warning<
   "conflicting return type in "
-  "%select{implementation|declaration}3 of %0: %1 vs %2">,
+  "implementation of %0: %1 vs %2">,
   InGroup<DiagGroup<"method-signatures">>, DefaultIgnore;
+
+def warn_conflicting_overriding_param_types : Warning<
+  "conflicting parameter types in "
+  "declaration of %0: %1 vs %2">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
 
 def warn_conflicting_param_types : Warning<
   "conflicting parameter types in "
-  "%select{implementation|declaration}3 of %0: %1 vs %2">;
+  "implementation of %0: %1 vs %2">;
 def warn_conflicting_param_modifiers : Warning<
   "conflicting distributed object modifiers on parameter type "
-  "in %select{implementation|declaration}1 of %0">,
+  "in implementation of %0">,
   InGroup<DiagGroup<"distributed-object-modifiers">>;
+
+def warn_conflicting_overriding_param_modifiers : Warning<
+  "conflicting distributed object modifiers on parameter type "
+  "in declaration of %0">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
+
+def warn_non_contravariant_overriding_param_types : Warning<
+  "conflicting parameter types in "
+  "declaration of %0: %1 vs %2">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
+
 def warn_non_contravariant_param_types : Warning<
   "conflicting parameter types in "
-  "%select{implementation|declaration}3 of %0: %1 vs %2">,
+  "implementation of %0: %1 vs %2">,
   InGroup<DiagGroup<"method-signatures">>, DefaultIgnore;
+
+def warn_conflicting_overriding_variadic :Warning<
+  "conflicting variadic declaration of method and its "
+  "implementation">,
+  InGroup<OverridingMethodMismatch>, DefaultIgnore;
+
 def warn_conflicting_variadic :Warning<
   "conflicting variadic declaration of method and its "
-  "%select{implementation|declaration}0">;
+  "implementation">;
+
 def warn_category_method_impl_match:Warning<
   "category is implementing a method which will also be implemented"
   " by its primary class">, InGroup<ObjCProtocolMethodImpl>;
@@ -497,7 +547,8 @@ def error_synthesize_weak_non_arc_or_gc : Error<
 def err_arc_perform_selector_retains : Error<
   "performSelector names a selector which retains the object">;
 def warn_arc_perform_selector_leaks : Warning<
-  "performSelector may cause a leak because its selector is unknown">;
+  "performSelector may cause a leak because its selector is unknown">,
+  InGroup<DiagGroup<"arc-performSelector-leaks">>;
 
 def error_synthesized_ivar_yet_not_supported : Error<
   "instance variable synthesis not yet supported"
@@ -519,6 +570,9 @@ def error_property_implemented : Error<"property %0 is already implemented">;
 def warn_objc_property_attr_mutually_exclusive : Warning<
   "property attributes '%0' and '%1' are mutually exclusive">,
   InGroup<ReadOnlySetterAttrs>, DefaultIgnore;
+def warn_objc_missing_super_dealloc : Warning<
+  "method possibly missing a [super dealloc] call">,
+  InGroup<ObjCMissingSuperCalls>;
 def warn_undeclared_selector : Warning<
   "undeclared selector %0">, InGroup<UndeclaredSelector>, DefaultIgnore;
 def warn_implicit_atomic_property : Warning<
@@ -562,6 +616,8 @@ def err_tagless_friend_type_template : Error<
   "friend type templates must use an elaborated type">;
 def err_no_matching_local_friend : Error<
   "no matching function found in local scope">;
+def err_no_matching_local_friend_suggest : Error<
+  "no matching function %0 found in local scope; did you mean %2">;
 def err_partial_specialization_friend : Error<
   "partial specialization cannot be declared as a friend">;
 
@@ -1110,6 +1166,16 @@ def err_for_range_begin_end_types_differ : Error<
 def note_for_range_type : Note<"range has type %0">;
 def note_for_range_begin_end : Note<
   "selected '%select{begin|end}0' %select{function|template }1%2 with iterator type %3">;
+
+// C++0x constexpr
+def err_invalid_constexpr : Error<
+  "%select{function parameter|typedef|non-static data member}0 "
+  "cannot be constexpr">;
+def err_constexpr_tag : Error<
+  "%select{class|struct|union|enum}0 cannot be marked constexpr">;
+def err_constexpr_dtor : Error<"destructor cannot be marked constexpr">;
+def err_constexpr_no_declarators : Error<
+  "constexpr can only be used in variable and function declarations">;
   
 // Objective-C++
 def err_objc_decls_may_only_appear_in_global_scope : Error<
@@ -1141,6 +1207,10 @@ def err_attribute_bad_neon_vector_size : Error<
   "Neon vector size must be 64 or 128 bits">;
 def err_attribute_argument_not_int : Error<
   "'%0' attribute requires integer constant">;
+def err_attribute_argument_not_class : Error<
+  "%0 attribute requires arguments that are class type or point to class type">;
+def err_attribute_first_argument_not_int_or_bool : Error<
+  "%0 attribute first argument must be of int or bool type">;
 def err_attribute_argument_outof_range : Error<
   "init_priority attribute requires integer constant between "
   "101 and 65535 inclusive">;
@@ -1299,6 +1369,38 @@ def warn_availability_version_ordering : Warning<
   "feature cannot be %select{introduced|deprecated|obsoleted}0 in %1 version "
   "%2 before it was %select{introduced|deprecated|obsoleted}3 in version %4; "
   "attribute ignored">;
+  
+// Thread Safety Attributes
+// Errors when parsing the attributes
+def err_attribute_argument_out_of_range : Error<
+  "%0 attribute parameter %1 is out of bounds: "
+  "%plural{0:no parameters to index into|"
+  "1:can only be 1, since there is one parameter|"
+  ":must be between 1 and %2}2">;
+def err_attribute_argument_not_lockable : Error<
+  "%0 attribute requires arguments whose type is annotated "
+  "with 'lockable' attribute">;
+def err_attribute_decl_not_lockable : Error<
+  "%0 attribute can only be applied in a context annotated "
+  "with 'lockable' attribute">;
+def warn_unlock_but_no_acquire : Warning<
+  "unlocking '%0' that was not acquired">,
+  InGroup<DiagGroup<"thread-safety">>, DefaultIgnore;
+def warn_double_lock : Warning<
+  "locking '%0' that is already acquired">,
+  InGroup<DiagGroup<"thread-safety">>, DefaultIgnore;
+def warn_function_requires_lock : Warning<
+  "calling function '%0' requires lock '%0'">,
+  InGroup<DiagGroup<"thread-safety">>, DefaultIgnore;
+def warn_locks_not_released : Warning<
+  "lock '%0' is not released at the end of function '%1'">,
+  InGroup<DiagGroup<"thread-safety">>, DefaultIgnore;
+def warn_lock_not_released_in_scope : Warning<
+  "lock '%0' is not released at the end of its scope">,
+  InGroup<DiagGroup<"thread-safety">>, DefaultIgnore;
+def warn_expecting_lock_held_on_loop : Warning<
+  "expecting lock '%0' to be held at start of each loop">,
+  InGroup<DiagGroup<"thread-safety">>, DefaultIgnore;
 
 def warn_impcast_vector_scalar : Warning<
   "implicit conversion turns vector to scalar: %0 to %1">,
@@ -1961,6 +2063,9 @@ def err_not_class_template_specialization : Error<
   "parameter}0">;
 def err_function_specialization_in_class : Error<
   "cannot specialize a function %0 within class scope">;
+def ext_function_specialization_in_class : ExtWarn<
+  "explicit specialization of %0 within class scope is a Microsoft extension">,
+  InGroup<Microsoft>;
 def ext_explicit_specialization_storage_class : ExtWarn<
   "explicit specialization cannot have a storage class">;
 def err_explicit_specialization_inconsistent_storage_class : Error<
@@ -2172,7 +2277,8 @@ def note_typename_refers_here : Note<
 def err_typename_missing : Error<
   "missing 'typename' prior to dependent type name '%0%1'">;
 def warn_typename_missing : ExtWarn<
-  "missing 'typename' prior to dependent type name '%0%1'">;
+  "missing 'typename' prior to dependent type name '%0%1'">,
+  InGroup<DiagGroup<"typename-missing">>;
 def ext_typename_outside_of_template : ExtWarn<
   "'typename' occurs outside of a template">, InGroup<CXX0x>;
 def err_typename_refers_to_using_value_decl : Error<
@@ -2610,8 +2716,8 @@ def ext_flexible_array_in_struct : Extension<
   "%0 may not be nested in a struct due to flexible array member">;
 def ext_flexible_array_in_array : Extension<
   "%0 may not be used as an array element due to flexible array member">;
-def err_flexible_array_init_nonempty : Error<
-  "non-empty initialization of flexible array member inside subobject">;
+def err_flexible_array_init : Error<
+  "initialization of flexible array member is not allowed">;
 def ext_flexible_array_empty_aggregate_ms : Extension<
   "flexible array member %0 in otherwise empty %select{struct|class}1 "
   "is a Microsoft extension">, InGroup<Microsoft>;
@@ -2869,8 +2975,12 @@ def note_precedence_conditional_silence : Note<
   "place parentheses around the '%0' expression to silence this warning">;
 
 def warn_logical_instead_of_bitwise : Warning<
-  "use of logical %0 with constant operand; switch to bitwise %1 or "
-  "remove constant">, InGroup<DiagGroup<"constant-logical-operand">>;
+  "use of logical '%0' with constant operand">,
+  InGroup<DiagGroup<"constant-logical-operand">>;
+def note_logical_instead_of_bitwise_change_operator : Note<
+  "use '%0' for a bitwise operation">;
+def note_logical_instead_of_bitwise_remove_constant : Note<
+  "remove constant to silence this warning">;
 
 def warn_bitwise_and_in_bitwise_or : Warning<
   "'&' within '|'">, InGroup<BitwiseOpParentheses>;
@@ -2953,6 +3063,9 @@ def err_member_def_undefined_record : Error<
   "out-of-line definition of %0 from class %1 without definition">;
 def err_member_def_does_not_match : Error<
   "out-of-line definition of %0 does not match any declaration in %1">;
+def err_member_def_does_not_match_suggest : Error<
+  "out-of-line definition of %0 does not match any declaration in %1; "
+  "did you mean %2">;
 def err_member_def_does_not_match_ret_type : Error<
   "out-of-line definition of %q0 differs from the declaration in the return type">;
 def err_nonstatic_member_out_of_line : Error<
@@ -3102,6 +3215,10 @@ def warn_comparison_of_mixed_enum_types : Warning<
   InGroup<DiagGroup<"enum-compare">>;
 def warn_null_in_arithmetic_operation : Warning<
   "use of NULL in arithmetic operation">,
+  InGroup<DiagGroup<"null-arithmetic">>;
+def warn_null_in_comparison_operation : Warning<
+  "comparison between NULL and non-pointer "
+  "%select{(%1 and NULL)|(NULL and %1)}0">,
   InGroup<DiagGroup<"null-arithmetic">>;
 
 def err_invalid_this_use : Error<
@@ -3786,6 +3903,11 @@ def warn_unused_call : Warning<
 def warn_unused_result : Warning<
   "ignoring return value of function declared with warn_unused_result "
   "attribute">, InGroup<DiagGroup<"unused-result">>;
+def warn_unused_comparison : Warning<
+  "%select{equality|inequality}0 comparison result unused">,
+  InGroup<UnusedComparison>;
+def note_inequality_comparison_to_or_assign : Note<
+  "use '|=' to turn this inequality comparison into an or-assignment">;
 
 def err_incomplete_type_used_in_type_trait_expr : Error<
   "incomplete type %0 used in type trait expression">;
@@ -4193,7 +4315,8 @@ def warn_comparison_always : Warning<
 
 def warn_stringcompare : Warning<
   "result of comparison against %select{a string literal|@encode}0 is "
-  "unspecified (use strncmp instead)">;
+  "unspecified (use strncmp instead)">,
+  InGroup<DiagGroup<"string-compare">>;
 
 // Generic selections.
 def err_assoc_type_incomplete : Error<
@@ -4224,10 +4347,12 @@ def err_block_returning_array_function : Error<
 
 // CFString checking
 def err_cfstring_literal_not_string_constant : Error<
-  "CFString literal is not a string constant">;
+  "CFString literal is not a string constant">,
+  InGroup<DiagGroup<"CFString-literal">>;
 def warn_cfstring_truncated : Warning<
   "input conversion stopped due to an input byte that does not "
-  "belong to the input codeset UTF-8">;
+  "belong to the input codeset UTF-8">,
+  InGroup<DiagGroup<"CFString-literal">>;
 
 // Statements.
 def err_continue_not_in_loop : Error<
@@ -4480,6 +4605,8 @@ def err_unknown_any_addrof : Error<
   "can only be cast to a pointer type">;
 def err_unknown_any_var_function_type : Error<
   "variable %0 with unknown type cannot be given a function type">;
+def err_unknown_any_function : Error<
+  "function %0 with unknown type must be given a function type">;
 
 def err_filter_expression_integral : Error<
   "filter expression type should be an integral value not %0">;
