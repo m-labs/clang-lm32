@@ -2982,19 +2982,106 @@ void MSP430TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
 
 namespace {
 
+class Mico32ABIInfo : public ABIInfo {
+public:
+  Mico32ABIInfo(CodeGenTypes &CGT) : ABIInfo(CGT) {}
+
+  bool isPromotableIntegerType(QualType Ty) const;
+
+  ABIArgInfo classifyReturnType(QualType RetTy) const;
+  ABIArgInfo classifyArgumentType(QualType RetTy) const;
+  virtual void computeInfo(CGFunctionInfo &FI) const;
+  virtual llvm::Value *EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                 CodeGenFunction &CGF) const;
+};
+
 class Mico32TargetCodeGenInfo : public TargetCodeGenInfo {
 public:
   Mico32TargetCodeGenInfo(CodeGenTypes &CGT)
-    : TargetCodeGenInfo(new DefaultABIInfo(CGT)) {}
+    : TargetCodeGenInfo(new Mico32ABIInfo(CGT)) {}
   void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                            CodeGen::CodeGenModule &M) const;
 };
 
 }
 
+// Copied from MBlaze
+bool Mico32ABIInfo::isPromotableIntegerType(QualType Ty) const {
+  // Extend all 8 and 16 bit quantities.
+  if (const BuiltinType *BT = Ty->getAs<BuiltinType>())
+    switch (BT->getKind()) {
+    case BuiltinType::Bool:
+    case BuiltinType::Char_S:
+    case BuiltinType::Char_U:
+    case BuiltinType::SChar:
+    case BuiltinType::UChar:
+    case BuiltinType::Short:
+    case BuiltinType::UShort:
+      return true;
+    default:
+      return false;
+    }
+  return false;
+}
+
+void Mico32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
+  FI.getReturnInfo() = classifyReturnType(FI.getReturnType());
+  for (CGFunctionInfo::arg_iterator it = FI.arg_begin(), ie = FI.arg_end();
+       it != ie; ++it)
+    it->info = classifyArgumentType(it->type);
+}
+
+// Copied from MIPS
+ABIArgInfo Mico32ABIInfo::classifyArgumentType(QualType Ty) const {
+  if (isAggregateTypeForABI(Ty)) {
+    // Ignore empty aggregates.
+    if (getContext().getTypeSize(Ty) == 0)
+      return ABIArgInfo::getIgnore();
+
+    // Records with non trivial destructors/constructors should not be passed
+    // by value.
+    if (isRecordWithNonTrivialDestructorOrCopyConstructor(Ty))
+      return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
+
+    return ABIArgInfo::getIndirect(0);
+  }
+
+  // Treat an enum type as its underlying type.
+  if (const EnumType *EnumTy = Ty->getAs<EnumType>())
+    Ty = EnumTy->getDecl()->getIntegerType();
+
+  return (isPromotableIntegerType(Ty) ?
+          ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
+}
+
+// Copied from MIPS
+ABIArgInfo Mico32ABIInfo::classifyReturnType(QualType RetTy) const {
+  if (RetTy->isVoidType())
+    return ABIArgInfo::getIgnore();
+
+  if (isAggregateTypeForABI(RetTy)) {
+    // FIXME:  Do we want to do a direct return of aggregates of < 8 bytes.
+    return ABIArgInfo::getIndirect(0);
+  }
+
+  // Treat an enum type as its underlying type.
+  if (const EnumType *EnumTy = RetTy->getAs<EnumType>())
+    RetTy = EnumTy->getDecl()->getIntegerType();
+
+  return (RetTy->isPromotableIntegerType() ?
+          ABIArgInfo::getExtend() : ABIArgInfo::getDirect());
+}
+
+
 void Mico32TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
                                                   llvm::GlobalValue *GV,
                                              CodeGen::CodeGenModule &M) const {
+}
+
+llvm::Value *Mico32ABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
+                                   CodeGenFunction &CFG) const {
+  llvm_unreachable("Mico32 does not support varargs");
+  return 0;
 }
 
 
