@@ -54,10 +54,9 @@ def ExtraTokens : DiagGroup<"extra-tokens">;
 def FormatExtraArgs : DiagGroup<"format-extra-args">;
 def FormatZeroLength : DiagGroup<"format-zero-length">;
 
-def CXXHexFloats : DiagGroup<"c++-hex-floats">;
 def CXX0xNarrowing : DiagGroup<"c++0x-narrowing">;
 
-def CXX0xCompat : DiagGroup<"c++0x-compat", [CXXHexFloats, CXX0xNarrowing]>;
+def CXX0xCompat : DiagGroup<"c++0x-compat", [CXX0xNarrowing]>;
 def : DiagGroup<"effc++">;
 def ExitTimeDestructors : DiagGroup<"exit-time-destructors">;
 def FourByteMultiChar : DiagGroup<"four-char-constants">;
@@ -67,6 +66,7 @@ def BitwiseOpParentheses: DiagGroup<"bitwise-op-parentheses">;
 def LogicalOpParentheses: DiagGroup<"logical-op-parentheses">;
 def IgnoredQualifiers : DiagGroup<"ignored-qualifiers">;
 def : DiagGroup<"import">;
+def IncompatiblePointerTypes : DiagGroup<"incompatible-pointer-types">;
 def : DiagGroup<"init-self">;
 def : DiagGroup<"inline">;
 def : DiagGroup<"int-to-pointer-cast">;
@@ -85,6 +85,7 @@ def : DiagGroup<"newline-eof">;
 def LongLong : DiagGroup<"long-long">;
 def MismatchedTags : DiagGroup<"mismatched-tags">;
 def MissingFieldInitializers : DiagGroup<"missing-field-initializers">;
+def ModuleBuild : DiagGroup<"module-build">;
 def NullDereference : DiagGroup<"null-dereference">;
 def InitializerOverrides : DiagGroup<"initializer-overrides">;
 def NonNull : DiagGroup<"nonnull">;
@@ -97,6 +98,8 @@ def : DiagGroup<"overflow">;
 def OverlengthStrings : DiagGroup<"overlength-strings">;
 def OverloadedVirtual : DiagGroup<"overloaded-virtual">;
 def ObjCMissingSuperCalls : DiagGroup<"objc-missing-super-calls">;
+def ObjCRetainBlockProperty : DiagGroup<"objc-noncopy-retain-block-property">;
+def ObjCContinuationPropertyType :DiagGroup<"objc-continuation-property-type">;
 def Packed : DiagGroup<"packed">;
 def Padded : DiagGroup<"padded">;
 def PointerArith : DiagGroup<"pointer-arith">;
@@ -169,6 +172,7 @@ def UnusedResult : DiagGroup<"unused-result">;
 def UnusedValue : DiagGroup<"unused-value", [UnusedComparison, UnusedResult]>;
 def UnusedVariable : DiagGroup<"unused-variable">;
 def UsedButMarkedUnused : DiagGroup<"used-but-marked-unused">;
+def UserDefinedLiterals : DiagGroup<"user-defined-literals">;
 def ReadOnlySetterAttrs : DiagGroup<"readonly-setter-attrs">;
 def Reorder : DiagGroup<"reorder">;
 def UndeclaredSelector : DiagGroup<"undeclared-selector">;
@@ -209,9 +213,11 @@ def DuplicateArgDecl : DiagGroup<"duplicate-method-arg">;
 // missing parentheses;  it is off by default.  We do not include it
 // in -Wparentheses because most users who use -Wparentheses explicitly
 // do not want these warnings.
+def ParenthesesOnEquality : DiagGroup<"parentheses-equality">;
 def Parentheses : DiagGroup<"parentheses",
                             [LogicalOpParentheses,
-                             BitwiseOpParentheses]>;
+                             BitwiseOpParentheses,
+                             ParenthesesOnEquality]>;
 
 // -Wconversion has its own warnings, but we split a few out for
 // legacy reasons:
@@ -223,6 +229,7 @@ def Conversion : DiagGroup<"conversion",
                            [DiagGroup<"shorten-64-to-32">,
                             DiagGroup<"constant-conversion">,
                             DiagGroup<"literal-conversion">,
+                            DiagGroup<"string-conversion">,
                             DiagGroup<"sign-conversion">,
                             BoolConversions]>,
                  DiagCategory<"Value Conversion Issue">;
@@ -235,11 +242,12 @@ def Unused : DiagGroup<"unused",
                         DiagCategory<"Unused Entity Issue">;
 
 // Format settings.
+def FormatInvalidSpecifier : DiagGroup<"format-invalid-specifier">;
 def FormatSecurity : DiagGroup<"format-security">;
 def FormatY2K : DiagGroup<"format-y2k">;
 def Format : DiagGroup<"format",
                        [FormatExtraArgs, FormatZeroLength, NonNull,
-                        FormatSecurity, FormatY2K]>,
+                        FormatSecurity, FormatY2K, FormatInvalidSpecifier]>,
              DiagCategory<"Format String Issue">;
 def FormatNonLiteral : DiagGroup<"format-nonliteral", [FormatSecurity]>;
 def Format2 : DiagGroup<"format=2",
@@ -279,7 +287,7 @@ def Most : DiagGroup<"most", [
  ]>;
 
 // Thread Safety warnings 
-def : DiagGroup<"thread-safety">;
+def ThreadSafety : DiagGroup<"thread-safety">;
 
 // -Wall is -Wmost -Wparentheses -Wtop-level-comparison
 def : DiagGroup<"all", [Most, Parentheses]>;
@@ -296,11 +304,12 @@ def NonGCC : DiagGroup<"non-gcc",
 
 // A warning group for warnings about using C++0x features as extensions in
 // earlier C++ versions.
-def CXX0xStaticNonIntegralInitializer :
-  DiagGroup<"c++0x-static-nonintegral-init">;
-def CXX0x : DiagGroup<"c++0x-extensions", [CXX0xStaticNonIntegralInitializer]>;
+def CXX0x : DiagGroup<"c++0x-extensions">;
 def DelegatingCtorCycles :
   DiagGroup<"delegating-ctor-cycles">;
+
+// A warning group for warnings about using C1X features as extensions.
+def C1X : DiagGroup<"c1x-extensions">;
 
 // A warning group for warnings about GCC extensions.
 def GNU : DiagGroup<"gnu", [GNUDesignator, VLA]>;

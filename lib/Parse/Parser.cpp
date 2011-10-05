@@ -443,6 +443,7 @@ void Parser::Initialize() {
     ObjCTypeQuals[objc_byref] = &PP.getIdentifierTable().get("byref");
   }
 
+  Ident_instancetype = 0;
   Ident_final = 0;
   Ident_override = 0;
 
@@ -553,7 +554,12 @@ Parser::ParseExternalDeclaration(ParsedAttributesWithRange &attrs,
                                  ParsingDeclSpec *DS) {
   DelayedCleanupPoint CleanupRAII(TopLevelDeclCleanupPool);
   ParenBraceBracketBalancer BalancerRAIIObj(*this);
-  
+
+  if (PP.isCodeCompletionReached()) {
+    cutOffParsing();
+    return DeclGroupPtrTy();
+  }
+
   Decl *SingleDecl = 0;
   switch (Tok.getKind()) {
   case tok::semi:
@@ -608,8 +614,8 @@ Parser::ParseExternalDeclaration(ParsedAttributesWithRange &attrs,
       Actions.CodeCompleteOrdinaryName(getCurScope(), 
                                    ObjCImpDecl? Sema::PCC_ObjCImplementation
                                               : Sema::PCC_Namespace);
-    ConsumeCodeCompletionToken();
-    return ParseExternalDeclaration(attrs);
+    cutOffParsing();
+    return DeclGroupPtrTy();
   case tok::kw_using:
   case tok::kw_namespace:
   case tok::kw_typedef:
@@ -676,6 +682,9 @@ Parser::ParseExternalDeclaration(ParsedAttributesWithRange &attrs,
     ParseMicrosoftIfExistsExternalDeclaration();
     return DeclGroupPtrTy();
 
+  case tok::kw___import_module__:
+    return ParseModuleImport();
+      
   default:
   dont_know:
     // We can't tell whether this is a function-definition or declaration yet.
@@ -1213,7 +1222,7 @@ bool Parser::TryAnnotateTypeOrScopeToken(bool EnteringContext) {
                                        0, /*IsTypename*/true))
       return true;
     if (!SS.isSet()) {
-      if (getLang().Microsoft)
+      if (getLang().MicrosoftExt)
         Diag(Tok.getLocation(), diag::warn_expected_qualified_after_typename);
       else
         Diag(Tok.getLocation(), diag::err_expected_qualified_after_typename);
@@ -1410,20 +1419,27 @@ bool Parser::isTokenEqualOrMistypedEqualEqual(unsigned DiagID) {
   return Tok.is(tok::equal);
 }
 
-void Parser::CodeCompletionRecovery() {
+SourceLocation Parser::handleUnexpectedCodeCompletionToken() {
+  assert(Tok.is(tok::code_completion));
+  PrevTokLocation = Tok.getLocation();
+
   for (Scope *S = getCurScope(); S; S = S->getParent()) {
     if (S->getFlags() & Scope::FnScope) {
       Actions.CodeCompleteOrdinaryName(getCurScope(), Sema::PCC_RecoveryInFunction);
-      return;
+      cutOffParsing();
+      return PrevTokLocation;
     }
     
     if (S->getFlags() & Scope::ClassScope) {
       Actions.CodeCompleteOrdinaryName(getCurScope(), Sema::PCC_Class);
-      return;
+      cutOffParsing();
+      return PrevTokLocation;
     }
   }
   
   Actions.CodeCompleteOrdinaryName(getCurScope(), Sema::PCC_Namespace);
+  cutOffParsing();
+  return PrevTokLocation;
 }
 
 // Anchor the Parser::FieldCallback vtable to this translation unit.
@@ -1537,4 +1553,26 @@ void Parser::ParseMicrosoftIfExistsExternalDeclaration() {
     return;
   }
   ConsumeBrace();
+}
+
+Parser::DeclGroupPtrTy Parser::ParseModuleImport() {
+  assert(Tok.is(tok::kw___import_module__) && 
+         "Improper start to module import");
+  SourceLocation ImportLoc = ConsumeToken();
+  
+  // Parse the module name.
+  if (!Tok.is(tok::identifier)) {
+    Diag(Tok, diag::err_module_expected_ident);
+    SkipUntil(tok::semi);
+    return DeclGroupPtrTy();
+  }
+  
+  IdentifierInfo &ModuleName = *Tok.getIdentifierInfo();
+  SourceLocation ModuleNameLoc = ConsumeToken();
+  DeclResult Import = Actions.ActOnModuleImport(ImportLoc, ModuleName, ModuleNameLoc);
+  ExpectAndConsumeSemi(diag::err_module_expected_semi);
+  if (Import.isInvalid())
+    return DeclGroupPtrTy();
+  
+  return Actions.ConvertDeclToDeclGroup(Import.get());
 }

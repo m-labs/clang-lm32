@@ -66,7 +66,7 @@ public:
       if (const NamedDecl *ND = dyn_cast<NamedDecl>(D))
         if (NamesToCheck.find(ND->getNameAsString()) != NamesToCheck.end()) {
           unsigned DiagID
-            = Ctx.getDiagnostics().getCustomDiagID(Diagnostic::Error,
+            = Ctx.getDiagnostics().getCustomDiagID(DiagnosticsEngine::Error,
                                                    "%0 was deserialized");
           Ctx.getDiagnostics().Report(Ctx.getFullLoc(D->getLocation()), DiagID)
               << ND->getNameAsString();
@@ -142,7 +142,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     assert(hasASTFileSupport() &&
            "This action does not have AST file support!");
 
-    llvm::IntrusiveRefCntPtr<Diagnostic> Diags(&CI.getDiagnostics());
+    llvm::IntrusiveRefCntPtr<DiagnosticsEngine> Diags(&CI.getDiagnostics());
     std::string Error;
     ASTUnit *AST = ASTUnit::LoadFromASTFile(Filename, Diags,
                                             CI.getFileSystemOpts());
@@ -238,30 +238,6 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
                                 CI.getPreprocessorOpts().DisablePCHValidation,
                                 CI.getPreprocessorOpts().DisableStatCache,
                                 DeserialListener);
-      if (!CI.getASTContext().getExternalSource())
-        goto failure;
-    } else if (!CI.getPreprocessorOpts().Modules.empty()) {
-      // Use PCH.
-      assert(hasPCHSupport() && "This action does not have PCH support!");
-      ASTDeserializationListener *DeserialListener =
-          Consumer->GetASTDeserializationListener();
-      if (CI.getPreprocessorOpts().DumpDeserializedPCHDecls)
-        DeserialListener = new DeserializedDeclsDumper(DeserialListener);
-      if (!CI.getPreprocessorOpts().DeserializedPCHDeclsToErrorOn.empty())
-        DeserialListener = new DeserializedDeclsChecker(CI.getASTContext(),
-                         CI.getPreprocessorOpts().DeserializedPCHDeclsToErrorOn,
-                                                        DeserialListener);
-
-      CI.createPCHExternalASTSource(CI.getPreprocessorOpts().Modules[0],
-                                    true, true, DeserialListener);
-
-      for (unsigned I = 1, E = CI.getPreprocessorOpts().Modules.size(); I != E;
-          ++I) {
-
-        ASTReader *ModMgr = CI.getModuleManager();
-        ModMgr->ReadAST(CI.getPreprocessorOpts().Modules[I],
-            serialization::MK_Module);
-      }
       if (!CI.getASTContext().getExternalSource())
         goto failure;
     }
@@ -398,7 +374,7 @@ void ASTFrontendAction::ExecuteAction() {
     CompletionConsumer = &CI.getCodeCompletionConsumer();
 
   if (!CI.hasSema())
-    CI.createSema(usesCompleteTranslationUnit(), CompletionConsumer);
+    CI.createSema(getTranslationUnitKind(), CompletionConsumer);
 
   ParseAST(CI.getSema(), CI.getFrontendOpts().ShowStats);
 }
@@ -432,8 +408,8 @@ void WrapperFrontendAction::EndSourceFileAction() {
 bool WrapperFrontendAction::usesPreprocessorOnly() const {
   return WrappedAction->usesPreprocessorOnly();
 }
-bool WrapperFrontendAction::usesCompleteTranslationUnit() {
-  return WrappedAction->usesCompleteTranslationUnit();
+TranslationUnitKind WrapperFrontendAction::getTranslationUnitKind() {
+  return WrappedAction->getTranslationUnitKind();
 }
 bool WrapperFrontendAction::hasPCHSupport() const {
   return WrappedAction->hasPCHSupport();

@@ -47,7 +47,7 @@ namespace driver {
 class Driver {
   OptTable *Opts;
 
-  Diagnostic &Diags;
+  DiagnosticsEngine &Diags;
 
 public:
   // Diag - Forwarding function for diagnostics.
@@ -189,8 +189,8 @@ public:
   Driver(StringRef _ClangExecutable,
          StringRef _DefaultHostTriple,
          StringRef _DefaultImageName,
-         bool IsProduction, bool CXXIsProduction,
-         Diagnostic &_Diags);
+         bool IsProduction,
+         DiagnosticsEngine &_Diags);
   ~Driver();
 
   /// @name Accessors
@@ -202,7 +202,7 @@ public:
 
   const OptTable &getOpts() const { return *Opts; }
 
-  const Diagnostic &getDiags() const { return Diags; }
+  const DiagnosticsEngine &getDiags() const { return Diags; }
 
   bool getCheckInputsExist() const { return CheckInputsExist; }
 
@@ -373,11 +373,11 @@ public:
                                  const char *BaseInput,
                                  bool AtTopLevel) const;
 
-  /// GetTemporaryPath - Return the pathname of a temporary file to
-  /// use as part of compilation; the file will have the given suffix.
+  /// GetTemporaryPath - Return the pathname of a temporary file to use 
+  /// as part of compilation; the file will have the given prefix and suffix.
   ///
   /// GCC goes to extra lengths here to be a bit more robust.
-  std::string GetTemporaryPath(const char *Suffix) const;
+  std::string GetTemporaryPath(StringRef Prefix, const char *Suffix) const;
 
   /// GetHostInfo - Construct a new host info object for the given
   /// host triple.

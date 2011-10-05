@@ -22,6 +22,7 @@
 #include "clang/Sema/DeclSpec.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/ADT/OwningPtr.h"
+#include "llvm/ADT/SmallVector.h"
 #include <stack>
 
 namespace clang {
@@ -98,7 +99,7 @@ class Parser : public CodeCompletionHandler {
   /// in the file. 
   Sema &Actions;
 
-  Diagnostic &Diags;
+  DiagnosticsEngine &Diags;
 
   /// ScopeCache - Cache scopes to reduce malloc traffic.
   enum { ScopeCacheSize = 16 };
@@ -120,6 +121,9 @@ class Parser : public CodeCompletionHandler {
   IdentifierInfo *Ident_vector;
   IdentifierInfo *Ident_pixel;
 
+  /// Objective-C contextual keywords.
+  mutable IdentifierInfo *Ident_instancetype;
+  
   /// \brief Identifier for "introduced".
   IdentifierInfo *Ident_introduced;
 
@@ -191,13 +195,7 @@ public:
   
   // Type forwarding.  All of these are statically 'void*', but they may all be
   // different actual classes based on the actions in place.
-  typedef Expr ExprTy;
-  typedef Stmt StmtTy;
   typedef OpaquePtr<DeclGroupRef> DeclGroupPtrTy;
-  typedef CXXBaseSpecifier BaseTy;
-  typedef CXXCtorInitializer MemInitTy;
-  typedef NestedNameSpecifier CXXScopeTy;
-  typedef TemplateParameterList TemplateParamsTy;
   typedef OpaquePtr<TemplateName> TemplateTy;
 
   typedef SmallVector<TemplateParameterList *, 4> TemplateParameterLists;
@@ -286,11 +284,10 @@ private:
     assert(!isTokenStringLiteral() && !isTokenParen() && !isTokenBracket() &&
            !isTokenBrace() &&
            "Should consume special tokens with Consume*Token");
-    if (Tok.is(tok::code_completion)) {
-      CodeCompletionRecovery();
-      return ConsumeCodeCompletionToken();
-    }
-    
+
+    if (Tok.is(tok::code_completion))
+      return handleUnexpectedCodeCompletionToken();
+
     PrevTokLocation = Tok.getLocation();
     PP.Lex(Tok);
     return PrevTokLocation;
@@ -376,10 +373,20 @@ private:
     return PrevTokLocation;    
   }
   
-  ///\ brief When we are consuming a code-completion token within having 
+  ///\ brief When we are consuming a code-completion token without having
   /// matched specific position in the grammar, provide code-completion results
   /// based on context.
-  void CodeCompletionRecovery();
+  ///
+  /// \returns the source location of the code-completion token.
+  SourceLocation handleUnexpectedCodeCompletionToken();
+
+  /// \brief Abruptly cut off parsing; mainly used when we have reached the
+  /// code-completion point.
+  void cutOffParsing() {
+    PP.setCodeCompletionReached();
+    // Cut off parsing by acting as if we reached the end-of-file.
+    Tok.setKind(tok::eof);
+  }
 
   /// \brief Handle the annotation token produced for #pragma unused(...)
   void HandlePragmaUnused();
@@ -513,7 +520,7 @@ private:
     explicit ObjCDeclContextSwitch(Parser &p) : P(p), 
                DC(p.getObjCDeclContext()) {
       if (DC)
-        P.Actions.ActOnObjCContainerFinishDefinition(DC);
+        P.Actions.ActOnObjCContainerFinishDefinition();
     }
     ~ObjCDeclContextSwitch() {
       if (DC)
@@ -652,6 +659,7 @@ private:
     virtual void ParseLexedMethodDeclarations();
     virtual void ParseLexedMemberInitializers();
     virtual void ParseLexedMethodDefs();
+    virtual void ParseLexedAttributes();
   };
 
   /// Inner node of the LateParsedDeclaration tree that parses
@@ -664,11 +672,38 @@ private:
     virtual void ParseLexedMethodDeclarations();
     virtual void ParseLexedMemberInitializers();
     virtual void ParseLexedMethodDefs();
+    virtual void ParseLexedAttributes();
 
   private:
     Parser *Self;
     ParsingClass *Class;
   };
+
+  /// Contains the lexed tokens of an attribute with arguments that 
+  /// may reference member variables and so need to be parsed at the 
+  /// end of the class declaration after parsing all other member 
+  /// member declarations.
+  /// FIXME: Perhaps we should change the name of LateParsedDeclaration to
+  /// LateParsedTokens.
+  struct LateParsedAttribute : public LateParsedDeclaration {
+    Parser *Self;
+    CachedTokens Toks;
+    IdentifierInfo &AttrName;
+    SourceLocation AttrNameLoc;
+    Decl *D;
+
+    explicit LateParsedAttribute(Parser *P, IdentifierInfo &Name, 
+                                 SourceLocation Loc)
+      : Self(P), AttrName(Name), AttrNameLoc(Loc), D(0)  {}
+
+    virtual void ParseLexedAttributes();
+
+    void setDecl(Decl *Dec) { D = Dec; }
+  };
+
+  /// A list of late parsed attributes.  Used by ParseGNUAttributes.
+  typedef llvm::SmallVector<LateParsedAttribute*, 2> LateParsedAttrList;
+
 
   /// Contains the lexed tokens of a member function definition
   /// which needs to be parsed at the end of the class declaration
@@ -1016,12 +1051,16 @@ private:
                                 const ParsedTemplateInfo &TemplateInfo,
                                 const VirtSpecifiers& VS, ExprResult& Init);
   void ParseCXXNonStaticMemberInitializer(Decl *VarD);
+  void ParseLexedAttributes(ParsingClass &Class);
+  void ParseLexedAttribute(LateParsedAttribute &LA);
   void ParseLexedMethodDeclarations(ParsingClass &Class);
   void ParseLexedMethodDeclaration(LateParsedMethodDeclaration &LM);
   void ParseLexedMethodDefs(ParsingClass &Class);
   void ParseLexedMethodDef(LexedMethod &LM);
   void ParseLexedMemberInitializers(ParsingClass &Class);
   void ParseLexedMemberInitializer(LateParsedMemberInitializer &MI);
+  Decl *ParseLexedObjCMethodDefs(LexedMethod &LM);
+  bool ConsumeAndStoreFunctionPrologue(CachedTokens &Toks);
   bool ConsumeAndStoreUntil(tok::TokenKind T1,
                             CachedTokens &Toks,
                             bool StopAtSemi = true,
@@ -1080,9 +1119,11 @@ private:
 
   Decl *ObjCImpDecl;
   SmallVector<Decl *, 4> PendingObjCImpDecl;
+  typedef SmallVector<LexedMethod*, 2> LateParsedObjCMethodContainer;
+  LateParsedObjCMethodContainer LateParsedObjCMethods;
 
   Decl *ParseObjCAtImplementationDeclaration(SourceLocation atLoc);
-  Decl *ParseObjCAtEndDeclaration(SourceRange atEnd);
+  DeclGroupPtrTy ParseObjCAtEndDeclaration(SourceRange atEnd);
   Decl *ParseObjCAtAliasDeclaration(SourceLocation atLoc);
   Decl *ParseObjCPropertySynthesize(SourceLocation atLoc);
   Decl *ParseObjCPropertyDynamic(SourceLocation atLoc);
@@ -1097,13 +1138,8 @@ private:
 
   bool isTokIdentifier_in() const;
 
-  /// \brief The context in which we are parsing an Objective-C type name.
-  enum ObjCTypeNameContext {
-    OTN_ResultType,
-    OTN_ParameterType
-  };
-  
-  ParsedType ParseObjCTypeName(ObjCDeclSpec &DS, ObjCTypeNameContext Context);
+  ParsedType ParseObjCTypeName(ObjCDeclSpec &DS, Declarator::TheContext Ctx,
+                               ParsedAttributes *ParamAttrs);
   void ParseObjCMethodRequirement();
   Decl *ParseObjCMethodPrototype(
             tok::ObjCKeywordKind MethodImplKind = tok::objc_not_keyword,
@@ -1196,6 +1232,10 @@ private:
   //===--------------------------------------------------------------------===//
   // C++ Expressions
   ExprResult ParseCXXIdExpression(bool isAddressOfOperand = false);
+
+  void CheckForTemplateAndDigraph(Token &Next, ParsedType ObjectTypePtr,
+                                  bool EnteringContext, IdentifierInfo &II,
+                                  CXXScopeSpec &SS);
 
   bool ParseOptionalCXXScopeSpecifier(CXXScopeSpec &SS,
                                       ParsedType ObjectType,
@@ -1364,15 +1404,15 @@ private:
   StmtResult ParseBreakStatement(ParsedAttributes &Attr);
   StmtResult ParseReturnStatement(ParsedAttributes &Attr);
   StmtResult ParseAsmStatement(bool &msAsm);
-  StmtResult FuzzyParseMicrosoftAsmStatement(SourceLocation AsmLoc);
+  StmtResult ParseMicrosoftAsmStatement(SourceLocation AsmLoc);
   bool ParseMicrosoftIfExistsCondition(bool& Result);
   void ParseMicrosoftIfExistsStatement(StmtVector &Stmts);
   void ParseMicrosoftIfExistsExternalDeclaration();
   void ParseMicrosoftIfExistsClassDeclaration(DeclSpec::TST TagType,
                                               AccessSpecifier& CurAS);
-bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
-                           SmallVectorImpl<ExprTy *> &Constraints,
-                           SmallVectorImpl<ExprTy *> &Exprs);
+  bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
+                           SmallVectorImpl<Expr *> &Constraints,
+                           SmallVectorImpl<Expr *> &Exprs);
 
   //===--------------------------------------------------------------------===//
   // C++ 6: Statements and Blocks
@@ -1463,8 +1503,8 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
 
   void ParseSpecifierQualifierList(DeclSpec &DS, AccessSpecifier AS = AS_none);
 
-  void ParseObjCTypeQualifierList(ObjCDeclSpec &DS, 
-                                  ObjCTypeNameContext Context);
+  void ParseObjCTypeQualifierList(ObjCDeclSpec &DS,
+                                  Declarator::TheContext Context);
 
   void ParseEnumSpecifier(SourceLocation TagLoc, DeclSpec &DS,
                 const ParsedTemplateInfo &TemplateInfo = ParsedTemplateInfo(),
@@ -1639,7 +1679,6 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
   TypeResult ParseTypeName(SourceRange *Range = 0,
                            Declarator::TheContext Context
                              = Declarator::TypeNameContext,
-                           ObjCDeclSpec *objcQuals = 0,
                            AccessSpecifier AS = AS_none,
                            Decl **OwnedType = 0);
   void ParseBlockId();
@@ -1650,21 +1689,28 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
   }
   void DiagnoseProhibitedAttributes(ParsedAttributesWithRange &attrs);
 
-  void MaybeParseGNUAttributes(Declarator &D) {
+  void MaybeParseGNUAttributes(Declarator &D,
+                               LateParsedAttrList *LateAttrs = 0) {
     if (Tok.is(tok::kw___attribute)) {
       ParsedAttributes attrs(AttrFactory);
       SourceLocation endLoc;
-      ParseGNUAttributes(attrs, &endLoc);
+      ParseGNUAttributes(attrs, &endLoc, LateAttrs);
       D.takeAttributes(attrs, endLoc);
     }
   }
   void MaybeParseGNUAttributes(ParsedAttributes &attrs,
-                               SourceLocation *endLoc = 0) {
+                               SourceLocation *endLoc = 0,
+                               LateParsedAttrList *LateAttrs = 0) {
     if (Tok.is(tok::kw___attribute))
-      ParseGNUAttributes(attrs, endLoc);
+      ParseGNUAttributes(attrs, endLoc, LateAttrs);
   }
   void ParseGNUAttributes(ParsedAttributes &attrs,
-                          SourceLocation *endLoc = 0);
+                          SourceLocation *endLoc = 0,
+                          LateParsedAttrList *LateAttrs = 0);
+  void ParseGNUAttributeArgs(IdentifierInfo *AttrName,
+                             SourceLocation AttrNameLoc,
+                             ParsedAttributes &Attrs,
+                             SourceLocation *EndLoc);
 
   void MaybeParseCXX0XAttributes(Declarator &D) {
     if (getLang().CPlusPlus0x && isCXX0XAttributeSpecifier()) {
@@ -1687,12 +1733,15 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
     if (getLang().CPlusPlus0x && isCXX0XAttributeSpecifier())
       ParseCXX0XAttributes(attrs, endLoc);
   }
+
+  void ParseCXX0XAttributeSpecifier(ParsedAttributes &attrs,
+                                    SourceLocation *EndLoc = 0);
   void ParseCXX0XAttributes(ParsedAttributesWithRange &attrs,
                             SourceLocation *EndLoc = 0);
 
   void MaybeParseMicrosoftAttributes(ParsedAttributes &attrs,
                                      SourceLocation *endLoc = 0) {
-    if (getLang().Microsoft && Tok.is(tok::l_square))
+    if (getLang().MicrosoftExt && Tok.is(tok::l_square))
       ParseMicrosoftAttributes(attrs, endLoc);
   }
   void ParseMicrosoftAttributes(ParsedAttributes &attrs,
@@ -1720,7 +1769,9 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
   void ParseDecltypeSpecifier(DeclSpec &DS);
   void ParseUnderlyingTypeSpecifier(DeclSpec &DS);
   
-  ExprResult ParseCXX0XAlignArgument(SourceLocation Start);
+  ExprResult ParseAlignArgument(SourceLocation Start);
+  void ParseAlignmentSpecifier(ParsedAttributes &Attrs,
+                               SourceLocation *endLoc = 0);
 
   VirtSpecifiers::Specifier isCXX0XVirtSpecifier() const;
   void ParseOptionalCXX0XVirtSpecifierSeq(VirtSpecifiers &VS);
@@ -1915,6 +1966,10 @@ bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
                                         SourceLocation TemplateLoc,
                                         SourceLocation &DeclEnd);
 
+  //===--------------------------------------------------------------------===//
+  // Modules
+  DeclGroupPtrTy ParseModuleImport();
+  
   //===--------------------------------------------------------------------===//
   // GNU G++: Type Traits [Type-Traits.html in the GCC manual]
   ExprResult ParseUnaryTypeTrait();

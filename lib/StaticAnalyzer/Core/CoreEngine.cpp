@@ -22,14 +22,6 @@
 using namespace clang;
 using namespace ento;
 
-// This should be removed in the future.
-namespace clang {
-namespace ento {
-TransferFuncs* MakeCFRefCountTF(ASTContext &Ctx, bool GCEnabled,
-                                  const LangOptions& lopts);
-}
-}
-
 //===----------------------------------------------------------------------===//
 // Worklist classes for exploration of reachable states.
 //===----------------------------------------------------------------------===//
@@ -334,8 +326,7 @@ void CoreEngine::HandleBlockExit(const CFGBlock * B, ExplodedNode *Pred) {
   if (const Stmt *Term = B->getTerminator()) {
     switch (Term->getStmtClass()) {
       default:
-        assert(false && "Analysis for this terminator not implemented.");
-        break;
+        llvm_unreachable("Analysis for this terminator not implemented.");
 
       case Stmt::BinaryOperatorClass: // '&&' and '||'
         HandleBranch(cast<BinaryOperator>(Term)->getLHS(), Term, B, Pred);
@@ -555,7 +546,7 @@ static ProgramPoint GetProgramPoint(const Stmt *S, ProgramPoint::Kind K,
                                     const ProgramPointTag *tag){
   switch (K) {
     default:
-      assert(false && "Unhandled ProgramPoint kind");    
+      llvm_unreachable("Unhandled ProgramPoint kind");    
     case ProgramPoint::PreStmtKind:
       return PreStmt(S, LC, tag);
     case ProgramPoint::PostStmtKind:
@@ -706,13 +697,18 @@ ExplodedNode*
 SwitchNodeBuilder::generateDefaultCaseNode(const ProgramState *St,
                                            bool isSink) {
   // Get the block for the default case.
-  assert (Src->succ_rbegin() != Src->succ_rend());
+  assert(Src->succ_rbegin() != Src->succ_rend());
   CFGBlock *DefaultBlock = *Src->succ_rbegin();
 
+  // Sanity check for default blocks that are unreachable and not caught
+  // by earlier stages.
+  if (!DefaultBlock)
+    return NULL;
+  
   bool IsNew;
 
   ExplodedNode *Succ = Eng.G->getNode(BlockEdge(Src, DefaultBlock,
-                                       Pred->getLocationContext()), St, &IsNew);
+                                      Pred->getLocationContext()), St, &IsNew);
   Succ->addPredecessor(Pred, *Eng.G);
 
   if (IsNew) {
@@ -793,31 +789,12 @@ void CallEnterNodeBuilder::generateNode(const ProgramState *state) {
     // Create a new AnalysisManager with components of the callee's
     // TranslationUnit.
     // The Diagnostic is  actually shared when we create ASTUnits from AST files.
-    AnalysisManager AMgr(TU->getASTContext(), TU->getDiagnostic(), 
-                         OldMgr.getLangOptions(), 
-                         OldMgr.getPathDiagnosticClient(),
-                         OldMgr.getStoreManagerCreator(),
-                         OldMgr.getConstraintManagerCreator(),
-                         OldMgr.getCheckerManager(),
-                         OldMgr.getIndexer(),
-                         OldMgr.getMaxNodes(), OldMgr.getMaxVisit(),
-                         OldMgr.shouldVisualizeGraphviz(),
-                         OldMgr.shouldVisualizeUbigraph(),
-                         OldMgr.shouldPurgeDead(),
-                         OldMgr.shouldEagerlyAssume(),
-                         OldMgr.shouldTrimGraph(),
-                         OldMgr.shouldInlineCall(),
-                     OldMgr.getAnalysisContextManager().getUseUnoptimizedCFG(),
-                     OldMgr.getAnalysisContextManager().
-                         getCFGBuildOptions().AddImplicitDtors,
-                     OldMgr.getAnalysisContextManager().
-                         getCFGBuildOptions().AddInitializers,
-                     OldMgr.shouldEagerlyTrimExplodedGraph());
-    llvm::OwningPtr<TransferFuncs> TF(MakeCFRefCountTF(AMgr.getASTContext(),
-                                                         /* GCEnabled */ false,
-                                                        AMgr.getLangOptions()));
+    AnalysisManager AMgr(TU->getASTContext(), TU->getDiagnostic(), OldMgr);
+
     // Create the new engine.
-    ExprEngine NewEng(AMgr, TF.take());
+    // FIXME: This cast isn't really safe.
+    bool GCEnabled = static_cast<ExprEngine&>(Eng.SubEng).isObjCGCEnabled();
+    ExprEngine NewEng(AMgr, GCEnabled);
 
     // Create the new LocationContext.
     AnalysisContext *NewAnaCtx = AMgr.getAnalysisContext(CalleeCtx->getDecl(), 

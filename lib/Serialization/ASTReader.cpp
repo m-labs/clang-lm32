@@ -13,7 +13,9 @@
 
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ASTDeserializationListener.h"
+#include "clang/Serialization/ModuleManager.h"
 #include "ASTCommon.h"
+#include "ASTReaderInternals.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Sema/Sema.h"
@@ -52,6 +54,7 @@
 
 using namespace clang;
 using namespace clang::serialization;
+using namespace clang::serialization::reader;
 
 //===----------------------------------------------------------------------===//
 // PCH validator implementation
@@ -62,99 +65,32 @@ ASTReaderListener::~ASTReaderListener() {}
 bool
 PCHValidator::ReadLanguageOptions(const LangOptions &LangOpts) {
   const LangOptions &PPLangOpts = PP.getLangOptions();
-#define PARSE_LANGOPT_BENIGN(Option)
-#define PARSE_LANGOPT_IMPORTANT(Option, DiagID)                    \
-  if (PPLangOpts.Option != LangOpts.Option) {                      \
-    Reader.Diag(DiagID) << LangOpts.Option << PPLangOpts.Option;   \
-    return true;                                                   \
+  
+#define LANGOPT(Name, Bits, Default, Description)         \
+  if (PPLangOpts.Name != LangOpts.Name) {                 \
+    Reader.Diag(diag::err_pch_langopt_mismatch)           \
+      << Description << LangOpts.Name << PPLangOpts.Name; \
+    return true;                                          \
   }
 
-  PARSE_LANGOPT_BENIGN(Trigraphs);
-  PARSE_LANGOPT_BENIGN(BCPLComment);
-  PARSE_LANGOPT_BENIGN(DollarIdents);
-  PARSE_LANGOPT_BENIGN(AsmPreprocessor);
-  PARSE_LANGOPT_IMPORTANT(GNUMode, diag::warn_pch_gnu_extensions);
-  PARSE_LANGOPT_IMPORTANT(GNUKeywords, diag::warn_pch_gnu_keywords);
-  PARSE_LANGOPT_BENIGN(ImplicitInt);
-  PARSE_LANGOPT_BENIGN(Digraphs);
-  PARSE_LANGOPT_BENIGN(HexFloats);
-  PARSE_LANGOPT_IMPORTANT(C99, diag::warn_pch_c99);
-  PARSE_LANGOPT_IMPORTANT(C1X, diag::warn_pch_c1x);
-  PARSE_LANGOPT_IMPORTANT(Microsoft, diag::warn_pch_microsoft_extensions);
-  PARSE_LANGOPT_BENIGN(MSCVersion);
-  PARSE_LANGOPT_IMPORTANT(CPlusPlus, diag::warn_pch_cplusplus);
-  PARSE_LANGOPT_IMPORTANT(CPlusPlus0x, diag::warn_pch_cplusplus0x);
-  PARSE_LANGOPT_BENIGN(CXXOperatorName);
-  PARSE_LANGOPT_IMPORTANT(ObjC1, diag::warn_pch_objective_c);
-  PARSE_LANGOPT_IMPORTANT(ObjC2, diag::warn_pch_objective_c2);
-  PARSE_LANGOPT_IMPORTANT(ObjCNonFragileABI, diag::warn_pch_nonfragile_abi);
-  PARSE_LANGOPT_IMPORTANT(ObjCNonFragileABI2, diag::warn_pch_nonfragile_abi2);
-  PARSE_LANGOPT_IMPORTANT(AppleKext, diag::warn_pch_apple_kext);
-  PARSE_LANGOPT_IMPORTANT(ObjCDefaultSynthProperties,
-                          diag::warn_pch_objc_auto_properties);
-  PARSE_LANGOPT_BENIGN(ObjCInferRelatedResultType)
-  PARSE_LANGOPT_IMPORTANT(NoConstantCFStrings,
-                          diag::warn_pch_no_constant_cfstrings);
-  PARSE_LANGOPT_BENIGN(PascalStrings);
-  PARSE_LANGOPT_BENIGN(WritableStrings);
-  PARSE_LANGOPT_IMPORTANT(LaxVectorConversions,
-                          diag::warn_pch_lax_vector_conversions);
-  PARSE_LANGOPT_IMPORTANT(AltiVec, diag::warn_pch_altivec);
-  PARSE_LANGOPT_IMPORTANT(Exceptions, diag::warn_pch_exceptions);
-  PARSE_LANGOPT_IMPORTANT(ObjCExceptions, diag::warn_pch_objc_exceptions);
-  PARSE_LANGOPT_IMPORTANT(CXXExceptions, diag::warn_pch_cxx_exceptions);
-  PARSE_LANGOPT_IMPORTANT(SjLjExceptions, diag::warn_pch_sjlj_exceptions);
-  PARSE_LANGOPT_IMPORTANT(MSBitfields, diag::warn_pch_ms_bitfields);
-  PARSE_LANGOPT_IMPORTANT(NeXTRuntime, diag::warn_pch_objc_runtime);
-  PARSE_LANGOPT_IMPORTANT(Freestanding, diag::warn_pch_freestanding);
-  PARSE_LANGOPT_IMPORTANT(NoBuiltin, diag::warn_pch_builtins);
-  PARSE_LANGOPT_IMPORTANT(ThreadsafeStatics,
-                          diag::warn_pch_thread_safe_statics);
-  PARSE_LANGOPT_IMPORTANT(POSIXThreads, diag::warn_pch_posix_threads);
-  PARSE_LANGOPT_IMPORTANT(Blocks, diag::warn_pch_blocks);
-  PARSE_LANGOPT_BENIGN(EmitAllDecls);
-  PARSE_LANGOPT_IMPORTANT(MathErrno, diag::warn_pch_math_errno);
-  PARSE_LANGOPT_BENIGN(getSignedOverflowBehavior());
-  PARSE_LANGOPT_IMPORTANT(HeinousExtensions,
-                          diag::warn_pch_heinous_extensions);
-  // FIXME: Most of the options below are benign if the macro wasn't
-  // used. Unfortunately, this means that a PCH compiled without
-  // optimization can't be used with optimization turned on, even
-  // though the only thing that changes is whether __OPTIMIZE__ was
-  // defined... but if __OPTIMIZE__ never showed up in the header, it
-  // doesn't matter. We could consider making this some special kind
-  // of check.
-  PARSE_LANGOPT_IMPORTANT(Optimize, diag::warn_pch_optimize);
-  PARSE_LANGOPT_IMPORTANT(OptimizeSize, diag::warn_pch_optimize_size);
-  PARSE_LANGOPT_IMPORTANT(Static, diag::warn_pch_static);
-  PARSE_LANGOPT_IMPORTANT(PICLevel, diag::warn_pch_pic_level);
-  PARSE_LANGOPT_IMPORTANT(GNUInline, diag::warn_pch_gnu_inline);
-  PARSE_LANGOPT_IMPORTANT(NoInline, diag::warn_pch_no_inline);
-  PARSE_LANGOPT_IMPORTANT(Deprecated, diag::warn_pch_deprecated);
-  PARSE_LANGOPT_IMPORTANT(AccessControl, diag::warn_pch_access_control);
-  PARSE_LANGOPT_IMPORTANT(CharIsSigned, diag::warn_pch_char_signed);
-  PARSE_LANGOPT_IMPORTANT(ShortWChar, diag::warn_pch_short_wchar);
-  PARSE_LANGOPT_IMPORTANT(ShortEnums, diag::warn_pch_short_enums);
-  if ((PPLangOpts.getGCMode() != 0) != (LangOpts.getGCMode() != 0)) {
-    Reader.Diag(diag::warn_pch_gc_mode)
-      << LangOpts.getGCMode() << PPLangOpts.getGCMode();
-    return true;
-  }
-  PARSE_LANGOPT_BENIGN(getVisibilityMode());
-  PARSE_LANGOPT_IMPORTANT(getStackProtectorMode(),
-                          diag::warn_pch_stack_protector);
-  PARSE_LANGOPT_BENIGN(InstantiationDepth);
-  PARSE_LANGOPT_IMPORTANT(OpenCL, diag::warn_pch_opencl);
-  PARSE_LANGOPT_IMPORTANT(CUDA, diag::warn_pch_cuda);
-  PARSE_LANGOPT_BENIGN(CatchUndefined);
-  PARSE_LANGOPT_BENIGN(DefaultFPContract);
-  PARSE_LANGOPT_IMPORTANT(ElideConstructors, diag::warn_pch_elide_constructors);
-  PARSE_LANGOPT_BENIGN(SpellChecking);
-  PARSE_LANGOPT_IMPORTANT(ObjCAutoRefCount, diag::warn_pch_auto_ref_count);
-  PARSE_LANGOPT_BENIGN(ObjCInferRelatedReturnType);
-#undef PARSE_LANGOPT_IMPORTANT
-#undef PARSE_LANGOPT_BENIGN
+#define VALUE_LANGOPT(Name, Bits, Default, Description) \
+  if (PPLangOpts.Name != LangOpts.Name) {               \
+    Reader.Diag(diag::err_pch_langopt_value_mismatch)   \
+      << Description;                                   \
+  return true;                                          \
+}
 
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Description) \
+  if (PPLangOpts.get##Name() != LangOpts.get##Name()) {      \
+    Reader.Diag(diag::err_pch_langopt_value_mismatch)        \
+      << Description;                                        \
+    return true;                                             \
+  }
+
+#define BENIGN_LANGOPT(Name, Bits, Default, Description)
+#define BENIGN_ENUM_LANGOPT(Name, Type, Bits, Default, Description)
+#include "clang/Basic/LangOptions.def"
+  
   return false;
 }
 
@@ -387,7 +323,7 @@ bool PCHValidator::ReadPredefinesBuffer(const PCHPredefinesBlocks &Buffers,
       assert(MacroLoc.second!=StringRef::npos && "Unable to find macro!");
       SourceLocation PCHMissingLoc =
           SourceMgr.getLocForStartOfFile(MacroLoc.first)
-            .getFileLocWithOffset(MacroLoc.second);
+            .getLocWithOffset(MacroLoc.second);
       Reader.Diag(PCHMissingLoc, diag::note_pch_macro_defined_as) << MacroName;
 
       ConflictingDefines = true;
@@ -410,7 +346,7 @@ bool PCHValidator::ReadPredefinesBuffer(const PCHPredefinesBlocks &Buffers,
     assert(MacroLoc.second!=StringRef::npos && "Unable to find macro!");
     SourceLocation PCHMissingLoc =
         SourceMgr.getLocForStartOfFile(MacroLoc.first)
-          .getFileLocWithOffset(MacroLoc.second);
+          .getLocWithOffset(MacroLoc.second);
     Reader.Diag(PCHMissingLoc, diag::note_using_macro_def_from_pch);
   }
 
@@ -479,425 +415,318 @@ ASTReader::setDeserializationListener(ASTDeserializationListener *Listener) {
 }
 
 
-namespace {
-class ASTSelectorLookupTrait {
-  ASTReader &Reader;
-  Module &F;
-  
-public:
-  struct data_type {
-    SelectorID ID;
-    llvm::SmallVector<ObjCMethodDecl *, 2> Instance;
-    llvm::SmallVector<ObjCMethodDecl *, 2> Factory;
-  };
 
-  typedef Selector external_key_type;
-  typedef external_key_type internal_key_type;
+unsigned ASTSelectorLookupTrait::ComputeHash(Selector Sel) {
+  return serialization::ComputeHash(Sel);
+}
 
-  ASTSelectorLookupTrait(ASTReader &Reader, Module &F) 
-    : Reader(Reader), F(F) { }
 
-  static bool EqualKey(const internal_key_type& a,
-                       const internal_key_type& b) {
-    return a == b;
+std::pair<unsigned, unsigned>
+ASTSelectorLookupTrait::ReadKeyDataLength(const unsigned char*& d) {
+  using namespace clang::io;
+  unsigned KeyLen = ReadUnalignedLE16(d);
+  unsigned DataLen = ReadUnalignedLE16(d);
+  return std::make_pair(KeyLen, DataLen);
+}
+
+ASTSelectorLookupTrait::internal_key_type 
+ASTSelectorLookupTrait::ReadKey(const unsigned char* d, unsigned) {
+  using namespace clang::io;
+  SelectorTable &SelTable = Reader.getContext().Selectors;
+  unsigned N = ReadUnalignedLE16(d);
+  IdentifierInfo *FirstII
+    = Reader.getLocalIdentifier(F, ReadUnalignedLE32(d));
+  if (N == 0)
+    return SelTable.getNullarySelector(FirstII);
+  else if (N == 1)
+    return SelTable.getUnarySelector(FirstII);
+
+  SmallVector<IdentifierInfo *, 16> Args;
+  Args.push_back(FirstII);
+  for (unsigned I = 1; I != N; ++I)
+    Args.push_back(Reader.getLocalIdentifier(F, ReadUnalignedLE32(d)));
+
+  return SelTable.getSelector(N, Args.data());
+}
+
+ASTSelectorLookupTrait::data_type 
+ASTSelectorLookupTrait::ReadData(Selector, const unsigned char* d, 
+                                 unsigned DataLen) {
+  using namespace clang::io;
+
+  data_type Result;
+
+  Result.ID = Reader.getGlobalSelectorID(F, ReadUnalignedLE32(d));
+  unsigned NumInstanceMethods = ReadUnalignedLE16(d);
+  unsigned NumFactoryMethods = ReadUnalignedLE16(d);
+
+  // Load instance methods
+  for (unsigned I = 0; I != NumInstanceMethods; ++I) {
+    if (ObjCMethodDecl *Method
+          = Reader.GetLocalDeclAs<ObjCMethodDecl>(F, ReadUnalignedLE32(d)))
+      Result.Instance.push_back(Method);
   }
 
-  static unsigned ComputeHash(Selector Sel) {
-    return serialization::ComputeHash(Sel);
+  // Load factory methods
+  for (unsigned I = 0; I != NumFactoryMethods; ++I) {
+    if (ObjCMethodDecl *Method
+          = Reader.GetLocalDeclAs<ObjCMethodDecl>(F, ReadUnalignedLE32(d)))
+      Result.Factory.push_back(Method);
   }
 
-  // This hopefully will just get inlined and removed by the optimizer.
-  static const internal_key_type&
-  GetInternalKey(const external_key_type& x) { return x; }
+  return Result;
+}
 
-  static std::pair<unsigned, unsigned>
-  ReadKeyDataLength(const unsigned char*& d) {
-    using namespace clang::io;
-    unsigned KeyLen = ReadUnalignedLE16(d);
-    unsigned DataLen = ReadUnalignedLE16(d);
-    return std::make_pair(KeyLen, DataLen);
-  }
+unsigned ASTIdentifierLookupTrait::ComputeHash(const internal_key_type& a) {
+  return llvm::HashString(StringRef(a.first, a.second));
+}
 
-  internal_key_type ReadKey(const unsigned char* d, unsigned) {
-    using namespace clang::io;
-    SelectorTable &SelTable = Reader.getContext()->Selectors;
-    unsigned N = ReadUnalignedLE16(d);
-    IdentifierInfo *FirstII
-      = Reader.getLocalIdentifier(F, ReadUnalignedLE32(d));
-    if (N == 0)
-      return SelTable.getNullarySelector(FirstII);
-    else if (N == 1)
-      return SelTable.getUnarySelector(FirstII);
+std::pair<unsigned, unsigned>
+ASTIdentifierLookupTrait::ReadKeyDataLength(const unsigned char*& d) {
+  using namespace clang::io;
+  unsigned DataLen = ReadUnalignedLE16(d);
+  unsigned KeyLen = ReadUnalignedLE16(d);
+  return std::make_pair(KeyLen, DataLen);
+}
 
-    SmallVector<IdentifierInfo *, 16> Args;
-    Args.push_back(FirstII);
-    for (unsigned I = 1; I != N; ++I)
-      Args.push_back(Reader.getLocalIdentifier(F, ReadUnalignedLE32(d)));
+std::pair<const char*, unsigned>
+ASTIdentifierLookupTrait::ReadKey(const unsigned char* d, unsigned n) {
+  assert(n >= 2 && d[n-1] == '\0');
+  return std::make_pair((const char*) d, n-1);
+}
 
-    return SelTable.getSelector(N, Args.data());
-  }
+IdentifierInfo *ASTIdentifierLookupTrait::ReadData(const internal_key_type& k,
+                                                   const unsigned char* d,
+                                                   unsigned DataLen) {
+  using namespace clang::io;
+  unsigned RawID = ReadUnalignedLE32(d);
+  bool IsInteresting = RawID & 0x01;
 
-  data_type ReadData(Selector, const unsigned char* d, unsigned DataLen) {
-    using namespace clang::io;
+  // Wipe out the "is interesting" bit.
+  RawID = RawID >> 1;
 
-    data_type Result;
-
-    Result.ID = Reader.getGlobalSelectorID(F, ReadUnalignedLE32(d));
-    unsigned NumInstanceMethods = ReadUnalignedLE16(d);
-    unsigned NumFactoryMethods = ReadUnalignedLE16(d);
-
-    // Load instance methods
-    ObjCMethodList *Prev = 0;
-    for (unsigned I = 0; I != NumInstanceMethods; ++I) {
-      if (ObjCMethodDecl *Method
-            = Reader.GetLocalDeclAs<ObjCMethodDecl>(F, ReadUnalignedLE32(d)))
-        Result.Instance.push_back(Method);
-    }
-
-    // Load factory methods
-    Prev = 0;
-    for (unsigned I = 0; I != NumFactoryMethods; ++I) {
-      if (ObjCMethodDecl *Method
-            = Reader.GetLocalDeclAs<ObjCMethodDecl>(F, ReadUnalignedLE32(d)))
-        Result.Factory.push_back(Method);
-    }
-
-    return Result;
-  }
-};
-
-} // end anonymous namespace
-
-/// \brief The on-disk hash table used for the global method pool.
-typedef OnDiskChainedHashTable<ASTSelectorLookupTrait>
-  ASTSelectorLookupTable;
-
-namespace clang {
-class ASTIdentifierLookupTrait {
-  ASTReader &Reader;
-  Module &F;
-
-  // If we know the IdentifierInfo in advance, it is here and we will
-  // not build a new one. Used when deserializing information about an
-  // identifier that was constructed before the AST file was read.
-  IdentifierInfo *KnownII;
-
-public:
-  typedef IdentifierInfo * data_type;
-
-  typedef const std::pair<const char*, unsigned> external_key_type;
-
-  typedef external_key_type internal_key_type;
-
-  ASTIdentifierLookupTrait(ASTReader &Reader, Module &F,
-                           IdentifierInfo *II = 0)
-    : Reader(Reader), F(F), KnownII(II) { }
-
-  static bool EqualKey(const internal_key_type& a,
-                       const internal_key_type& b) {
-    return (a.second == b.second) ? memcmp(a.first, b.first, a.second) == 0
-                                  : false;
-  }
-
-  static unsigned ComputeHash(const internal_key_type& a) {
-    return llvm::HashString(StringRef(a.first, a.second));
-  }
-
-  // This hopefully will just get inlined and removed by the optimizer.
-  static const internal_key_type&
-  GetInternalKey(const external_key_type& x) { return x; }
-
-  // This hopefully will just get inlined and removed by the optimizer.
-  static const external_key_type&
-  GetExternalKey(const internal_key_type& x) { return x; }
-
-  static std::pair<unsigned, unsigned>
-  ReadKeyDataLength(const unsigned char*& d) {
-    using namespace clang::io;
-    unsigned DataLen = ReadUnalignedLE16(d);
-    unsigned KeyLen = ReadUnalignedLE16(d);
-    return std::make_pair(KeyLen, DataLen);
-  }
-
-  static std::pair<const char*, unsigned>
-  ReadKey(const unsigned char* d, unsigned n) {
-    assert(n >= 2 && d[n-1] == '\0');
-    return std::make_pair((const char*) d, n-1);
-  }
-
-  IdentifierInfo *ReadData(const internal_key_type& k,
-                           const unsigned char* d,
-                           unsigned DataLen) {
-    using namespace clang::io;
-    unsigned RawID = ReadUnalignedLE32(d);
-    bool IsInteresting = RawID & 0x01;
-
-    // Wipe out the "is interesting" bit.
-    RawID = RawID >> 1;
-
-    IdentID ID = Reader.getGlobalIdentifierID(F, RawID);
-    if (!IsInteresting) {
-      // For uninteresting identifiers, just build the IdentifierInfo
-      // and associate it with the persistent ID.
-      IdentifierInfo *II = KnownII;
-      if (!II)
-        II = &Reader.getIdentifierTable().getOwn(StringRef(k.first, k.second));
-      Reader.SetIdentifierInfo(ID, II);
-      II->setIsFromAST();
-      return II;
-    }
-
-    unsigned Bits = ReadUnalignedLE16(d);
-    bool CPlusPlusOperatorKeyword = Bits & 0x01;
-    Bits >>= 1;
-    bool HasRevertedTokenIDToIdentifier = Bits & 0x01;
-    Bits >>= 1;
-    bool Poisoned = Bits & 0x01;
-    Bits >>= 1;
-    bool ExtensionToken = Bits & 0x01;
-    Bits >>= 1;
-    bool hasMacroDefinition = Bits & 0x01;
-    Bits >>= 1;
-    unsigned ObjCOrBuiltinID = Bits & 0x3FF;
-    Bits >>= 10;
-
-    assert(Bits == 0 && "Extra bits in the identifier?");
-    DataLen -= 6;
-
-    // Build the IdentifierInfo itself and link the identifier ID with
-    // the new IdentifierInfo.
+  IdentID ID = Reader.getGlobalIdentifierID(F, RawID);
+  if (!IsInteresting) {
+    // For uninteresting identifiers, just build the IdentifierInfo
+    // and associate it with the persistent ID.
     IdentifierInfo *II = KnownII;
     if (!II)
       II = &Reader.getIdentifierTable().getOwn(StringRef(k.first, k.second));
     Reader.SetIdentifierInfo(ID, II);
-
-    // Set or check the various bits in the IdentifierInfo structure.
-    // Token IDs are read-only.
-    if (HasRevertedTokenIDToIdentifier)
-      II->RevertTokenIDToIdentifier();
-    II->setObjCOrBuiltinID(ObjCOrBuiltinID);
-    assert(II->isExtensionToken() == ExtensionToken &&
-           "Incorrect extension token flag");
-    (void)ExtensionToken;
-    if (Poisoned)
-      II->setIsPoisoned(true);
-    assert(II->isCPlusPlusOperatorKeyword() == CPlusPlusOperatorKeyword &&
-           "Incorrect C++ operator keyword flag");
-    (void)CPlusPlusOperatorKeyword;
-
-    // If this identifier is a macro, deserialize the macro
-    // definition.
-    if (hasMacroDefinition) {
-      // FIXME: Check for conflicts?
-      uint32_t Offset = ReadUnalignedLE32(d);
-      Reader.SetIdentifierIsMacro(II, F, Offset);
-      DataLen -= 4;
-    }
-
-    // Read all of the declarations visible at global scope with this
-    // name.
-    if (Reader.getContext() == 0) return II;
-    if (DataLen > 0) {
-      SmallVector<uint32_t, 4> DeclIDs;
-      for (; DataLen > 0; DataLen -= 4)
-        DeclIDs.push_back(Reader.getGlobalDeclID(F, ReadUnalignedLE32(d)));
-      Reader.SetGloballyVisibleDecls(II, DeclIDs);
-    }
-
     II->setIsFromAST();
     return II;
   }
-};
 
-} // end anonymous namespace
+  unsigned Bits = ReadUnalignedLE16(d);
+  bool CPlusPlusOperatorKeyword = Bits & 0x01;
+  Bits >>= 1;
+  bool HasRevertedTokenIDToIdentifier = Bits & 0x01;
+  Bits >>= 1;
+  bool Poisoned = Bits & 0x01;
+  Bits >>= 1;
+  bool ExtensionToken = Bits & 0x01;
+  Bits >>= 1;
+  bool hasMacroDefinition = Bits & 0x01;
+  Bits >>= 1;
+  unsigned ObjCOrBuiltinID = Bits & 0x3FF;
+  Bits >>= 10;
 
-/// \brief The on-disk hash table used to contain information about
-/// all of the identifiers in the program.
-typedef OnDiskChainedHashTable<ASTIdentifierLookupTrait>
-  ASTIdentifierLookupTable;
+  assert(Bits == 0 && "Extra bits in the identifier?");
+  DataLen -= 6;
 
-namespace {
-class ASTDeclContextNameLookupTrait {
-  ASTReader &Reader;
-  Module &F;
-  
-public:
-  /// \brief Pair of begin/end iterators for DeclIDs.
-  ///
-  /// Note that these declaration IDs are local to the module that contains this
-  /// particular lookup t
-  typedef std::pair<DeclID *, DeclID *> data_type;
+  // Build the IdentifierInfo itself and link the identifier ID with
+  // the new IdentifierInfo.
+  IdentifierInfo *II = KnownII;
+  if (!II)
+    II = &Reader.getIdentifierTable().getOwn(StringRef(k.first, k.second));
+  Reader.SetIdentifierInfo(ID, II);
 
-  /// \brief Special internal key for declaration names.
-  /// The hash table creates keys for comparison; we do not create
-  /// a DeclarationName for the internal key to avoid deserializing types.
-  struct DeclNameKey {
-    DeclarationName::NameKind Kind;
-    uint64_t Data;
-    DeclNameKey() : Kind((DeclarationName::NameKind)0), Data(0) { }
-  };
+  // Set or check the various bits in the IdentifierInfo structure.
+  // Token IDs are read-only.
+  if (HasRevertedTokenIDToIdentifier)
+    II->RevertTokenIDToIdentifier();
+  II->setObjCOrBuiltinID(ObjCOrBuiltinID);
+  assert(II->isExtensionToken() == ExtensionToken &&
+         "Incorrect extension token flag");
+  (void)ExtensionToken;
+  if (Poisoned)
+    II->setIsPoisoned(true);
+  assert(II->isCPlusPlusOperatorKeyword() == CPlusPlusOperatorKeyword &&
+         "Incorrect C++ operator keyword flag");
+  (void)CPlusPlusOperatorKeyword;
 
-  typedef DeclarationName external_key_type;
-  typedef DeclNameKey internal_key_type;
-
-  explicit ASTDeclContextNameLookupTrait(ASTReader &Reader, 
-                                         Module &F) 
-    : Reader(Reader), F(F) { }
-
-  static bool EqualKey(const internal_key_type& a,
-                       const internal_key_type& b) {
-    return a.Kind == b.Kind && a.Data == b.Data;
+  // If this identifier is a macro, deserialize the macro
+  // definition.
+  if (hasMacroDefinition) {
+    // FIXME: Check for conflicts?
+    uint32_t Offset = ReadUnalignedLE32(d);
+    Reader.SetIdentifierIsMacro(II, F, Offset);
+    DataLen -= 4;
   }
 
-  unsigned ComputeHash(const DeclNameKey &Key) const {
-    llvm::FoldingSetNodeID ID;
-    ID.AddInteger(Key.Kind);
-
-    switch (Key.Kind) {
-    case DeclarationName::Identifier:
-    case DeclarationName::CXXLiteralOperatorName:
-      ID.AddString(((IdentifierInfo*)Key.Data)->getName());
-      break;
-    case DeclarationName::ObjCZeroArgSelector:
-    case DeclarationName::ObjCOneArgSelector:
-    case DeclarationName::ObjCMultiArgSelector:
-      ID.AddInteger(serialization::ComputeHash(Selector(Key.Data)));
-      break;
-    case DeclarationName::CXXOperatorName:
-      ID.AddInteger((OverloadedOperatorKind)Key.Data);
-      break;
-    case DeclarationName::CXXConstructorName:
-    case DeclarationName::CXXDestructorName:
-    case DeclarationName::CXXConversionFunctionName:
-    case DeclarationName::CXXUsingDirective:
-      break;
-    }
-
-    return ID.ComputeHash();
+  // Read all of the declarations visible at global scope with this
+  // name.
+  if (DataLen > 0) {
+    SmallVector<uint32_t, 4> DeclIDs;
+    for (; DataLen > 0; DataLen -= 4)
+      DeclIDs.push_back(Reader.getGlobalDeclID(F, ReadUnalignedLE32(d)));
+    Reader.SetGloballyVisibleDecls(II, DeclIDs);
   }
 
-  internal_key_type GetInternalKey(const external_key_type& Name) const {
-    DeclNameKey Key;
-    Key.Kind = Name.getNameKind();
-    switch (Name.getNameKind()) {
-    case DeclarationName::Identifier:
-      Key.Data = (uint64_t)Name.getAsIdentifierInfo();
-      break;
-    case DeclarationName::ObjCZeroArgSelector:
-    case DeclarationName::ObjCOneArgSelector:
-    case DeclarationName::ObjCMultiArgSelector:
-      Key.Data = (uint64_t)Name.getObjCSelector().getAsOpaquePtr();
-      break;
-    case DeclarationName::CXXOperatorName:
-      Key.Data = Name.getCXXOverloadedOperator();
-      break;
-    case DeclarationName::CXXLiteralOperatorName:
-      Key.Data = (uint64_t)Name.getCXXLiteralIdentifier();
-      break;
-    case DeclarationName::CXXConstructorName:
-    case DeclarationName::CXXDestructorName:
-    case DeclarationName::CXXConversionFunctionName:
-    case DeclarationName::CXXUsingDirective:
-      Key.Data = 0;
-      break;
-    }
+  II->setIsFromAST();
+  return II;
+}
 
-    return Key;
+unsigned 
+ASTDeclContextNameLookupTrait::ComputeHash(const DeclNameKey &Key) const {
+  llvm::FoldingSetNodeID ID;
+  ID.AddInteger(Key.Kind);
+
+  switch (Key.Kind) {
+  case DeclarationName::Identifier:
+  case DeclarationName::CXXLiteralOperatorName:
+    ID.AddString(((IdentifierInfo*)Key.Data)->getName());
+    break;
+  case DeclarationName::ObjCZeroArgSelector:
+  case DeclarationName::ObjCOneArgSelector:
+  case DeclarationName::ObjCMultiArgSelector:
+    ID.AddInteger(serialization::ComputeHash(Selector(Key.Data)));
+    break;
+  case DeclarationName::CXXOperatorName:
+    ID.AddInteger((OverloadedOperatorKind)Key.Data);
+    break;
+  case DeclarationName::CXXConstructorName:
+  case DeclarationName::CXXDestructorName:
+  case DeclarationName::CXXConversionFunctionName:
+  case DeclarationName::CXXUsingDirective:
+    break;
   }
 
-  external_key_type GetExternalKey(const internal_key_type& Key) const {
-    ASTContext *Context = Reader.getContext();
-    switch (Key.Kind) {
-    case DeclarationName::Identifier:
-      return DeclarationName((IdentifierInfo*)Key.Data);
+  return ID.ComputeHash();
+}
 
-    case DeclarationName::ObjCZeroArgSelector:
-    case DeclarationName::ObjCOneArgSelector:
-    case DeclarationName::ObjCMultiArgSelector:
-      return DeclarationName(Selector(Key.Data));
-
-    case DeclarationName::CXXConstructorName:
-      return Context->DeclarationNames.getCXXConstructorName(
-               Context->getCanonicalType(Reader.getLocalType(F, Key.Data)));
-
-    case DeclarationName::CXXDestructorName:
-      return Context->DeclarationNames.getCXXDestructorName(
-               Context->getCanonicalType(Reader.getLocalType(F, Key.Data)));
-
-    case DeclarationName::CXXConversionFunctionName:
-      return Context->DeclarationNames.getCXXConversionFunctionName(
-               Context->getCanonicalType(Reader.getLocalType(F, Key.Data)));
-
-    case DeclarationName::CXXOperatorName:
-      return Context->DeclarationNames.getCXXOperatorName(
-                                         (OverloadedOperatorKind)Key.Data);
-
-    case DeclarationName::CXXLiteralOperatorName:
-      return Context->DeclarationNames.getCXXLiteralOperatorName(
-                                                     (IdentifierInfo*)Key.Data);
-
-    case DeclarationName::CXXUsingDirective:
-      return DeclarationName::getUsingDirectiveName();
-    }
-
-    llvm_unreachable("Invalid Name Kind ?");
+ASTDeclContextNameLookupTrait::internal_key_type 
+ASTDeclContextNameLookupTrait::GetInternalKey(
+                                          const external_key_type& Name) const {
+  DeclNameKey Key;
+  Key.Kind = Name.getNameKind();
+  switch (Name.getNameKind()) {
+  case DeclarationName::Identifier:
+    Key.Data = (uint64_t)Name.getAsIdentifierInfo();
+    break;
+  case DeclarationName::ObjCZeroArgSelector:
+  case DeclarationName::ObjCOneArgSelector:
+  case DeclarationName::ObjCMultiArgSelector:
+    Key.Data = (uint64_t)Name.getObjCSelector().getAsOpaquePtr();
+    break;
+  case DeclarationName::CXXOperatorName:
+    Key.Data = Name.getCXXOverloadedOperator();
+    break;
+  case DeclarationName::CXXLiteralOperatorName:
+    Key.Data = (uint64_t)Name.getCXXLiteralIdentifier();
+    break;
+  case DeclarationName::CXXConstructorName:
+  case DeclarationName::CXXDestructorName:
+  case DeclarationName::CXXConversionFunctionName:
+  case DeclarationName::CXXUsingDirective:
+    Key.Data = 0;
+    break;
   }
 
-  static std::pair<unsigned, unsigned>
-  ReadKeyDataLength(const unsigned char*& d) {
-    using namespace clang::io;
-    unsigned KeyLen = ReadUnalignedLE16(d);
-    unsigned DataLen = ReadUnalignedLE16(d);
-    return std::make_pair(KeyLen, DataLen);
+  return Key;
+}
+
+ASTDeclContextNameLookupTrait::external_key_type 
+ASTDeclContextNameLookupTrait::GetExternalKey(
+                                          const internal_key_type& Key) const {
+  ASTContext &Context = Reader.getContext();
+  switch (Key.Kind) {
+  case DeclarationName::Identifier:
+    return DeclarationName((IdentifierInfo*)Key.Data);
+
+  case DeclarationName::ObjCZeroArgSelector:
+  case DeclarationName::ObjCOneArgSelector:
+  case DeclarationName::ObjCMultiArgSelector:
+    return DeclarationName(Selector(Key.Data));
+
+  case DeclarationName::CXXConstructorName:
+    return Context.DeclarationNames.getCXXConstructorName(
+             Context.getCanonicalType(Reader.getLocalType(F, Key.Data)));
+
+  case DeclarationName::CXXDestructorName:
+    return Context.DeclarationNames.getCXXDestructorName(
+             Context.getCanonicalType(Reader.getLocalType(F, Key.Data)));
+
+  case DeclarationName::CXXConversionFunctionName:
+    return Context.DeclarationNames.getCXXConversionFunctionName(
+             Context.getCanonicalType(Reader.getLocalType(F, Key.Data)));
+
+  case DeclarationName::CXXOperatorName:
+    return Context.DeclarationNames.getCXXOperatorName(
+                                       (OverloadedOperatorKind)Key.Data);
+
+  case DeclarationName::CXXLiteralOperatorName:
+    return Context.DeclarationNames.getCXXLiteralOperatorName(
+                                                   (IdentifierInfo*)Key.Data);
+
+  case DeclarationName::CXXUsingDirective:
+    return DeclarationName::getUsingDirectiveName();
   }
 
-  internal_key_type ReadKey(const unsigned char* d, unsigned) {
-    using namespace clang::io;
+  llvm_unreachable("Invalid Name Kind ?");
+}
 
-    DeclNameKey Key;
-    Key.Kind = (DeclarationName::NameKind)*d++;
-    switch (Key.Kind) {
-    case DeclarationName::Identifier:
-      Key.Data = (uint64_t)Reader.getLocalIdentifier(F, ReadUnalignedLE32(d));
-      break;
-    case DeclarationName::ObjCZeroArgSelector:
-    case DeclarationName::ObjCOneArgSelector:
-    case DeclarationName::ObjCMultiArgSelector:
-      Key.Data =
-         (uint64_t)Reader.getLocalSelector(F, ReadUnalignedLE32(d))
-                     .getAsOpaquePtr();
-      break;
-    case DeclarationName::CXXOperatorName:
-      Key.Data = *d++; // OverloadedOperatorKind
-      break;
-    case DeclarationName::CXXLiteralOperatorName:
-      Key.Data = (uint64_t)Reader.getLocalIdentifier(F, ReadUnalignedLE32(d));
-      break;
-    case DeclarationName::CXXConstructorName:
-    case DeclarationName::CXXDestructorName:
-    case DeclarationName::CXXConversionFunctionName:
-    case DeclarationName::CXXUsingDirective:
-      Key.Data = 0;
-      break;
-    }
+std::pair<unsigned, unsigned>
+ASTDeclContextNameLookupTrait::ReadKeyDataLength(const unsigned char*& d) {
+  using namespace clang::io;
+  unsigned KeyLen = ReadUnalignedLE16(d);
+  unsigned DataLen = ReadUnalignedLE16(d);
+  return std::make_pair(KeyLen, DataLen);
+}
 
-    return Key;
+ASTDeclContextNameLookupTrait::internal_key_type 
+ASTDeclContextNameLookupTrait::ReadKey(const unsigned char* d, unsigned) {
+  using namespace clang::io;
+
+  DeclNameKey Key;
+  Key.Kind = (DeclarationName::NameKind)*d++;
+  switch (Key.Kind) {
+  case DeclarationName::Identifier:
+    Key.Data = (uint64_t)Reader.getLocalIdentifier(F, ReadUnalignedLE32(d));
+    break;
+  case DeclarationName::ObjCZeroArgSelector:
+  case DeclarationName::ObjCOneArgSelector:
+  case DeclarationName::ObjCMultiArgSelector:
+    Key.Data =
+       (uint64_t)Reader.getLocalSelector(F, ReadUnalignedLE32(d))
+                   .getAsOpaquePtr();
+    break;
+  case DeclarationName::CXXOperatorName:
+    Key.Data = *d++; // OverloadedOperatorKind
+    break;
+  case DeclarationName::CXXLiteralOperatorName:
+    Key.Data = (uint64_t)Reader.getLocalIdentifier(F, ReadUnalignedLE32(d));
+    break;
+  case DeclarationName::CXXConstructorName:
+  case DeclarationName::CXXDestructorName:
+  case DeclarationName::CXXConversionFunctionName:
+  case DeclarationName::CXXUsingDirective:
+    Key.Data = 0;
+    break;
   }
 
-  data_type ReadData(internal_key_type, const unsigned char* d,
-                     unsigned DataLen) {
-    using namespace clang::io;
-    unsigned NumDecls = ReadUnalignedLE16(d);
-    DeclID *Start = (DeclID *)d;
-    return std::make_pair(Start, Start + NumDecls);
-  }
-};
+  return Key;
+}
 
-} // end anonymous namespace
-
-/// \brief The on-disk hash table used for the DeclContext's Name lookup table.
-typedef OnDiskChainedHashTable<ASTDeclContextNameLookupTrait>
-  ASTDeclContextNameLookupTable;
+ASTDeclContextNameLookupTrait::data_type 
+ASTDeclContextNameLookupTrait::ReadData(internal_key_type, 
+                                        const unsigned char* d,
+                                      unsigned DataLen) {
+  using namespace clang::io;
+  unsigned NumDecls = ReadUnalignedLE16(d);
+  DeclID *Start = (DeclID *)d;
+  return std::make_pair(Start, Start + NumDecls);
+}
 
 bool ASTReader::ReadDeclContextStorage(Module &M,
                                        llvm::BitstreamCursor &Cursor,
@@ -1394,7 +1223,6 @@ bool ASTReader::ReadBlockAbbrevs(llvm::BitstreamCursor &Cursor,
 }
 
 void ASTReader::ReadMacroRecord(Module &F, uint64_t Offset) {
-  assert(PP && "Forgot to set Preprocessor ?");
   llvm::BitstreamCursor &Stream = F.MacroCursor;
 
   // Keep track of where we are in the stream, then jump back there
@@ -1451,40 +1279,45 @@ void ASTReader::ReadMacroRecord(Module &F, uint64_t Offset) {
       SourceLocation Loc = ReadSourceLocation(F, Record[1]);
       bool isUsed = Record[2];
 
-      MacroInfo *MI = PP->AllocateMacroInfo(Loc);
+      MacroInfo *MI = PP.AllocateMacroInfo(Loc);
       MI->setIsUsed(isUsed);
       MI->setIsFromAST();
 
       unsigned NextIndex = 3;
+      MI->setExportLocation(ReadSourceLocation(F, Record, NextIndex));
+      
       if (RecType == PP_MACRO_FUNCTION_LIKE) {
         // Decode function-like macro info.
-        bool isC99VarArgs = Record[3];
-        bool isGNUVarArgs = Record[4];
+        bool isC99VarArgs = Record[NextIndex++];
+        bool isGNUVarArgs = Record[NextIndex++];
         MacroArgs.clear();
-        unsigned NumArgs = Record[5];
-        NextIndex = 6 + NumArgs;
+        unsigned NumArgs = Record[NextIndex++];
         for (unsigned i = 0; i != NumArgs; ++i)
-          MacroArgs.push_back(getLocalIdentifier(F, Record[6+i]));
+          MacroArgs.push_back(getLocalIdentifier(F, Record[NextIndex++]));
 
         // Install function-like macro info.
         MI->setIsFunctionLike();
         if (isC99VarArgs) MI->setIsC99Varargs();
         if (isGNUVarArgs) MI->setIsGNUVarargs();
         MI->setArgumentList(MacroArgs.data(), MacroArgs.size(),
-                            PP->getPreprocessorAllocator());
+                            PP.getPreprocessorAllocator());
       }
 
       // Finally, install the macro.
-      PP->setMacroInfo(II, MI);
+      PP.setMacroInfo(II, MI);
 
       // Remember that we saw this macro last so that we add the tokens that
       // form its body to it.
       Macro = MI;
 
-      if (NextIndex + 1 == Record.size() && PP->getPreprocessingRecord()) {
-        // We have a macro definition. Load it now.
-        PP->getPreprocessingRecord()->RegisterMacroDefinition(Macro,
-              getLocalMacroDefinition(F, Record[NextIndex]));
+      if (NextIndex + 1 == Record.size() && PP.getPreprocessingRecord() &&
+          Record[NextIndex]) {
+        // We have a macro definition. Register the association
+        PreprocessedEntityID
+            GlobalID = getGlobalPreprocessedEntityID(F, Record[NextIndex]);
+        PreprocessingRecord &PPRec = *PP.getPreprocessingRecord();
+        PPRec.RegisterMacroDefinition(Macro,
+                            PPRec.getPPEntityID(GlobalID-1, /*isLoaded=*/true));
       }
 
       ++NumMacrosRead;
@@ -1513,117 +1346,9 @@ void ASTReader::ReadMacroRecord(Module &F, uint64_t Offset) {
   return;
 }
 
-PreprocessedEntity *ASTReader::LoadPreprocessedEntity(Module &F) {
-  assert(PP && "Forgot to set Preprocessor ?");
-  unsigned Code = F.PreprocessorDetailCursor.ReadCode();
-  switch (Code) {
-  case llvm::bitc::END_BLOCK:
-    return 0;
-    
-  case llvm::bitc::ENTER_SUBBLOCK:
-    Error("unexpected subblock record in preprocessor detail block");
-    return 0;
-      
-  case llvm::bitc::DEFINE_ABBREV:
-    Error("unexpected abbrevation record in preprocessor detail block");
-    return 0;
-      
-  default:
-    break;
-  }
-
-  if (!PP->getPreprocessingRecord()) {
-    Error("no preprocessing record");
-    return 0;
-  }
-  
-  // Read the record.
-  PreprocessingRecord &PPRec = *PP->getPreprocessingRecord();
-  const char *BlobStart = 0;
-  unsigned BlobLen = 0;
-  RecordData Record;
-  PreprocessorDetailRecordTypes RecType =
-    (PreprocessorDetailRecordTypes)F.PreprocessorDetailCursor.ReadRecord(
-                                             Code, Record, BlobStart, BlobLen);
-  switch (RecType) {
-  case PPD_MACRO_EXPANSION: {
-    PreprocessedEntityID GlobalID = getGlobalPreprocessedEntityID(F, Record[0]);
-    if (PreprocessedEntity *PE = PPRec.getLoadedPreprocessedEntity(GlobalID-1))
-      return PE;
-    
-    MacroExpansion *ME =
-      new (PPRec) MacroExpansion(getLocalIdentifier(F, Record[3]),
-                                 SourceRange(ReadSourceLocation(F, Record[1]),
-                                             ReadSourceLocation(F, Record[2])),
-                                 getLocalMacroDefinition(F, Record[4]));
-    PPRec.setLoadedPreallocatedEntity(GlobalID - 1, ME);
-    return ME;
-  }
-      
-  case PPD_MACRO_DEFINITION: {
-    PreprocessedEntityID GlobalID = getGlobalPreprocessedEntityID(F, Record[0]);
-    if (PreprocessedEntity *PE = PPRec.getLoadedPreprocessedEntity(GlobalID-1))
-      return PE;
-
-    unsigned MacroDefID = getGlobalMacroDefinitionID(F, Record[1]);
-    if (MacroDefID > MacroDefinitionsLoaded.size()) {
-      Error("out-of-bounds macro definition record");
-      return 0;
-    }
-    
-    // Decode the identifier info and then check again; if the macro is
-    // still defined and associated with the identifier,
-    IdentifierInfo *II = getLocalIdentifier(F, Record[4]);
-    if (!MacroDefinitionsLoaded[MacroDefID - 1]) {
-      MacroDefinition *MD
-        = new (PPRec) MacroDefinition(II,
-                                      ReadSourceLocation(F, Record[5]),
-                                      SourceRange(
-                                            ReadSourceLocation(F, Record[2]),
-                                            ReadSourceLocation(F, Record[3])));
-      
-      PPRec.setLoadedPreallocatedEntity(GlobalID - 1, MD);
-      MacroDefinitionsLoaded[MacroDefID - 1] = MD;
-      
-      if (DeserializationListener)
-        DeserializationListener->MacroDefinitionRead(MacroDefID, MD);
-    }
-    
-    return MacroDefinitionsLoaded[MacroDefID - 1];
-  }
-      
-  case PPD_INCLUSION_DIRECTIVE: {
-    PreprocessedEntityID GlobalID = getGlobalPreprocessedEntityID(F, Record[0]);
-    if (PreprocessedEntity *PE = PPRec.getLoadedPreprocessedEntity(GlobalID-1))
-      return PE;
-    
-    const char *FullFileNameStart = BlobStart + Record[3];
-    const FileEntry *File
-      = PP->getFileManager().getFile(StringRef(FullFileNameStart,
-                                               BlobLen - Record[3]));
-    
-    // FIXME: Stable encoding
-    InclusionDirective::InclusionKind Kind
-      = static_cast<InclusionDirective::InclusionKind>(Record[5]);
-    InclusionDirective *ID
-      = new (PPRec) InclusionDirective(PPRec, Kind,
-                                       StringRef(BlobStart, Record[3]),
-                                       Record[4],
-                                       File,
-                                 SourceRange(ReadSourceLocation(F, Record[1]),
-                                             ReadSourceLocation(F, Record[2])));
-    PPRec.setLoadedPreallocatedEntity(GlobalID - 1, ID);
-    return ID;
-  }
-  }
-  
-  Error("invalid offset in preprocessor detail block");
-  return 0;
-}
-
 PreprocessedEntityID 
-ASTReader::getGlobalPreprocessedEntityID(Module &M, unsigned LocalID) {
-  ContinuousRangeMap<uint32_t, int, 2>::iterator 
+ASTReader::getGlobalPreprocessedEntityID(Module &M, unsigned LocalID) const {
+  ContinuousRangeMap<uint32_t, int, 2>::const_iterator 
     I = M.PreprocessedEntityRemap.find(LocalID - NUM_PREDEF_PP_ENTITY_IDS);
   assert(I != M.PreprocessedEntityRemap.end() 
          && "Invalid index into preprocessed entity index remap");
@@ -1631,115 +1356,64 @@ ASTReader::getGlobalPreprocessedEntityID(Module &M, unsigned LocalID) {
   return LocalID + I->second;
 }
 
-namespace {
-  /// \brief Trait class used to search the on-disk hash table containing all of
-  /// the header search information.
-  ///
-  /// The on-disk hash table contains a mapping from each header path to 
-  /// information about that header (how many times it has been included, its
-  /// controlling macro, etc.). Note that we actually hash based on the 
-  /// filename, and support "deep" comparisons of file names based on current
-  /// inode numbers, so that the search can cope with non-normalized path names
-  /// and symlinks.
-  class HeaderFileInfoTrait {
-    ASTReader &Reader;
-    Module &M;
-    HeaderSearch *HS;
-    const char *FrameworkStrings;
-    const char *SearchPath;
-    struct stat SearchPathStatBuf;
-    llvm::Optional<int> SearchPathStatResult;
-    
-    int StatSimpleCache(const char *Path, struct stat *StatBuf) {
-      if (Path == SearchPath) {
-        if (!SearchPathStatResult)
-          SearchPathStatResult = stat(Path, &SearchPathStatBuf);
-        
-        *StatBuf = SearchPathStatBuf;
-        return *SearchPathStatResult;
-      }
-      
-      return stat(Path, StatBuf);
-    }
-    
-  public:
-    typedef const char *external_key_type;
-    typedef const char *internal_key_type;
-    
-    typedef HeaderFileInfo data_type;
-    
-    HeaderFileInfoTrait(ASTReader &Reader, Module &M, HeaderSearch *HS,
-                        const char *FrameworkStrings,
-                        const char *SearchPath = 0) 
-      : Reader(Reader), M(M), HS(HS), FrameworkStrings(FrameworkStrings), 
-        SearchPath(SearchPath) { }
-    
-    static unsigned ComputeHash(const char *path) {
-      return llvm::HashString(llvm::sys::path::filename(path));
-    }
-    
-    static internal_key_type GetInternalKey(const char *path) { return path; }
-    
-    bool EqualKey(internal_key_type a, internal_key_type b) {
-      if (strcmp(a, b) == 0)
-        return true;
-      
-      if (llvm::sys::path::filename(a) != llvm::sys::path::filename(b))
-        return false;
-      
-      // The file names match, but the path names don't. stat() the files to
-      // see if they are the same.      
-      struct stat StatBufA, StatBufB;
-      if (StatSimpleCache(a, &StatBufA) || StatSimpleCache(b, &StatBufB))
-        return false;
-      
-      return StatBufA.st_ino == StatBufB.st_ino;
-    }
-    
-    static std::pair<unsigned, unsigned>
-    ReadKeyDataLength(const unsigned char*& d) {
-      unsigned KeyLen = (unsigned) clang::io::ReadUnalignedLE16(d);
-      unsigned DataLen = (unsigned) *d++;
-      return std::make_pair(KeyLen + 1, DataLen);
-    }
-    
-    static internal_key_type ReadKey(const unsigned char *d, unsigned) {
-      return (const char *)d;
-    }
-    
-    data_type ReadData(const internal_key_type, const unsigned char *d,
-                       unsigned DataLen) {
-      const unsigned char *End = d + DataLen;
-      using namespace clang::io;
-      HeaderFileInfo HFI;
-      unsigned Flags = *d++;
-      HFI.isImport = (Flags >> 5) & 0x01;
-      HFI.isPragmaOnce = (Flags >> 4) & 0x01;
-      HFI.DirInfo = (Flags >> 2) & 0x03;
-      HFI.Resolved = (Flags >> 1) & 0x01;
-      HFI.IndexHeaderMapHeader = Flags & 0x01;
-      HFI.NumIncludes = ReadUnalignedLE16(d);
-      HFI.ControllingMacroID = Reader.getGlobalDeclID(M, ReadUnalignedLE32(d));
-      if (unsigned FrameworkOffset = ReadUnalignedLE32(d)) {
-        // The framework offset is 1 greater than the actual offset, 
-        // since 0 is used as an indicator for "no framework name".
-        StringRef FrameworkName(FrameworkStrings + FrameworkOffset - 1);
-        HFI.Framework = HS->getUniqueFrameworkName(FrameworkName);
-      }
-      
-      assert(End == d && "Wrong data length in HeaderFileInfo deserialization");
-      (void)End;
-            
-      // This HeaderFileInfo was externally loaded.
-      HFI.External = true;
-      return HFI;
-    }
-  };
+unsigned HeaderFileInfoTrait::ComputeHash(const char *path) {
+  return llvm::HashString(llvm::sys::path::filename(path));
 }
-
-/// \brief The on-disk hash table used for the global method pool.
-typedef OnDiskChainedHashTable<HeaderFileInfoTrait>
-  HeaderFileInfoLookupTable;
+    
+HeaderFileInfoTrait::internal_key_type 
+HeaderFileInfoTrait::GetInternalKey(const char *path) { return path; }
+    
+bool HeaderFileInfoTrait::EqualKey(internal_key_type a, internal_key_type b) {
+  if (strcmp(a, b) == 0)
+    return true;
+  
+  if (llvm::sys::path::filename(a) != llvm::sys::path::filename(b))
+    return false;
+  
+  // The file names match, but the path names don't. stat() the files to
+  // see if they are the same.      
+  struct stat StatBufA, StatBufB;
+  if (StatSimpleCache(a, &StatBufA) || StatSimpleCache(b, &StatBufB))
+    return false;
+  
+  return StatBufA.st_ino == StatBufB.st_ino;
+}
+    
+std::pair<unsigned, unsigned>
+HeaderFileInfoTrait::ReadKeyDataLength(const unsigned char*& d) {
+  unsigned KeyLen = (unsigned) clang::io::ReadUnalignedLE16(d);
+  unsigned DataLen = (unsigned) *d++;
+  return std::make_pair(KeyLen + 1, DataLen);
+}
+    
+HeaderFileInfoTrait::data_type 
+HeaderFileInfoTrait::ReadData(const internal_key_type, const unsigned char *d,
+                              unsigned DataLen) {
+  const unsigned char *End = d + DataLen;
+  using namespace clang::io;
+  HeaderFileInfo HFI;
+  unsigned Flags = *d++;
+  HFI.isImport = (Flags >> 5) & 0x01;
+  HFI.isPragmaOnce = (Flags >> 4) & 0x01;
+  HFI.DirInfo = (Flags >> 2) & 0x03;
+  HFI.Resolved = (Flags >> 1) & 0x01;
+  HFI.IndexHeaderMapHeader = Flags & 0x01;
+  HFI.NumIncludes = ReadUnalignedLE16(d);
+  HFI.ControllingMacroID = Reader.getGlobalDeclID(M, ReadUnalignedLE32(d));
+  if (unsigned FrameworkOffset = ReadUnalignedLE32(d)) {
+    // The framework offset is 1 greater than the actual offset, 
+    // since 0 is used as an indicator for "no framework name".
+    StringRef FrameworkName(FrameworkStrings + FrameworkOffset - 1);
+    HFI.Framework = HS->getUniqueFrameworkName(FrameworkName);
+  }
+  
+  assert(End == d && "Wrong data length in HeaderFileInfo deserialization");
+  (void)End;
+        
+  // This HeaderFileInfo was externally loaded.
+  HFI.External = true;
+  return HFI;
+}
 
 void ASTReader::SetIdentifierIsMacro(IdentifierInfo *II, Module &F,
                                      uint64_t LocalOffset) {
@@ -1824,24 +1498,6 @@ void ASTReader::LoadMacroDefinition(IdentifierInfo *II) {
   LoadMacroDefinition(Pos);
 }
 
-MacroDefinition *ASTReader::getMacroDefinition(MacroID ID) {
-  if (ID == 0 || ID > MacroDefinitionsLoaded.size())
-    return 0;
-
-  if (!MacroDefinitionsLoaded[ID - 1]) {
-    GlobalMacroDefinitionMapType::iterator I =GlobalMacroDefinitionMap.find(ID);
-    assert(I != GlobalMacroDefinitionMap.end() && 
-           "Corrupted global macro definition map");
-    Module &M = *I->second;
-    unsigned Index = ID - 1 - M.BaseMacroDefinitionID;
-    SavedStreamPosition SavedPosition(M.PreprocessorDetailCursor);  
-    M.PreprocessorDetailCursor.JumpToBit(M.MacroDefinitionOffsets[Index]);
-    LoadPreprocessedEntity(M);
-  }
-
-  return MacroDefinitionsLoaded[ID - 1];
-}
-
 const FileEntry *ASTReader::getFileEntry(StringRef filenameStrRef) {
   std::string Filename = filenameStrRef;
   MaybeAddSystemRootToFilename(Filename);
@@ -1856,18 +1512,6 @@ const FileEntry *ASTReader::getFileEntry(StringRef filenameStrRef) {
   }
 
   return File;
-}
-
-MacroID ASTReader::getGlobalMacroDefinitionID(Module &M, unsigned LocalID) {
-  if (LocalID < NUM_PREDEF_MACRO_IDS)
-    return LocalID;
-  
-  ContinuousRangeMap<uint32_t, int, 2>::iterator I
-    = M.MacroDefinitionRemap.find(LocalID - NUM_PREDEF_MACRO_IDS);
-  assert(I != M.MacroDefinitionRemap.end() && 
-         "Invalid index into macro definition ID remap");
-  
-  return LocalID + I->second;
 }
 
 /// \brief If we are loading a relocatable PCH file, and the filename is
@@ -1905,7 +1549,6 @@ ASTReader::ReadASTBlock(Module &F) {
 
   // Read all of the records and blocks for the ASt file.
   RecordData Record;
-  bool First = true;
   while (!Stream.AtEndOfStream()) {
     unsigned Code = Stream.ReadCode();
     if (Code == llvm::bitc::END_BLOCK) {
@@ -1942,8 +1585,8 @@ ASTReader::ReadASTBlock(Module &F) {
 
       case PREPROCESSOR_BLOCK_ID:
         F.MacroCursor = Stream;
-        if (PP)
-          PP->setExternalSource(this);
+        if (!PP.getExternalSource())
+          PP.setExternalSource(this);
 
         if (Stream.SkipBlock() ||
             ReadBlockAbbrevs(F.MacroCursor, PREPROCESSOR_BLOCK_ID)) {
@@ -1963,6 +1606,11 @@ ASTReader::ReadASTBlock(Module &F) {
         }
         F.PreprocessorDetailStartOffset
           = F.PreprocessorDetailCursor.GetCurrentBitNo();
+          
+        if (!PP.getPreprocessingRecord())
+          PP.createPreprocessingRecord(true);
+        if (!PP.getPreprocessingRecord()->getExternalSource())
+          PP.getPreprocessingRecord()->SetExternalSource(*this);
         break;
         
       case SOURCE_MANAGER_BLOCK_ID:
@@ -1979,7 +1627,6 @@ ASTReader::ReadASTBlock(Module &F) {
         }
         break;
       }
-      First = false;
       continue;
     }
 
@@ -2085,14 +1732,12 @@ ASTReader::ReadASTBlock(Module &F) {
     }
         
     case TU_UPDATE_LEXICAL: {
-      DeclContext *TU = Context ? Context->getTranslationUnitDecl() : 0;
+      DeclContext *TU = Context.getTranslationUnitDecl();
       DeclContextInfo &Info = F.DeclContextInfos[TU];
       Info.LexicalDecls = reinterpret_cast<const KindDeclIDPair *>(BlobStart);
       Info.NumLexicalDecls 
         = static_cast<unsigned int>(BlobLen / sizeof(KindDeclIDPair));
-      if (TU)
-        TU->setHasExternalLexicalStorage(true);
-
+      TU->setHasExternalLexicalStorage(true);
       break;
     }
 
@@ -2103,8 +1748,8 @@ ASTReader::ReadASTBlock(Module &F) {
                         (const unsigned char *)BlobStart + Record[Idx++],
                         (const unsigned char *)BlobStart,
                         ASTDeclContextNameLookupTrait(*this, F));
-      if (ID == PREDEF_DECL_TRANSLATION_UNIT_ID && Context) { // Is it the TU?
-        DeclContext *TU = Context->getTranslationUnitDecl();
+      if (ID == PREDEF_DECL_TRANSLATION_UNIT_ID) { // Is it the TU?
+        DeclContext *TU = Context.getTranslationUnitDecl();
         F.DeclContextInfos[TU].NameLookupTableData = Table;
         TU->setHasExternalVisibleStorage(true);
       } else
@@ -2135,10 +1780,8 @@ ASTReader::ReadASTBlock(Module &F) {
                        (const unsigned char *)F.IdentifierTableData + Record[0],
                        (const unsigned char *)F.IdentifierTableData,
                        ASTIdentifierLookupTrait(*this, F));
-        if (PP) {
-          PP->getIdentifierTable().setExternalIdentifierLookup(this);
-          PP->getHeaderSearchInfo().SetExternalLookup(this);
-        }
+        
+        PP.getIdentifierTable().setExternalIdentifierLookup(this);
       }
       break;
 
@@ -2275,8 +1918,10 @@ ASTReader::ReadASTBlock(Module &F) {
     case SOURCE_LOCATION_OFFSETS: {
       F.SLocEntryOffsets = (const uint32_t *)BlobStart;
       F.LocalNumSLocEntries = Record[0];
+      unsigned SLocSpaceSize = Record[1];
       llvm::tie(F.SLocEntryBaseID, F.SLocEntryBaseOffset) =
-          SourceMgr.AllocateLoadedSLocEntries(F.LocalNumSLocEntries, Record[1]);
+          SourceMgr.AllocateLoadedSLocEntries(F.LocalNumSLocEntries,
+                                              SLocSpaceSize);
       // Make our entry in the range map. BaseID is negative and growing, so
       // we invert it. Because we invert it, though, we need the other end of
       // the range.
@@ -2284,6 +1929,12 @@ ASTReader::ReadASTBlock(Module &F) {
           unsigned(-F.SLocEntryBaseID) - F.LocalNumSLocEntries + 1;
       GlobalSLocEntryMap.insert(std::make_pair(RangeStart, &F));
       F.FirstLoc = SourceLocation::getFromRawEncoding(F.SLocEntryBaseOffset);
+
+      // SLocEntryBaseOffset is lower than MaxLoadedOffset and decreasing.
+      assert((F.SLocEntryBaseOffset & (1U << 31U)) == 0);
+      GlobalSLocOffsetMap.insert(
+          std::make_pair(SourceManager::MaxLoadedOffset - F.SLocEntryBaseOffset
+                           - SLocSpaceSize,&F));
 
       // Initialize the remapping table.
       // Invalid stays invalid.
@@ -2308,8 +1959,6 @@ ASTReader::ReadASTBlock(Module &F) {
       ContinuousRangeMap<uint32_t, int, 2>::Builder 
         PreprocessedEntityRemap(F.PreprocessedEntityRemap);
       ContinuousRangeMap<uint32_t, int, 2>::Builder 
-        MacroDefinitionRemap(F.MacroDefinitionRemap);
-      ContinuousRangeMap<uint32_t, int, 2>::Builder 
         SelectorRemap(F.SelectorRemap);
       ContinuousRangeMap<uint32_t, int, 2>::Builder DeclRemap(F.DeclRemap);
       ContinuousRangeMap<uint32_t, int, 2>::Builder TypeRemap(F.TypeRemap);
@@ -2327,7 +1976,6 @@ ASTReader::ReadASTBlock(Module &F) {
         uint32_t SLocOffset = io::ReadUnalignedLE32(Data);
         uint32_t IdentifierIDOffset = io::ReadUnalignedLE32(Data);
         uint32_t PreprocessedEntityIDOffset = io::ReadUnalignedLE32(Data);
-        uint32_t MacroDefinitionIDOffset = io::ReadUnalignedLE32(Data);
         uint32_t SelectorIDOffset = io::ReadUnalignedLE32(Data);
         uint32_t DeclIDOffset = io::ReadUnalignedLE32(Data);
         uint32_t TypeIndexOffset = io::ReadUnalignedLE32(Data);
@@ -2341,9 +1989,6 @@ ASTReader::ReadASTBlock(Module &F) {
         PreprocessedEntityRemap.insert(
           std::make_pair(PreprocessedEntityIDOffset, 
             OM->BasePreprocessedEntityID - PreprocessedEntityIDOffset));
-        MacroDefinitionRemap.insert(
-          std::make_pair(MacroDefinitionIDOffset,
-                         OM->BaseMacroDefinitionID - MacroDefinitionIDOffset));
         SelectorRemap.insert(std::make_pair(SelectorIDOffset, 
                                OM->BaseSelectorID - SelectorIDOffset));
         DeclRemap.insert(std::make_pair(DeclIDOffset, 
@@ -2368,9 +2013,12 @@ ASTReader::ReadASTBlock(Module &F) {
     case SOURCE_LOCATION_PRELOADS: {
       // Need to transform from the local view (1-based IDs) to the global view,
       // which is based off F.SLocEntryBaseID.
-      PreloadSLocEntries.reserve(PreloadSLocEntries.size() + Record.size());
-      for (unsigned I = 0, N = Record.size(); I != N; ++I)
-        PreloadSLocEntries.push_back(int(Record[I] - 1) + F.SLocEntryBaseID);
+      if (!F.PreloadSLocEntries.empty()) {
+        Error("Multiple SOURCE_LOCATION_PRELOADS records in AST file");
+        return Failure;
+      }
+      
+      F.PreloadSLocEntries.swap(Record);
       break;
     }
 
@@ -2467,32 +2115,24 @@ ASTReader::ReadASTBlock(Module &F) {
       break;
     }
 
-    case MACRO_DEFINITION_OFFSETS: {
-      F.MacroDefinitionOffsets = (const uint32_t *)BlobStart;
-      F.NumPreallocatedPreprocessingEntities = Record[0];
-      unsigned LocalBasePreprocessedEntityID = Record[1];
-      F.LocalNumMacroDefinitions = Record[2];
-      unsigned LocalBaseMacroID = Record[3];
+    case PPD_ENTITIES_OFFSETS: {
+      F.PreprocessedEntityOffsets = (const PPEntityOffset *)BlobStart;
+      assert(BlobLen % sizeof(PPEntityOffset) == 0);
+      F.NumPreprocessedEntities = BlobLen / sizeof(PPEntityOffset);
+
+      unsigned LocalBasePreprocessedEntityID = Record[0];
       
       unsigned StartingID;
-      if (PP) {
-        if (!PP->getPreprocessingRecord())
-          PP->createPreprocessingRecord(true);
-        if (!PP->getPreprocessingRecord()->getExternalSource())
-          PP->getPreprocessingRecord()->SetExternalSource(*this);
-        StartingID 
-          = PP->getPreprocessingRecord()
-              ->allocateLoadedEntities(F.NumPreallocatedPreprocessingEntities);
-      } else {
-        // FIXME: We'll eventually want to kill this path, since it assumes
-        // a particular allocation strategy in the preprocessing record.
-        StartingID = getTotalNumPreprocessedEntities() 
-                   - F.NumPreallocatedPreprocessingEntities;
-      }
-      F.BaseMacroDefinitionID = getTotalNumMacroDefinitions();
+      if (!PP.getPreprocessingRecord())
+        PP.createPreprocessingRecord(true);
+      if (!PP.getPreprocessingRecord()->getExternalSource())
+        PP.getPreprocessingRecord()->SetExternalSource(*this);
+      StartingID 
+        = PP.getPreprocessingRecord()
+            ->allocateLoadedEntities(F.NumPreprocessedEntities);
       F.BasePreprocessedEntityID = StartingID;
 
-      if (F.NumPreallocatedPreprocessingEntities > 0) {
+      if (F.NumPreprocessedEntities > 0) {
         // Introduce the global -> local mapping for preprocessed entities in
         // this module.
         GlobalPreprocessedEntityMap.insert(std::make_pair(StartingID, &F));
@@ -2503,24 +2143,7 @@ ASTReader::ReadASTBlock(Module &F) {
           std::make_pair(LocalBasePreprocessedEntityID,
             F.BasePreprocessedEntityID - LocalBasePreprocessedEntityID));
       }
-      
 
-      if (F.LocalNumMacroDefinitions > 0) {
-        // Introduce the global -> local mapping for macro definitions within 
-        // this module.
-        GlobalMacroDefinitionMap.insert(
-          std::make_pair(getTotalNumMacroDefinitions() + 1, &F));
-        
-        // Introduce the local -> global mapping for macro definitions within
-        // this module.
-        F.MacroDefinitionRemap.insert(
-          std::make_pair(LocalBaseMacroID,
-                         F.BaseMacroDefinitionID - LocalBaseMacroID));
-        
-        MacroDefinitionsLoaded.resize(
-                    MacroDefinitionsLoaded.size() + F.LocalNumMacroDefinitions);
-      }
-      
       break;
     }
         
@@ -2543,6 +2166,20 @@ ASTReader::ReadASTBlock(Module &F) {
       for (unsigned I = 0, N = Record.size(); I != N; I += 2)
         ReplacedDecls[getGlobalDeclID(F, Record[I])]
           = std::make_pair(&F, Record[I+1]);
+      break;
+    }
+
+    case OBJC_CHAINED_CATEGORIES: {
+      if (Record.size() % 3 != 0) {
+        Error("invalid OBJC_CHAINED_CATEGORIES block in AST file");
+        return Failure;
+      }
+      for (unsigned I = 0, N = Record.size(); I != N; I += 3) {
+        serialization::GlobalDeclID GlobID = getGlobalDeclID(F, Record[I]);
+        F.ChainedObjCCategories[GlobID] = std::make_pair(Record[I+1],
+                                                         Record[I+2]);
+        ObjCChainedCategoriesInterfaces.insert(GlobID);
+      }
       break;
     }
         
@@ -2589,10 +2226,12 @@ ASTReader::ReadASTBlock(Module &F) {
                    (const unsigned char *)F.HeaderFileInfoTableData + Record[0],
                    (const unsigned char *)F.HeaderFileInfoTableData,
                    HeaderFileInfoTrait(*this, F, 
-                                       PP? &PP->getHeaderSearchInfo() : 0,
+                                       &PP.getHeaderSearchInfo(),
                                        BlobStart + Record[2]));
-        if (PP)
-          PP->getHeaderSearchInfo().SetExternalSource(this);
+        
+        PP.getHeaderSearchInfo().SetExternalSource(this);
+        if (!PP.getHeaderSearchInfo().getExternalLookup())
+          PP.getHeaderSearchInfo().SetExternalLookup(this);
       }
       break;
     }
@@ -2617,81 +2256,113 @@ ASTReader::ReadASTBlock(Module &F) {
         KnownNamespaces.push_back(getGlobalDeclID(F, Record[I]));
       break;
     }
-    First = false;
   }
   Error("premature end of bitstream in AST file");
   return Failure;
 }
 
-ASTReader::ASTReadResult ASTReader::validateFileEntries() {
-  for (ModuleIterator I = ModuleMgr.begin(),
-      E = ModuleMgr.end(); I != E; ++I) {
-    Module *F = *I;
-    llvm::BitstreamCursor &SLocEntryCursor = F->SLocEntryCursor;
+ASTReader::ASTReadResult ASTReader::validateFileEntries(Module &M) {
+  llvm::BitstreamCursor &SLocEntryCursor = M.SLocEntryCursor;
 
-    for (unsigned i = 0, e = F->LocalNumSLocFileEntries; i != e; ++i) {
-      SLocEntryCursor.JumpToBit(F->SLocFileOffsets[i]);
-      unsigned Code = SLocEntryCursor.ReadCode();
-      if (Code == llvm::bitc::END_BLOCK ||
-          Code == llvm::bitc::ENTER_SUBBLOCK ||
-          Code == llvm::bitc::DEFINE_ABBREV) {
-        Error("incorrectly-formatted source location entry in AST file");
+  for (unsigned i = 0, e = M.LocalNumSLocFileEntries; i != e; ++i) {
+    SLocEntryCursor.JumpToBit(M.SLocFileOffsets[i]);
+    unsigned Code = SLocEntryCursor.ReadCode();
+    if (Code == llvm::bitc::END_BLOCK ||
+        Code == llvm::bitc::ENTER_SUBBLOCK ||
+        Code == llvm::bitc::DEFINE_ABBREV) {
+      Error("incorrectly-formatted source location entry in AST file");
+      return Failure;
+    }
+
+    RecordData Record;
+    const char *BlobStart;
+    unsigned BlobLen;
+    switch (SLocEntryCursor.ReadRecord(Code, Record, &BlobStart, &BlobLen)) {
+    default:
+      Error("incorrectly-formatted source location entry in AST file");
+      return Failure;
+
+    case SM_SLOC_FILE_ENTRY: {
+      StringRef Filename(BlobStart, BlobLen);
+      const FileEntry *File = getFileEntry(Filename);
+
+      if (File == 0) {
+        std::string ErrorStr = "could not find file '";
+        ErrorStr += Filename;
+        ErrorStr += "' referenced by AST file";
+        Error(ErrorStr.c_str());
+        return IgnorePCH;
+      }
+
+      if (Record.size() < 6) {
+        Error("source location entry is incorrect");
         return Failure;
       }
-  
-      RecordData Record;
-      const char *BlobStart;
-      unsigned BlobLen;
-      switch (SLocEntryCursor.ReadRecord(Code, Record, &BlobStart, &BlobLen)) {
-      default:
-        Error("incorrectly-formatted source location entry in AST file");
-        return Failure;
-  
-      case SM_SLOC_FILE_ENTRY: {
-        StringRef Filename(BlobStart, BlobLen);
-        const FileEntry *File = getFileEntry(Filename);
 
-        if (File == 0) {
-          std::string ErrorStr = "could not find file '";
-          ErrorStr += Filename;
-          ErrorStr += "' referenced by AST file";
-          Error(ErrorStr.c_str());
-          return IgnorePCH;
-        }
-  
-        if (Record.size() < 6) {
-          Error("source location entry is incorrect");
-          return Failure;
-        }
+      // The stat info from the FileEntry came from the cached stat
+      // info of the PCH, so we cannot trust it.
+      struct stat StatBuf;
+      if (::stat(File->getName(), &StatBuf) != 0) {
+        StatBuf.st_size = File->getSize();
+        StatBuf.st_mtime = File->getModificationTime();
+      }
 
-        // The stat info from the FileEntry came from the cached stat
-        // info of the PCH, so we cannot trust it.
-        struct stat StatBuf;
-        if (::stat(File->getName(), &StatBuf) != 0) {
-          StatBuf.st_size = File->getSize();
-          StatBuf.st_mtime = File->getModificationTime();
-        }
-
-        if (((off_t)Record[4] != StatBuf.st_size
+      if (((off_t)Record[4] != StatBuf.st_size
 #if !defined(LLVM_ON_WIN32)
-            // In our regression testing, the Windows file system seems to
-            // have inconsistent modification times that sometimes
-            // erroneously trigger this error-handling path.
-             || (time_t)Record[5] != StatBuf.st_mtime
+          // In our regression testing, the Windows file system seems to
+          // have inconsistent modification times that sometimes
+          // erroneously trigger this error-handling path.
+           || (time_t)Record[5] != StatBuf.st_mtime
 #endif
-            )) {
-          Error(diag::err_fe_pch_file_modified, Filename);
-          return IgnorePCH;
-        }
+          )) {
+        Error(diag::err_fe_pch_file_modified, Filename);
+        return IgnorePCH;
+      }
 
-        break;
-      }
-      }
+      break;
+    }
     }
   }
 
   return Success;
 }
+
+namespace {
+  /// \brief Visitor class used to look up identifirs in an AST file.
+  class IdentifierLookupVisitor {
+    StringRef Name;
+    IdentifierInfo *Found;
+  public:
+    explicit IdentifierLookupVisitor(StringRef Name) : Name(Name), Found() { }
+    
+    static bool visit(Module &M, void *UserData) {
+      IdentifierLookupVisitor *This
+      = static_cast<IdentifierLookupVisitor *>(UserData);
+      
+      ASTIdentifierLookupTable *IdTable
+        = (ASTIdentifierLookupTable *)M.IdentifierLookupTable;
+      if (!IdTable)
+        return false;
+      
+      std::pair<const char*, unsigned> Key(This->Name.begin(), 
+                                           This->Name.size());
+      ASTIdentifierLookupTable::iterator Pos = IdTable->find(Key);
+      if (Pos == IdTable->end())
+        return false;
+      
+      // Dereferencing the iterator has the effect of building the
+      // IdentifierInfo node and populating it with the various
+      // declarations it needs.
+      This->Found = *Pos;
+      return true;
+    }
+    
+    // \brief Retrieve the identifier info found within the module
+    // files.
+    IdentifierInfo *getIdentifierInfo() const { return Found; }
+  };
+}
+
 
 ASTReader::ASTReadResult ASTReader::ReadAST(const std::string &FileName,
                                             ModuleKind Type) {
@@ -2702,98 +2373,57 @@ ASTReader::ASTReadResult ASTReader::ReadAST(const std::string &FileName,
   }
 
   // Here comes stuff that we only do once the entire chain is loaded.
-
-  if (!DisableValidation) {
-    switch(validateFileEntries()) {
-    case Failure: return Failure;
-    case IgnorePCH: return IgnorePCH;
-    case Success: break;
-    }
-  }
-
-  // Preload SLocEntries.
-  for (unsigned I = 0, N = PreloadSLocEntries.size(); I != N; ++I) {
-    ASTReadResult Result = ReadSLocEntryRecord(PreloadSLocEntries[I]);
-    if (Result != Success)
-      return Failure;
-  }
-  PreloadSLocEntries.clear();
   
   // Check the predefines buffers.
-  if (!DisableValidation && Type != MK_Module && CheckPredefinesBuffers())
+  if (!DisableValidation && Type != MK_Module && Type != MK_Preamble &&
+      // FIXME: CheckPredefinesBuffers also sets the SuggestedPredefines;
+      // if DisableValidation is true, defines that were set on command-line
+      // but not in the PCH file will not be added to SuggestedPredefines.
+      CheckPredefinesBuffers())
     return IgnorePCH;
 
-  if (PP) {
-    // Initialization of keywords and pragmas occurs before the
-    // AST file is read, so there may be some identifiers that were
-    // loaded into the IdentifierTable before we intercepted the
-    // creation of identifiers. Iterate through the list of known
-    // identifiers and determine whether we have to establish
-    // preprocessor definitions or top-level identifier declaration
-    // chains for those identifiers.
-    //
-    // We copy the IdentifierInfo pointers to a small vector first,
-    // since de-serializing declarations or macro definitions can add
-    // new entries into the identifier table, invalidating the
-    // iterators.
-    //
-    // FIXME: We need a lazier way to load this information, e.g., by marking
-    // the identifier data as 'dirty', so that it will be looked up in the
-    // AST file(s) if it is uttered in the source. This could save us some
-    // module load time.
-    SmallVector<IdentifierInfo *, 128> Identifiers;
-    for (IdentifierTable::iterator Id = PP->getIdentifierTable().begin(),
-                                IdEnd = PP->getIdentifierTable().end();
-         Id != IdEnd; ++Id)
-      Identifiers.push_back(Id->second);
-    // We need to search the tables in all files.
-    for (ModuleIterator J = ModuleMgr.begin(),
-        M = ModuleMgr.end(); J != M; ++J) {
-      ASTIdentifierLookupTable *IdTable
-        = (ASTIdentifierLookupTable *)(*J)->IdentifierLookupTable;
-      // Not all AST files necessarily have identifier tables, only the useful
-      // ones.
-      if (!IdTable)
-        continue;
-      for (unsigned I = 0, N = Identifiers.size(); I != N; ++I) {
-        IdentifierInfo *II = Identifiers[I];
-        // Look in the on-disk hash tables for an entry for this identifier
-        ASTIdentifierLookupTrait Info(*this, *(*J), II);
-        std::pair<const char*,unsigned> Key(II->getNameStart(),II->getLength());
-        ASTIdentifierLookupTable::iterator Pos = IdTable->find(Key, &Info);
-        if (Pos == IdTable->end())
-          continue;
-
-        // Dereferencing the iterator has the effect of populating the
-        // IdentifierInfo node with the various declarations it needs.
-        (void)*Pos;
-      }
-    }
+  // Initialization of keywords and pragmas occurs before the
+  // AST file is read, so there may be some identifiers that were
+  // loaded into the IdentifierTable before we intercepted the
+  // creation of identifiers. Iterate through the list of known
+  // identifiers and determine whether we have to establish
+  // preprocessor definitions or top-level identifier declaration
+  // chains for those identifiers.
+  //
+  // We copy the IdentifierInfo pointers to a small vector first,
+  // since de-serializing declarations or macro definitions can add
+  // new entries into the identifier table, invalidating the
+  // iterators.
+  //
+  // FIXME: We need a lazier way to load this information, e.g., by marking
+  // the identifier data as 'dirty', so that it will be looked up in the
+  // AST file(s) if it is uttered in the source. This could save us some
+  // module load time.
+  SmallVector<IdentifierInfo *, 128> Identifiers;
+  for (IdentifierTable::iterator Id = PP.getIdentifierTable().begin(),
+                              IdEnd = PP.getIdentifierTable().end();
+       Id != IdEnd; ++Id)
+    Identifiers.push_back(Id->second);
+  
+  for (unsigned I = 0, N = Identifiers.size(); I != N; ++I) {
+    IdentifierLookupVisitor Visitor(Identifiers[I]->getName());
+    ModuleMgr.visit(IdentifierLookupVisitor::visit, &Visitor);
   }
 
-  if (Context)
-    InitializeContext(*Context);
+  InitializeContext();
 
   if (DeserializationListener)
     DeserializationListener->ReaderInitialized(this);
 
-  // If this AST file is a precompiled preamble, then set the main file ID of 
-  // the source manager to the file source file from which the preamble was
-  // built. This is the only valid way to use a precompiled preamble.
+  // If this AST file is a precompiled preamble, then set the preamble file ID
+  // of the source manager to the file source file from which the preamble was
+  // built.
   if (Type == MK_Preamble) {
-    if (OriginalFileID.isInvalid()) {
-      SourceLocation Loc
-        = SourceMgr.getLocation(FileMgr.getFile(getOriginalSourceFile()), 1, 1);
-      if (Loc.isValid())
-        OriginalFileID = SourceMgr.getDecomposedLoc(Loc).first;
-    }
-    else {
+    if (!OriginalFileID.isInvalid()) {
       OriginalFileID = FileID::get(ModuleMgr.getPrimaryModule().SLocEntryBaseID
                                         + OriginalFileID.getOpaqueValue() - 1);
+      SourceMgr.setPreambleFileID(OriginalFileID);
     }
-
-    if (!OriginalFileID.isInvalid())
-      SourceMgr.SetPreambleFileID(OriginalFileID);
   }
   
   return Success;
@@ -2897,161 +2527,146 @@ ASTReader::ASTReadResult ASTReader::ReadASTCore(StringRef FileName,
   F.GlobalBitOffset = TotalModulesSizeInBits;
   TotalModulesSizeInBits += F.SizeInBits;
   GlobalBitOffsetsMap.insert(std::make_pair(F.GlobalBitOffset, &F));
-  return Success;
-}
 
-void ASTReader::setPreprocessor(Preprocessor &pp) {
-  PP = &pp;
-  
-  if (unsigned N = getTotalNumPreprocessedEntities()) {
-    if (!PP->getPreprocessingRecord())
-      PP->createPreprocessingRecord(true);
-    PP->getPreprocessingRecord()->SetExternalSource(*this);
-    PP->getPreprocessingRecord()->allocateLoadedEntities(N);
-  }
-  
-  PP->getHeaderSearchInfo().SetExternalLookup(this);
-  PP->getHeaderSearchInfo().SetExternalSource(this);
-}
-
-void ASTReader::InitializeContext(ASTContext &Ctx) {
-  Context = &Ctx;
-  assert(Context && "Passed null context!");
-
-  assert(PP && "Forgot to set Preprocessor ?");
-  PP->getIdentifierTable().setExternalIdentifierLookup(this);
-  PP->setExternalSource(this);
-  
-  // If we have any update blocks for the TU waiting, we have to add
-  // them before we deserialize anything.
-  TranslationUnitDecl *TU = Ctx.getTranslationUnitDecl();
-  for (ModuleIterator M = ModuleMgr.begin(), MEnd = ModuleMgr.end(); 
-       M != MEnd; ++M) {
-    Module::DeclContextInfosMap::iterator DCU
-      = (*M)->DeclContextInfos.find(0);
-    if (DCU != (*M)->DeclContextInfos.end()) {
-      // Insertion could invalidate map, so grab value first.
-      DeclContextInfo Info = DCU->second;
-      (*M)->DeclContextInfos.erase(DCU);
-      (*M)->DeclContextInfos[TU] = Info;
+  // Make sure that the files this module was built against are still available.
+  if (!DisableValidation) {
+    switch(validateFileEntries(*M)) {
+    case Failure: return Failure;
+    case IgnorePCH: return IgnorePCH;
+    case Success: break;
     }
   }
   
+  // Preload SLocEntries.
+  for (unsigned I = 0, N = M->PreloadSLocEntries.size(); I != N; ++I) {
+    int Index = int(M->PreloadSLocEntries[I] - 1) + F.SLocEntryBaseID;
+    // Load it through the SourceManager and don't call ReadSLocEntryRecord()
+    // directly because the entry may have already been loaded in which case
+    // calling ReadSLocEntryRecord() directly would trigger an assertion in
+    // SourceManager.
+    SourceMgr.getLoadedSLocEntryByID(Index);
+  }
+
+
+  return Success;
+}
+
+void ASTReader::InitializeContext() {  
   // If there's a listener, notify them that we "read" the translation unit.
   if (DeserializationListener)
-    DeserializationListener->DeclRead(PREDEF_DECL_TRANSLATION_UNIT_ID, TU);
+    DeserializationListener->DeclRead(PREDEF_DECL_TRANSLATION_UNIT_ID, 
+                                      Context.getTranslationUnitDecl());
 
   // Make sure we load the declaration update records for the translation unit,
   // if there are any.
-  loadDeclUpdateRecords(PREDEF_DECL_TRANSLATION_UNIT_ID, TU);
+  loadDeclUpdateRecords(PREDEF_DECL_TRANSLATION_UNIT_ID, 
+                        Context.getTranslationUnitDecl());
   
-  // Note that the translation unit has external lexical and visible storage.
-  TU->setHasExternalLexicalStorage(true);
-  TU->setHasExternalVisibleStorage(true);
-
   // FIXME: Find a better way to deal with collisions between these
   // built-in types. Right now, we just ignore the problem.
   
   // Load the special types.
-  if (Context->getBuiltinVaListType().isNull()) {
-    Context->setBuiltinVaListType(
-      GetType(SpecialTypes[SPECIAL_TYPE_BUILTIN_VA_LIST]));
-  }
-  
-  if (unsigned Proto = SpecialTypes[SPECIAL_TYPE_OBJC_PROTOCOL]) {
-    if (Context->ObjCProtoType.isNull())
-      Context->ObjCProtoType = GetType(Proto);
-  }
-  
-  if (unsigned String = SpecialTypes[SPECIAL_TYPE_CF_CONSTANT_STRING]) {
-    if (!Context->CFConstantStringTypeDecl)
-      Context->setCFConstantStringType(GetType(String));
-  }
-  
-  if (unsigned File = SpecialTypes[SPECIAL_TYPE_FILE]) {
-    QualType FileType = GetType(File);
-    if (FileType.isNull()) {
-      Error("FILE type is NULL");
-      return;
+  if (SpecialTypes.size() > NumSpecialTypeIDs) {
+    if (Context.getBuiltinVaListType().isNull()) {
+      Context.setBuiltinVaListType(
+        GetType(SpecialTypes[SPECIAL_TYPE_BUILTIN_VA_LIST]));
     }
     
-    if (!Context->FILEDecl) {
-      if (const TypedefType *Typedef = FileType->getAs<TypedefType>())
-        Context->setFILEDecl(Typedef->getDecl());
-      else {
-        const TagType *Tag = FileType->getAs<TagType>();
-        if (!Tag) {
-          Error("Invalid FILE type in AST file");
-          return;
+    if (unsigned Proto = SpecialTypes[SPECIAL_TYPE_OBJC_PROTOCOL]) {
+      if (Context.ObjCProtoType.isNull())
+        Context.ObjCProtoType = GetType(Proto);
+    }
+    
+    if (unsigned String = SpecialTypes[SPECIAL_TYPE_CF_CONSTANT_STRING]) {
+      if (!Context.CFConstantStringTypeDecl)
+        Context.setCFConstantStringType(GetType(String));
+    }
+    
+    if (unsigned File = SpecialTypes[SPECIAL_TYPE_FILE]) {
+      QualType FileType = GetType(File);
+      if (FileType.isNull()) {
+        Error("FILE type is NULL");
+        return;
+      }
+      
+      if (!Context.FILEDecl) {
+        if (const TypedefType *Typedef = FileType->getAs<TypedefType>())
+          Context.setFILEDecl(Typedef->getDecl());
+        else {
+          const TagType *Tag = FileType->getAs<TagType>();
+          if (!Tag) {
+            Error("Invalid FILE type in AST file");
+            return;
+          }
+          Context.setFILEDecl(Tag->getDecl());
         }
-        Context->setFILEDecl(Tag->getDecl());
       }
     }
-  }
-  
-  if (unsigned Jmp_buf = SpecialTypes[SPECIAL_TYPE_jmp_buf]) {
-    QualType Jmp_bufType = GetType(Jmp_buf);
-    if (Jmp_bufType.isNull()) {
-      Error("jmp_buf type is NULL");
-      return;
-    }
     
-    if (!Context->jmp_bufDecl) {
-      if (const TypedefType *Typedef = Jmp_bufType->getAs<TypedefType>())
-        Context->setjmp_bufDecl(Typedef->getDecl());
-      else {
-        const TagType *Tag = Jmp_bufType->getAs<TagType>();
-        if (!Tag) {
-          Error("Invalid jmp_buf type in AST file");
-          return;
+    if (unsigned Jmp_buf = SpecialTypes[SPECIAL_TYPE_jmp_buf]) {
+      QualType Jmp_bufType = GetType(Jmp_buf);
+      if (Jmp_bufType.isNull()) {
+        Error("jmp_buf type is NULL");
+        return;
+      }
+      
+      if (!Context.jmp_bufDecl) {
+        if (const TypedefType *Typedef = Jmp_bufType->getAs<TypedefType>())
+          Context.setjmp_bufDecl(Typedef->getDecl());
+        else {
+          const TagType *Tag = Jmp_bufType->getAs<TagType>();
+          if (!Tag) {
+            Error("Invalid jmp_buf type in AST file");
+            return;
+          }
+          Context.setjmp_bufDecl(Tag->getDecl());
         }
-        Context->setjmp_bufDecl(Tag->getDecl());
       }
+    }
+    
+    if (unsigned Sigjmp_buf = SpecialTypes[SPECIAL_TYPE_sigjmp_buf]) {
+      QualType Sigjmp_bufType = GetType(Sigjmp_buf);
+      if (Sigjmp_bufType.isNull()) {
+        Error("sigjmp_buf type is NULL");
+        return;
+      }
+      
+      if (!Context.sigjmp_bufDecl) {
+        if (const TypedefType *Typedef = Sigjmp_bufType->getAs<TypedefType>())
+          Context.setsigjmp_bufDecl(Typedef->getDecl());
+        else {
+          const TagType *Tag = Sigjmp_bufType->getAs<TagType>();
+          assert(Tag && "Invalid sigjmp_buf type in AST file");
+          Context.setsigjmp_bufDecl(Tag->getDecl());
+        }
+      }
+    }
+
+    if (unsigned ObjCIdRedef
+          = SpecialTypes[SPECIAL_TYPE_OBJC_ID_REDEFINITION]) {
+      if (Context.ObjCIdRedefinitionType.isNull())
+        Context.ObjCIdRedefinitionType = GetType(ObjCIdRedef);
+    }
+
+    if (unsigned ObjCClassRedef
+          = SpecialTypes[SPECIAL_TYPE_OBJC_CLASS_REDEFINITION]) {
+      if (Context.ObjCClassRedefinitionType.isNull())
+        Context.ObjCClassRedefinitionType = GetType(ObjCClassRedef);
+    }
+
+    if (unsigned ObjCSelRedef
+          = SpecialTypes[SPECIAL_TYPE_OBJC_SEL_REDEFINITION]) {
+      if (Context.ObjCSelRedefinitionType.isNull())
+        Context.ObjCSelRedefinitionType = GetType(ObjCSelRedef);
     }
   }
   
-  if (unsigned Sigjmp_buf = SpecialTypes[SPECIAL_TYPE_sigjmp_buf]) {
-    QualType Sigjmp_bufType = GetType(Sigjmp_buf);
-    if (Sigjmp_bufType.isNull()) {
-      Error("sigjmp_buf type is NULL");
-      return;
-    }
-    
-    if (!Context->sigjmp_bufDecl) {
-      if (const TypedefType *Typedef = Sigjmp_bufType->getAs<TypedefType>())
-        Context->setsigjmp_bufDecl(Typedef->getDecl());
-      else {
-        const TagType *Tag = Sigjmp_bufType->getAs<TagType>();
-        assert(Tag && "Invalid sigjmp_buf type in AST file");
-        Context->setsigjmp_bufDecl(Tag->getDecl());
-      }
-    }
-  }
-
-  if (unsigned ObjCIdRedef
-        = SpecialTypes[SPECIAL_TYPE_OBJC_ID_REDEFINITION]) {
-    if (Context->ObjCIdRedefinitionType.isNull())
-      Context->ObjCIdRedefinitionType = GetType(ObjCIdRedef);
-  }
-
-  if (unsigned ObjCClassRedef
-        = SpecialTypes[SPECIAL_TYPE_OBJC_CLASS_REDEFINITION]) {
-    if (Context->ObjCClassRedefinitionType.isNull())
-      Context->ObjCClassRedefinitionType = GetType(ObjCClassRedef);
-  }
-
-  if (unsigned ObjCSelRedef
-        = SpecialTypes[SPECIAL_TYPE_OBJC_SEL_REDEFINITION]) {
-    if (Context->ObjCSelRedefinitionType.isNull())
-      Context->ObjCSelRedefinitionType = GetType(ObjCSelRedef);
-  }
-
-  ReadPragmaDiagnosticMappings(Context->getDiagnostics());
+  ReadPragmaDiagnosticMappings(Context.getDiagnostics());
 
   // If there were any CUDA special declarations, deserialize them.
   if (!CUDASpecialDeclRefs.empty()) {
     assert(CUDASpecialDeclRefs.size() == 1 && "More decl refs than expected!");
-    Context->setcudaConfigureCallDecl(
+    Context.setcudaConfigureCallDecl(
                            cast<FunctionDecl>(GetDecl(CUDASpecialDeclRefs[0])));
   }
 }
@@ -3061,7 +2676,7 @@ void ASTReader::InitializeContext(ASTContext &Ctx) {
 /// file.
 std::string ASTReader::getOriginalSourceFile(const std::string &ASTFileName,
                                              FileManager &FileMgr,
-                                             Diagnostic &Diags) {
+                                             DiagnosticsEngine &Diags) {
   // Open the AST file.
   std::string ErrStr;
   llvm::OwningPtr<llvm::MemoryBuffer> Buffer;
@@ -3148,129 +2763,261 @@ bool ASTReader::ParseLanguageOptions(
                              const SmallVectorImpl<uint64_t> &Record) {
   if (Listener) {
     LangOptions LangOpts;
-
-  #define PARSE_LANGOPT(Option)                  \
-      LangOpts.Option = Record[Idx];             \
-      ++Idx
-
     unsigned Idx = 0;
-    PARSE_LANGOPT(Trigraphs);
-    PARSE_LANGOPT(BCPLComment);
-    PARSE_LANGOPT(DollarIdents);
-    PARSE_LANGOPT(AsmPreprocessor);
-    PARSE_LANGOPT(GNUMode);
-    PARSE_LANGOPT(GNUKeywords);
-    PARSE_LANGOPT(ImplicitInt);
-    PARSE_LANGOPT(Digraphs);
-    PARSE_LANGOPT(HexFloats);
-    PARSE_LANGOPT(C99);
-    PARSE_LANGOPT(C1X);
-    PARSE_LANGOPT(Microsoft);
-    PARSE_LANGOPT(CPlusPlus);
-    PARSE_LANGOPT(CPlusPlus0x);
-    PARSE_LANGOPT(CXXOperatorNames);
-    PARSE_LANGOPT(ObjC1);
-    PARSE_LANGOPT(ObjC2);
-    PARSE_LANGOPT(ObjCNonFragileABI);
-    PARSE_LANGOPT(ObjCNonFragileABI2);
-    PARSE_LANGOPT(AppleKext);
-    PARSE_LANGOPT(ObjCDefaultSynthProperties);
-    PARSE_LANGOPT(ObjCInferRelatedResultType);
-    PARSE_LANGOPT(NoConstantCFStrings);
-    PARSE_LANGOPT(PascalStrings);
-    PARSE_LANGOPT(WritableStrings);
-    PARSE_LANGOPT(LaxVectorConversions);
-    PARSE_LANGOPT(AltiVec);
-    PARSE_LANGOPT(Exceptions);
-    PARSE_LANGOPT(ObjCExceptions);
-    PARSE_LANGOPT(CXXExceptions);
-    PARSE_LANGOPT(SjLjExceptions);
-    PARSE_LANGOPT(MSBitfields);
-    PARSE_LANGOPT(NeXTRuntime);
-    PARSE_LANGOPT(Freestanding);
-    PARSE_LANGOPT(NoBuiltin);
-    PARSE_LANGOPT(ThreadsafeStatics);
-    PARSE_LANGOPT(POSIXThreads);
-    PARSE_LANGOPT(Blocks);
-    PARSE_LANGOPT(EmitAllDecls);
-    PARSE_LANGOPT(MathErrno);
-    LangOpts.setSignedOverflowBehavior((LangOptions::SignedOverflowBehaviorTy)
-                                       Record[Idx++]);
-    PARSE_LANGOPT(HeinousExtensions);
-    PARSE_LANGOPT(Optimize);
-    PARSE_LANGOPT(OptimizeSize);
-    PARSE_LANGOPT(Static);
-    PARSE_LANGOPT(PICLevel);
-    PARSE_LANGOPT(GNUInline);
-    PARSE_LANGOPT(NoInline);
-    PARSE_LANGOPT(Deprecated);
-    PARSE_LANGOPT(AccessControl);
-    PARSE_LANGOPT(CharIsSigned);
-    PARSE_LANGOPT(ShortWChar);
-    PARSE_LANGOPT(ShortEnums);
-    LangOpts.setGCMode((LangOptions::GCMode)Record[Idx++]);
-    LangOpts.setVisibilityMode((Visibility)Record[Idx++]);
-    LangOpts.setStackProtectorMode((LangOptions::StackProtectorMode)
-                                   Record[Idx++]);
-    PARSE_LANGOPT(InstantiationDepth);
-    PARSE_LANGOPT(OpenCL);
-    PARSE_LANGOPT(CUDA);
-    PARSE_LANGOPT(CatchUndefined);
-    PARSE_LANGOPT(DefaultFPContract);
-    PARSE_LANGOPT(ElideConstructors);
-    PARSE_LANGOPT(SpellChecking);
-    PARSE_LANGOPT(MRTD);
-    PARSE_LANGOPT(ObjCAutoRefCount);
-    PARSE_LANGOPT(ObjCInferRelatedReturnType);
-  #undef PARSE_LANGOPT
-
+#define LANGOPT(Name, Bits, Default, Description) \
+  LangOpts.Name = Record[Idx++];
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Description) \
+  LangOpts.set##Name(static_cast<LangOptions::Type>(Record[Idx++]));
+#include "clang/Basic/LangOptions.def"
+    
     return Listener->ReadLanguageOptions(LangOpts);
   }
 
   return false;
 }
 
-namespace {
-  /// \brief Visitor used by ASTReader::ReadPreprocessedEntities() to load
-  /// all of the preprocessed entities within a module.
-  class ReadPreprocessedEntitiesVisitor {
-    ASTReader &Reader;
+PreprocessedEntity *ASTReader::ReadPreprocessedEntity(unsigned Index) {
+  PreprocessedEntityID PPID = Index+1;
+  GlobalPreprocessedEntityMapType::iterator
+    I = GlobalPreprocessedEntityMap.find(Index);
+  assert(I != GlobalPreprocessedEntityMap.end() && 
+         "Corrupted global preprocessed entity map");
+  Module &M = *I->second;
+  unsigned LocalIndex = Index - M.BasePreprocessedEntityID;
+  const PPEntityOffset &PPOffs = M.PreprocessedEntityOffsets[LocalIndex];
+
+  SavedStreamPosition SavedPosition(M.PreprocessorDetailCursor);  
+  M.PreprocessorDetailCursor.JumpToBit(PPOffs.BitOffset);
+
+  unsigned Code = M.PreprocessorDetailCursor.ReadCode();
+  switch (Code) {
+  case llvm::bitc::END_BLOCK:
+    return 0;
     
-  public:
-    explicit ReadPreprocessedEntitiesVisitor(ASTReader &Reader)
-      : Reader(Reader) { }
-    
-    static bool visit(Module &M, bool Preorder, void *UserData) {
-      if (Preorder)
-        return false;
+  case llvm::bitc::ENTER_SUBBLOCK:
+    Error("unexpected subblock record in preprocessor detail block");
+    return 0;
       
-      ReadPreprocessedEntitiesVisitor *This
-        = static_cast<ReadPreprocessedEntitiesVisitor *>(UserData);
+  case llvm::bitc::DEFINE_ABBREV:
+    Error("unexpected abbrevation record in preprocessor detail block");
+    return 0;
       
-      if (!M.PreprocessorDetailCursor.getBitStreamReader())
-        return false;
-      
-      SavedStreamPosition SavedPosition(M.PreprocessorDetailCursor);
-      M.PreprocessorDetailCursor.JumpToBit(M.PreprocessorDetailStartOffset);
-      while (This->Reader.LoadPreprocessedEntity(M)) { }
-      return false;
+  default:
+    break;
+  }
+
+  if (!PP.getPreprocessingRecord()) {
+    Error("no preprocessing record");
+    return 0;
+  }
+  
+  // Read the record.
+  SourceRange Range(ReadSourceLocation(M, PPOffs.Begin),
+                    ReadSourceLocation(M, PPOffs.End));
+  PreprocessingRecord &PPRec = *PP.getPreprocessingRecord();
+  const char *BlobStart = 0;
+  unsigned BlobLen = 0;
+  RecordData Record;
+  PreprocessorDetailRecordTypes RecType =
+    (PreprocessorDetailRecordTypes)M.PreprocessorDetailCursor.ReadRecord(
+                                             Code, Record, BlobStart, BlobLen);
+  switch (RecType) {
+  case PPD_MACRO_EXPANSION: {
+    bool isBuiltin = Record[0];
+    IdentifierInfo *Name = 0;
+    MacroDefinition *Def = 0;
+    if (isBuiltin)
+      Name = getLocalIdentifier(M, Record[1]);
+    else {
+      PreprocessedEntityID
+          GlobalID = getGlobalPreprocessedEntityID(M, Record[1]);
+      Def =cast<MacroDefinition>(PPRec.getLoadedPreprocessedEntity(GlobalID-1));
     }
-  };
+
+    MacroExpansion *ME;
+    if (isBuiltin)
+      ME = new (PPRec) MacroExpansion(Name, Range);
+    else
+      ME = new (PPRec) MacroExpansion(Def, Range);
+
+    return ME;
+  }
+      
+  case PPD_MACRO_DEFINITION: {
+    // Decode the identifier info and then check again; if the macro is
+    // still defined and associated with the identifier,
+    IdentifierInfo *II = getLocalIdentifier(M, Record[0]);
+    MacroDefinition *MD
+      = new (PPRec) MacroDefinition(II, Range);
+
+    if (DeserializationListener)
+      DeserializationListener->MacroDefinitionRead(PPID, MD);
+
+    return MD;
+  }
+      
+  case PPD_INCLUSION_DIRECTIVE: {
+    const char *FullFileNameStart = BlobStart + Record[0];
+    const FileEntry *File
+      = PP.getFileManager().getFile(StringRef(FullFileNameStart,
+                                               BlobLen - Record[0]));
+    
+    // FIXME: Stable encoding
+    InclusionDirective::InclusionKind Kind
+      = static_cast<InclusionDirective::InclusionKind>(Record[2]);
+    InclusionDirective *ID
+      = new (PPRec) InclusionDirective(PPRec, Kind,
+                                       StringRef(BlobStart, Record[0]),
+                                       Record[1],
+                                       File,
+                                       Range);
+    return ID;
+  }
+  }
+  
+  Error("invalid offset in preprocessor detail block");
+  return 0;
 }
 
-void ASTReader::ReadPreprocessedEntities() {
-  ReadPreprocessedEntitiesVisitor Visitor(*this);
-  ModuleMgr.visitDepthFirst(&ReadPreprocessedEntitiesVisitor::visit, &Visitor);
+/// \brief \arg SLocMapI points at a chunk of a module that contains no
+/// preprocessed entities or the entities it contains are not the ones we are
+/// looking for. Find the next module that contains entities and return the ID
+/// of the first entry.
+PreprocessedEntityID ASTReader::findNextPreprocessedEntity(
+                       GlobalSLocOffsetMapType::const_iterator SLocMapI) const {
+  ++SLocMapI;
+  for (GlobalSLocOffsetMapType::const_iterator
+         EndI = GlobalSLocOffsetMap.end(); SLocMapI != EndI; ++SLocMapI) {
+    Module &M = *SLocMapI->second;
+    if (M.NumPreprocessedEntities)
+      return getGlobalPreprocessedEntityID(M, M.BasePreprocessedEntityID);
+  }
+
+  return getTotalNumPreprocessedEntities();
 }
 
-PreprocessedEntity *ASTReader::ReadPreprocessedEntityAtOffset(uint64_t Offset) {
-  RecordLocation Loc = getLocalBitOffset(Offset);
+namespace {
 
-  // Keep track of where we are in the stream, then jump back there
-  // after reading this entity.
-  SavedStreamPosition SavedPosition(Loc.F->PreprocessorDetailCursor);  
-  Loc.F->PreprocessorDetailCursor.JumpToBit(Loc.Offset);
-  return LoadPreprocessedEntity(*Loc.F);
+template <unsigned PPEntityOffset::*PPLoc>
+struct PPEntityComp {
+  const ASTReader &Reader;
+  Module &M;
+
+  PPEntityComp(const ASTReader &Reader, Module &M) : Reader(Reader), M(M) { }
+
+  bool operator()(const PPEntityOffset &L, const PPEntityOffset &R) const {
+    SourceLocation LHS = getLoc(L);
+    SourceLocation RHS = getLoc(R);
+    return Reader.getSourceManager().isBeforeInTranslationUnit(LHS, RHS);
+  }
+
+  bool operator()(const PPEntityOffset &L, SourceLocation RHS) const {
+    SourceLocation LHS = getLoc(L);
+    return Reader.getSourceManager().isBeforeInTranslationUnit(LHS, RHS);
+  }
+
+  bool operator()(SourceLocation LHS, const PPEntityOffset &R) const {
+    SourceLocation RHS = getLoc(R);
+    return Reader.getSourceManager().isBeforeInTranslationUnit(LHS, RHS);
+  }
+
+  SourceLocation getLoc(const PPEntityOffset &PPE) const {
+    return Reader.ReadSourceLocation(M, PPE.*PPLoc);
+  }
+};
+
+}
+
+/// \brief Returns the first preprocessed entity ID that ends after \arg BLoc.
+PreprocessedEntityID
+ASTReader::findBeginPreprocessedEntity(SourceLocation BLoc) const {
+  if (SourceMgr.isLocalSourceLocation(BLoc))
+    return getTotalNumPreprocessedEntities();
+
+  GlobalSLocOffsetMapType::const_iterator
+    SLocMapI = GlobalSLocOffsetMap.find(SourceManager::MaxLoadedOffset -
+                                        BLoc.getOffset());
+  assert(SLocMapI != GlobalSLocOffsetMap.end() &&
+         "Corrupted global sloc offset map");
+
+  if (SLocMapI->second->NumPreprocessedEntities == 0)
+    return findNextPreprocessedEntity(SLocMapI);
+
+  Module &M = *SLocMapI->second;
+  typedef const PPEntityOffset *pp_iterator;
+  pp_iterator pp_begin = M.PreprocessedEntityOffsets;
+  pp_iterator pp_end = pp_begin + M.NumPreprocessedEntities;
+
+  size_t Count = M.NumPreprocessedEntities;
+  size_t Half;
+  pp_iterator First = pp_begin;
+  pp_iterator PPI;
+
+  // Do a binary search manually instead of using std::lower_bound because
+  // The end locations of entities may be unordered (when a macro expansion
+  // is inside another macro argument), but for this case it is not important
+  // whether we get the first macro expansion or its containing macro.
+  while (Count > 0) {
+    Half = Count/2;
+    PPI = First;
+    std::advance(PPI, Half);
+    if (SourceMgr.isBeforeInTranslationUnit(ReadSourceLocation(M, PPI->End),
+                                            BLoc)){
+      First = PPI;
+      ++First;
+      Count = Count - Half - 1;
+    } else
+      Count = Half;
+  }
+
+  if (PPI == pp_end)
+    return findNextPreprocessedEntity(SLocMapI);
+
+  return getGlobalPreprocessedEntityID(M,
+                                 M.BasePreprocessedEntityID + (PPI - pp_begin));
+}
+
+/// \brief Returns the first preprocessed entity ID that begins after \arg ELoc.
+PreprocessedEntityID
+ASTReader::findEndPreprocessedEntity(SourceLocation ELoc) const {
+  if (SourceMgr.isLocalSourceLocation(ELoc))
+    return getTotalNumPreprocessedEntities();
+
+  GlobalSLocOffsetMapType::const_iterator
+    SLocMapI = GlobalSLocOffsetMap.find(SourceManager::MaxLoadedOffset -
+                                        ELoc.getOffset());
+  assert(SLocMapI != GlobalSLocOffsetMap.end() &&
+         "Corrupted global sloc offset map");
+
+  if (SLocMapI->second->NumPreprocessedEntities == 0)
+    return findNextPreprocessedEntity(SLocMapI);
+
+  Module &M = *SLocMapI->second;
+  typedef const PPEntityOffset *pp_iterator;
+  pp_iterator pp_begin = M.PreprocessedEntityOffsets;
+  pp_iterator pp_end = pp_begin + M.NumPreprocessedEntities;
+  pp_iterator PPI =
+      std::upper_bound(pp_begin, pp_end, ELoc,
+                       PPEntityComp<&PPEntityOffset::Begin>(*this, M));
+
+  if (PPI == pp_end)
+    return findNextPreprocessedEntity(SLocMapI);
+
+  return getGlobalPreprocessedEntityID(M,
+                                 M.BasePreprocessedEntityID + (PPI - pp_begin));
+}
+
+/// \brief Returns a pair of [Begin, End) indices of preallocated
+/// preprocessed entities that \arg Range encompasses.
+std::pair<unsigned, unsigned>
+    ASTReader::findPreprocessedEntitiesInRange(SourceRange Range) {
+  if (Range.isInvalid())
+    return std::make_pair(0,0);
+  assert(!SourceMgr.isBeforeInTranslationUnit(Range.getEnd(),Range.getBegin()));
+
+  PreprocessedEntityID BeginID = findBeginPreprocessedEntity(Range.getBegin());
+  PreprocessedEntityID EndID = findEndPreprocessedEntity(Range.getEnd());
+  return std::make_pair(BeginID, EndID);
 }
 
 namespace {
@@ -3325,7 +3072,7 @@ HeaderFileInfo ASTReader::GetHeaderFileInfo(const FileEntry *FE) {
   return HeaderFileInfo();
 }
 
-void ASTReader::ReadPragmaDiagnosticMappings(Diagnostic &Diag) {
+void ASTReader::ReadPragmaDiagnosticMappings(DiagnosticsEngine &Diag) {
   for (ModuleIterator I = ModuleMgr.begin(), E = ModuleMgr.end(); I != E; ++I) {
     Module &F = *(*I);
     unsigned Idx = 0;
@@ -3343,6 +3090,7 @@ void ASTReader::ReadPragmaDiagnosticMappings(Diagnostic &Diag) {
           break; // no more diag/map pairs for this location.
         }
         diag::Mapping Map = (diag::Mapping)F.PragmaDiagMappings[Idx++];
+        // The user bit gets set by WritePragmaDiagnosticMappings.
         Diag.setDiagnosticMapping(DiagID, Map, Loc);
       }
     }
@@ -3388,7 +3136,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     }
     QualType Base = readType(*Loc.F, Record, Idx);
     Qualifiers Quals = Qualifiers::fromOpaqueValue(Record[Idx++]);
-    return Context->getQualifiedType(Base, Quals);
+    return Context.getQualifiedType(Base, Quals);
   }
 
   case TYPE_COMPLEX: {
@@ -3397,7 +3145,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType ElemType = readType(*Loc.F, Record, Idx);
-    return Context->getComplexType(ElemType);
+    return Context.getComplexType(ElemType);
   }
 
   case TYPE_POINTER: {
@@ -3406,7 +3154,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType PointeeType = readType(*Loc.F, Record, Idx);
-    return Context->getPointerType(PointeeType);
+    return Context.getPointerType(PointeeType);
   }
 
   case TYPE_BLOCK_POINTER: {
@@ -3415,7 +3163,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType PointeeType = readType(*Loc.F, Record, Idx);
-    return Context->getBlockPointerType(PointeeType);
+    return Context.getBlockPointerType(PointeeType);
   }
 
   case TYPE_LVALUE_REFERENCE: {
@@ -3424,7 +3172,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType PointeeType = readType(*Loc.F, Record, Idx);
-    return Context->getLValueReferenceType(PointeeType, Record[1]);
+    return Context.getLValueReferenceType(PointeeType, Record[1]);
   }
 
   case TYPE_RVALUE_REFERENCE: {
@@ -3433,7 +3181,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType PointeeType = readType(*Loc.F, Record, Idx);
-    return Context->getRValueReferenceType(PointeeType);
+    return Context.getRValueReferenceType(PointeeType);
   }
 
   case TYPE_MEMBER_POINTER: {
@@ -3446,7 +3194,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     if (PointeeType.isNull() || ClassType.isNull())
       return QualType();
     
-    return Context->getMemberPointerType(PointeeType, ClassType.getTypePtr());
+    return Context.getMemberPointerType(PointeeType, ClassType.getTypePtr());
   }
 
   case TYPE_CONSTANT_ARRAY: {
@@ -3455,7 +3203,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     unsigned IndexTypeQuals = Record[2];
     unsigned Idx = 3;
     llvm::APInt Size = ReadAPInt(Record, Idx);
-    return Context->getConstantArrayType(ElementType, Size,
+    return Context.getConstantArrayType(ElementType, Size,
                                          ASM, IndexTypeQuals);
   }
 
@@ -3463,7 +3211,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     QualType ElementType = readType(*Loc.F, Record, Idx);
     ArrayType::ArraySizeModifier ASM = (ArrayType::ArraySizeModifier)Record[1];
     unsigned IndexTypeQuals = Record[2];
-    return Context->getIncompleteArrayType(ElementType, ASM, IndexTypeQuals);
+    return Context.getIncompleteArrayType(ElementType, ASM, IndexTypeQuals);
   }
 
   case TYPE_VARIABLE_ARRAY: {
@@ -3472,7 +3220,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     unsigned IndexTypeQuals = Record[2];
     SourceLocation LBLoc = ReadSourceLocation(*Loc.F, Record[3]);
     SourceLocation RBLoc = ReadSourceLocation(*Loc.F, Record[4]);
-    return Context->getVariableArrayType(ElementType, ReadExpr(*Loc.F),
+    return Context.getVariableArrayType(ElementType, ReadExpr(*Loc.F),
                                          ASM, IndexTypeQuals,
                                          SourceRange(LBLoc, RBLoc));
   }
@@ -3486,7 +3234,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     QualType ElementType = readType(*Loc.F, Record, Idx);
     unsigned NumElements = Record[1];
     unsigned VecKind = Record[2];
-    return Context->getVectorType(ElementType, NumElements,
+    return Context.getVectorType(ElementType, NumElements,
                                   (VectorType::VectorKind)VecKind);
   }
 
@@ -3498,7 +3246,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
 
     QualType ElementType = readType(*Loc.F, Record, Idx);
     unsigned NumElements = Record[1];
-    return Context->getExtVectorType(ElementType, NumElements);
+    return Context.getExtVectorType(ElementType, NumElements);
   }
 
   case TYPE_FUNCTION_NO_PROTO: {
@@ -3509,7 +3257,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     QualType ResultType = readType(*Loc.F, Record, Idx);
     FunctionType::ExtInfo Info(Record[1], Record[2], Record[3],
                                (CallingConv)Record[4], Record[5]);
-    return Context->getFunctionNoProtoType(ResultType, Info);
+    return Context.getFunctionNoProtoType(ResultType, Info);
   }
 
   case TYPE_FUNCTION_PROTO: {
@@ -3543,13 +3291,13 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     } else if (EST == EST_ComputedNoexcept) {
       EPI.NoexceptExpr = ReadExpr(*Loc.F);
     }
-    return Context->getFunctionType(ResultType, ParamTypes.data(), NumParams,
+    return Context.getFunctionType(ResultType, ParamTypes.data(), NumParams,
                                     EPI);
   }
 
   case TYPE_UNRESOLVED_USING: {
     unsigned Idx = 0;
-    return Context->getTypeDeclType(
+    return Context.getTypeDeclType(
                   ReadDeclAs<UnresolvedUsingTypenameDecl>(*Loc.F, Record, Idx));
   }
       
@@ -3562,12 +3310,12 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     TypedefNameDecl *Decl = ReadDeclAs<TypedefNameDecl>(*Loc.F, Record, Idx);
     QualType Canonical = readType(*Loc.F, Record, Idx);
     if (!Canonical.isNull())
-      Canonical = Context->getCanonicalType(Canonical);
-    return Context->getTypedefType(Decl, Canonical);
+      Canonical = Context.getCanonicalType(Canonical);
+    return Context.getTypedefType(Decl, Canonical);
   }
 
   case TYPE_TYPEOF_EXPR:
-    return Context->getTypeOfExprType(ReadExpr(*Loc.F));
+    return Context.getTypeOfExprType(ReadExpr(*Loc.F));
 
   case TYPE_TYPEOF: {
     if (Record.size() != 1) {
@@ -3575,21 +3323,21 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType UnderlyingType = readType(*Loc.F, Record, Idx);
-    return Context->getTypeOfType(UnderlyingType);
+    return Context.getTypeOfType(UnderlyingType);
   }
 
   case TYPE_DECLTYPE:
-    return Context->getDecltypeType(ReadExpr(*Loc.F));
+    return Context.getDecltypeType(ReadExpr(*Loc.F));
 
   case TYPE_UNARY_TRANSFORM: {
     QualType BaseType = readType(*Loc.F, Record, Idx);
     QualType UnderlyingType = readType(*Loc.F, Record, Idx);
     UnaryTransformType::UTTKind UKind = (UnaryTransformType::UTTKind)Record[2];
-    return Context->getUnaryTransformType(BaseType, UnderlyingType, UKind);
+    return Context.getUnaryTransformType(BaseType, UnderlyingType, UKind);
   }
 
   case TYPE_AUTO:
-    return Context->getAutoType(readType(*Loc.F, Record, Idx));
+    return Context.getAutoType(readType(*Loc.F, Record, Idx));
 
   case TYPE_RECORD: {
     if (Record.size() != 2) {
@@ -3599,7 +3347,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     unsigned Idx = 0;
     bool IsDependent = Record[Idx++];
     QualType T
-      = Context->getRecordType(ReadDeclAs<RecordDecl>(*Loc.F, Record, Idx));
+      = Context.getRecordType(ReadDeclAs<RecordDecl>(*Loc.F, Record, Idx));
     const_cast<Type*>(T.getTypePtr())->setDependent(IsDependent);
     return T;
   }
@@ -3612,7 +3360,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     unsigned Idx = 0;
     bool IsDependent = Record[Idx++];
     QualType T
-      = Context->getEnumType(ReadDeclAs<EnumDecl>(*Loc.F, Record, Idx));
+      = Context.getEnumType(ReadDeclAs<EnumDecl>(*Loc.F, Record, Idx));
     const_cast<Type*>(T.getTypePtr())->setDependent(IsDependent);
     return T;
   }
@@ -3625,7 +3373,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     QualType modifiedType = readType(*Loc.F, Record, Idx);
     QualType equivalentType = readType(*Loc.F, Record, Idx);
     AttributedType::Kind kind = static_cast<AttributedType::Kind>(Record[2]);
-    return Context->getAttributedType(kind, modifiedType, equivalentType);
+    return Context.getAttributedType(kind, modifiedType, equivalentType);
   }
 
   case TYPE_PAREN: {
@@ -3634,7 +3382,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
       return QualType();
     }
     QualType InnerType = readType(*Loc.F, Record, Idx);
-    return Context->getParenType(InnerType);
+    return Context.getParenType(InnerType);
   }
 
   case TYPE_PACK_EXPANSION: {
@@ -3648,7 +3396,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     llvm::Optional<unsigned> NumExpansions;
     if (Record[1])
       NumExpansions = Record[1] - 1;
-    return Context->getPackExpansionType(Pattern, NumExpansions);
+    return Context.getPackExpansionType(Pattern, NumExpansions);
   }
 
   case TYPE_ELABORATED: {
@@ -3656,14 +3404,14 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     ElaboratedTypeKeyword Keyword = (ElaboratedTypeKeyword)Record[Idx++];
     NestedNameSpecifier *NNS = ReadNestedNameSpecifier(*Loc.F, Record, Idx);
     QualType NamedType = readType(*Loc.F, Record, Idx);
-    return Context->getElaboratedType(Keyword, NNS, NamedType);
+    return Context.getElaboratedType(Keyword, NNS, NamedType);
   }
 
   case TYPE_OBJC_INTERFACE: {
     unsigned Idx = 0;
     ObjCInterfaceDecl *ItfD
       = ReadDeclAs<ObjCInterfaceDecl>(*Loc.F, Record, Idx);
-    return Context->getObjCInterfaceType(ItfD);
+    return Context.getObjCInterfaceType(ItfD);
   }
 
   case TYPE_OBJC_OBJECT: {
@@ -3673,13 +3421,13 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     SmallVector<ObjCProtocolDecl*, 4> Protos;
     for (unsigned I = 0; I != NumProtos; ++I)
       Protos.push_back(ReadDeclAs<ObjCProtocolDecl>(*Loc.F, Record, Idx));
-    return Context->getObjCObjectType(Base, Protos.data(), NumProtos);
+    return Context.getObjCObjectType(Base, Protos.data(), NumProtos);
   }
 
   case TYPE_OBJC_OBJECT_POINTER: {
     unsigned Idx = 0;
     QualType Pointee = readType(*Loc.F, Record, Idx);
-    return Context->getObjCObjectPointerType(Pointee);
+    return Context.getObjCObjectPointerType(Pointee);
   }
 
   case TYPE_SUBST_TEMPLATE_TYPE_PARM: {
@@ -3687,7 +3435,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     QualType Parm = readType(*Loc.F, Record, Idx);
     QualType Replacement = readType(*Loc.F, Record, Idx);
     return
-      Context->getSubstTemplateTypeParmType(cast<TemplateTypeParmType>(Parm),
+      Context.getSubstTemplateTypeParmType(cast<TemplateTypeParmType>(Parm),
                                             Replacement);
   }
 
@@ -3695,7 +3443,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     unsigned Idx = 0;
     QualType Parm = readType(*Loc.F, Record, Idx);
     TemplateArgument ArgPack = ReadTemplateArgument(*Loc.F, Record, Idx);
-    return Context->getSubstTemplateTypeParmPackType(
+    return Context.getSubstTemplateTypeParmPackType(
                                                cast<TemplateTypeParmType>(Parm),
                                                      ArgPack);
   }
@@ -3706,7 +3454,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     // FIXME: ASTContext::getInjectedClassNameType is not currently suitable
     // for AST reading, too much interdependencies.
     return
-      QualType(new (*Context, TypeAlignment) InjectedClassNameType(D, TST), 0);
+      QualType(new (Context, TypeAlignment) InjectedClassNameType(D, TST), 0);
   }
 
   case TYPE_TEMPLATE_TYPE_PARM: {
@@ -3716,7 +3464,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     bool Pack = Record[Idx++];
     TemplateTypeParmDecl *D
       = ReadDeclAs<TemplateTypeParmDecl>(*Loc.F, Record, Idx);
-    return Context->getTemplateTypeParmType(Depth, Index, Pack, D);
+    return Context.getTemplateTypeParmType(Depth, Index, Pack, D);
   }
 
   case TYPE_DEPENDENT_NAME: {
@@ -3726,8 +3474,8 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     const IdentifierInfo *Name = this->GetIdentifierInfo(*Loc.F, Record, Idx);
     QualType Canon = readType(*Loc.F, Record, Idx);
     if (!Canon.isNull())
-      Canon = Context->getCanonicalType(Canon);
-    return Context->getDependentNameType(Keyword, NNS, Name, Canon);
+      Canon = Context.getCanonicalType(Canon);
+    return Context.getDependentNameType(Keyword, NNS, Name, Canon);
   }
 
   case TYPE_DEPENDENT_TEMPLATE_SPECIALIZATION: {
@@ -3740,7 +3488,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     Args.reserve(NumArgs);
     while (NumArgs--)
       Args.push_back(ReadTemplateArgument(*Loc.F, Record, Idx));
-    return Context->getDependentTemplateSpecializationType(Keyword, NNS, Name,
+    return Context.getDependentTemplateSpecializationType(Keyword, NNS, Name,
                                                       Args.size(), Args.data());
   }
 
@@ -3757,7 +3505,7 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     Expr *NumElts = ReadExpr(*Loc.F);
     SourceRange Brackets = ReadSourceRange(*Loc.F, Record, Idx);
 
-    return Context->getDependentSizedArrayType(ElementType, NumElts, ASM,
+    return Context.getDependentSizedArrayType(ElementType, NumElts, ASM,
                                                IndexTypeQuals, Brackets);
   }
 
@@ -3770,10 +3518,10 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     QualType Underlying = readType(*Loc.F, Record, Idx);
     QualType T;
     if (Underlying.isNull())
-      T = Context->getCanonicalTemplateSpecializationType(Name, Args.data(),
+      T = Context.getCanonicalTemplateSpecializationType(Name, Args.data(),
                                                           Args.size());
     else
-      T = Context->getTemplateSpecializationType(Name, Args.data(),
+      T = Context.getTemplateSpecializationType(Name, Args.data(),
                                                  Args.size(), Underlying);
     const_cast<Type*>(T.getTypePtr())->setDependent(IsDependent);
     return T;
@@ -4020,7 +3768,7 @@ TypeSourceInfo *ASTReader::GetTypeSourceInfo(Module &F,
   if (InfoTy.isNull())
     return 0;
 
-  TypeSourceInfo *TInfo = getContext()->CreateTypeSourceInfo(InfoTy);
+  TypeSourceInfo *TInfo = getContext().CreateTypeSourceInfo(InfoTy);
   TypeLocReader TLR(*this, F, Record, Idx);
   for (TypeLoc TL = TInfo->getTypeLoc(); !TL.isNull(); TL = TL.getNextTypeLoc())
     TLR.Visit(TL);
@@ -4035,45 +3783,45 @@ QualType ASTReader::GetType(TypeID ID) {
     QualType T;
     switch ((PredefinedTypeIDs)Index) {
     case PREDEF_TYPE_NULL_ID: return QualType();
-    case PREDEF_TYPE_VOID_ID: T = Context->VoidTy; break;
-    case PREDEF_TYPE_BOOL_ID: T = Context->BoolTy; break;
+    case PREDEF_TYPE_VOID_ID: T = Context.VoidTy; break;
+    case PREDEF_TYPE_BOOL_ID: T = Context.BoolTy; break;
 
     case PREDEF_TYPE_CHAR_U_ID:
     case PREDEF_TYPE_CHAR_S_ID:
       // FIXME: Check that the signedness of CharTy is correct!
-      T = Context->CharTy;
+      T = Context.CharTy;
       break;
 
-    case PREDEF_TYPE_UCHAR_ID:      T = Context->UnsignedCharTy;     break;
-    case PREDEF_TYPE_USHORT_ID:     T = Context->UnsignedShortTy;    break;
-    case PREDEF_TYPE_UINT_ID:       T = Context->UnsignedIntTy;      break;
-    case PREDEF_TYPE_ULONG_ID:      T = Context->UnsignedLongTy;     break;
-    case PREDEF_TYPE_ULONGLONG_ID:  T = Context->UnsignedLongLongTy; break;
-    case PREDEF_TYPE_UINT128_ID:    T = Context->UnsignedInt128Ty;   break;
-    case PREDEF_TYPE_SCHAR_ID:      T = Context->SignedCharTy;       break;
-    case PREDEF_TYPE_WCHAR_ID:      T = Context->WCharTy;            break;
-    case PREDEF_TYPE_SHORT_ID:      T = Context->ShortTy;            break;
-    case PREDEF_TYPE_INT_ID:        T = Context->IntTy;              break;
-    case PREDEF_TYPE_LONG_ID:       T = Context->LongTy;             break;
-    case PREDEF_TYPE_LONGLONG_ID:   T = Context->LongLongTy;         break;
-    case PREDEF_TYPE_INT128_ID:     T = Context->Int128Ty;           break;
-    case PREDEF_TYPE_FLOAT_ID:      T = Context->FloatTy;            break;
-    case PREDEF_TYPE_DOUBLE_ID:     T = Context->DoubleTy;           break;
-    case PREDEF_TYPE_LONGDOUBLE_ID: T = Context->LongDoubleTy;       break;
-    case PREDEF_TYPE_OVERLOAD_ID:   T = Context->OverloadTy;         break;
-    case PREDEF_TYPE_BOUND_MEMBER:  T = Context->BoundMemberTy;      break;
-    case PREDEF_TYPE_DEPENDENT_ID:  T = Context->DependentTy;        break;
-    case PREDEF_TYPE_UNKNOWN_ANY:   T = Context->UnknownAnyTy;       break;
-    case PREDEF_TYPE_NULLPTR_ID:    T = Context->NullPtrTy;          break;
-    case PREDEF_TYPE_CHAR16_ID:     T = Context->Char16Ty;           break;
-    case PREDEF_TYPE_CHAR32_ID:     T = Context->Char32Ty;           break;
-    case PREDEF_TYPE_OBJC_ID:       T = Context->ObjCBuiltinIdTy;    break;
-    case PREDEF_TYPE_OBJC_CLASS:    T = Context->ObjCBuiltinClassTy; break;
-    case PREDEF_TYPE_OBJC_SEL:      T = Context->ObjCBuiltinSelTy;   break;
-    case PREDEF_TYPE_AUTO_DEDUCT:   T = Context->getAutoDeductType(); break;
+    case PREDEF_TYPE_UCHAR_ID:      T = Context.UnsignedCharTy;     break;
+    case PREDEF_TYPE_USHORT_ID:     T = Context.UnsignedShortTy;    break;
+    case PREDEF_TYPE_UINT_ID:       T = Context.UnsignedIntTy;      break;
+    case PREDEF_TYPE_ULONG_ID:      T = Context.UnsignedLongTy;     break;
+    case PREDEF_TYPE_ULONGLONG_ID:  T = Context.UnsignedLongLongTy; break;
+    case PREDEF_TYPE_UINT128_ID:    T = Context.UnsignedInt128Ty;   break;
+    case PREDEF_TYPE_SCHAR_ID:      T = Context.SignedCharTy;       break;
+    case PREDEF_TYPE_WCHAR_ID:      T = Context.WCharTy;            break;
+    case PREDEF_TYPE_SHORT_ID:      T = Context.ShortTy;            break;
+    case PREDEF_TYPE_INT_ID:        T = Context.IntTy;              break;
+    case PREDEF_TYPE_LONG_ID:       T = Context.LongTy;             break;
+    case PREDEF_TYPE_LONGLONG_ID:   T = Context.LongLongTy;         break;
+    case PREDEF_TYPE_INT128_ID:     T = Context.Int128Ty;           break;
+    case PREDEF_TYPE_FLOAT_ID:      T = Context.FloatTy;            break;
+    case PREDEF_TYPE_DOUBLE_ID:     T = Context.DoubleTy;           break;
+    case PREDEF_TYPE_LONGDOUBLE_ID: T = Context.LongDoubleTy;       break;
+    case PREDEF_TYPE_OVERLOAD_ID:   T = Context.OverloadTy;         break;
+    case PREDEF_TYPE_BOUND_MEMBER:  T = Context.BoundMemberTy;      break;
+    case PREDEF_TYPE_DEPENDENT_ID:  T = Context.DependentTy;        break;
+    case PREDEF_TYPE_UNKNOWN_ANY:   T = Context.UnknownAnyTy;       break;
+    case PREDEF_TYPE_NULLPTR_ID:    T = Context.NullPtrTy;          break;
+    case PREDEF_TYPE_CHAR16_ID:     T = Context.Char16Ty;           break;
+    case PREDEF_TYPE_CHAR32_ID:     T = Context.Char32Ty;           break;
+    case PREDEF_TYPE_OBJC_ID:       T = Context.ObjCBuiltinIdTy;    break;
+    case PREDEF_TYPE_OBJC_CLASS:    T = Context.ObjCBuiltinClassTy; break;
+    case PREDEF_TYPE_OBJC_SEL:      T = Context.ObjCBuiltinSelTy;   break;
+    case PREDEF_TYPE_AUTO_DEDUCT:   T = Context.getAutoDeductType(); break;
         
     case PREDEF_TYPE_AUTO_RREF_DEDUCT: 
-      T = Context->getAutoRRefDeductType(); 
+      T = Context.getAutoRRefDeductType(); 
       break;
     }
 
@@ -4194,7 +3942,7 @@ CXXBaseSpecifier *ASTReader::GetExternalCXXBaseSpecifiers(uint64_t Offset) {
 
   unsigned Idx = 0;
   unsigned NumBases = Record[Idx++];
-  void *Mem = Context->Allocate(sizeof(CXXBaseSpecifier) * NumBases);
+  void *Mem = Context.Allocate(sizeof(CXXBaseSpecifier) * NumBases);
   CXXBaseSpecifier *Bases = new (Mem) CXXBaseSpecifier [NumBases];
   for (unsigned I = 0; I != NumBases; ++I)
     Bases[I] = ReadCXXBaseSpecifier(*Loc.F, Record, Idx);
@@ -4213,6 +3961,13 @@ ASTReader::getGlobalDeclID(Module &F, unsigned LocalID) const {
   return LocalID + I->second;
 }
 
+bool ASTReader::isDeclIDFromModule(serialization::GlobalDeclID ID,
+                                   Module &M) const {
+  GlobalDeclMapType::const_iterator I = GlobalDeclMap.find(ID);
+  assert(I != GlobalDeclMap.end() && "Corrupted global declaration map");
+  return &M == I->second;
+}
+
 Decl *ASTReader::GetDecl(DeclID ID) {
   if (ID < NUM_PREDEF_DECL_IDS) {    
     switch ((PredefinedDeclIDs)ID) {
@@ -4220,28 +3975,25 @@ Decl *ASTReader::GetDecl(DeclID ID) {
       return 0;
         
     case PREDEF_DECL_TRANSLATION_UNIT_ID:
-      assert(Context && "No context available?");
-      return Context->getTranslationUnitDecl();
+      return Context.getTranslationUnitDecl();
         
     case PREDEF_DECL_OBJC_ID_ID:
-      assert(Context && "No context available?");
-      return Context->getObjCIdDecl();
+      return Context.getObjCIdDecl();
 
     case PREDEF_DECL_OBJC_SEL_ID:
-      assert(Context && "No context available?");
-      return Context->getObjCSelDecl();
+      return Context.getObjCSelDecl();
 
     case PREDEF_DECL_OBJC_CLASS_ID:
-      assert(Context && "No context available?");
-      return Context->getObjCClassDecl();
+      return Context.getObjCClassDecl();
         
     case PREDEF_DECL_INT_128_ID:
-      assert(Context && "No context available?");
-      return Context->getInt128Decl();
+      return Context.getInt128Decl();
 
     case PREDEF_DECL_UNSIGNED_INT_128_ID:
-      assert(Context && "No context available?");
-      return Context->getUInt128Decl();
+      return Context.getUInt128Decl();
+        
+    case PREDEF_DECL_OBJC_INSTANCETYPE_ID:
+      return Context.getObjCInstanceTypeDecl();
     }
     
     return 0;
@@ -4294,6 +4046,7 @@ namespace {
     ASTReader &Reader;
     const DeclContext *DC;
     bool (*isKindWeWant)(Decl::Kind);
+    
     SmallVectorImpl<Decl*> &Decls;
     bool PredefsVisited[NUM_PREDEF_DECL_IDS];
 
@@ -4335,9 +4088,10 @@ namespace {
           This->PredefsVisited[ID->second] = true;
         }
 
-        Decl *D = This->Reader.GetLocalDecl(M, ID->second);
-        assert(D && "Null decl in lexical decls");
-        This->Decls.push_back(D);
+        if (Decl *D = This->Reader.GetLocalDecl(M, ID->second)) {
+          if (!This->DC->isDeclInLexicalTraversal(D))
+            This->Decls.push_back(D);
+        }
       }
 
       return false;
@@ -4430,12 +4184,31 @@ ASTReader::FindExternalVisibleDeclsByName(const DeclContext *DC,
   return const_cast<DeclContext*>(DC)->lookup(Name);
 }
 
+/// \brief Under non-PCH compilation the consumer receives the objc methods
+/// before receiving the implementation, and codegen depends on this.
+/// We simulate this by deserializing and passing to consumer the methods of the
+/// implementation before passing the deserialized implementation decl.
+static void PassObjCImplDeclToConsumer(ObjCImplDecl *ImplD,
+                                       ASTConsumer *Consumer) {
+  assert(ImplD && Consumer);
+
+  for (ObjCImplDecl::method_iterator
+         I = ImplD->meth_begin(), E = ImplD->meth_end(); I != E; ++I)
+    Consumer->HandleInterestingDecl(DeclGroupRef(*I));
+
+  Consumer->HandleInterestingDecl(DeclGroupRef(ImplD));
+}
+
 void ASTReader::PassInterestingDeclsToConsumer() {
   assert(Consumer);
   while (!InterestingDecls.empty()) {
-    DeclGroupRef DG(InterestingDecls.front());
+    Decl *D = InterestingDecls.front();
     InterestingDecls.pop_front();
-    Consumer->HandleInterestingDecl(DG);
+
+    if (ObjCImplDecl *ImplD = dyn_cast<ObjCImplDecl>(D))
+      PassObjCImplDeclToConsumer(ImplD, Consumer);
+    else
+      Consumer->HandleInterestingDecl(DeclGroupRef(D));
   }
 }
 
@@ -4450,6 +4223,7 @@ void ASTReader::StartTranslationUnit(ASTConsumer *Consumer) {
     // passing to the consumer.
     GetDecl(ExternalDefinitions[I]);
   }
+  ExternalDefinitions.clear();
 
   PassInterestingDeclsToConsumer();
 }
@@ -4549,7 +4323,6 @@ void ASTReader::dump() {
   dumpModuleIDMap("Global declaration map", GlobalDeclMap);
   dumpModuleIDMap("Global identifier map", GlobalIdentifierMap);
   dumpModuleIDMap("Global selector map", GlobalSelectorMap);
-  dumpModuleIDMap("Global macro definition map", GlobalMacroDefinitionMap);
   dumpModuleIDMap("Global preprocessed entity map", 
                   GlobalPreprocessedEntityMap);
   
@@ -4615,42 +4388,6 @@ void ASTReader::InitializeSema(Sema &S) {
 
     assert(OpenCLExtensions.size() == I && "Wrong number of OPENCL_EXTENSIONS");
   }
-}
-
-namespace {
-  /// \brief Visitor class used to look up identifirs in 
-  class IdentifierLookupVisitor {
-    StringRef Name;
-    IdentifierInfo *Found;
-  public:
-    explicit IdentifierLookupVisitor(StringRef Name) : Name(Name), Found() { }
-
-    static bool visit(Module &M, void *UserData) {
-      IdentifierLookupVisitor *This
-        = static_cast<IdentifierLookupVisitor *>(UserData);
-      
-      ASTIdentifierLookupTable *IdTable
-        = (ASTIdentifierLookupTable *)M.IdentifierLookupTable;
-      if (!IdTable)
-        return false;
-
-      std::pair<const char*, unsigned> Key(This->Name.begin(), 
-                                           This->Name.size());
-      ASTIdentifierLookupTable::iterator Pos = IdTable->find(Key);
-      if (Pos == IdTable->end())
-        return false;
-
-      // Dereferencing the iterator has the effect of building the
-      // IdentifierInfo node and populating it with the various
-      // declarations it needs.
-      This->Found = *Pos;
-      return true;
-    }
-
-    // \brief Retrieve the identifier info found within the module
-    // files.
-    IdentifierInfo *getIdentifierInfo() const { return Found; }
-  };
 }
 
 IdentifierInfo* ASTReader::get(const char *NameStart, const char *NameEnd) {
@@ -5010,7 +4747,6 @@ IdentifierInfo *ASTReader::DecodeIdentifierInfo(IdentifierID ID) {
     return 0;
   }
 
-  assert(PP && "Forgot to set Preprocessor ?");
   ID -= 1;
   if (!IdentifiersLoaded[ID]) {
     GlobalIdentifierMapType::iterator I = GlobalIdentifierMap.find(ID + 1);
@@ -5028,7 +4764,7 @@ IdentifierInfo *ASTReader::DecodeIdentifierInfo(IdentifierID ID) {
     unsigned StrLen = (((unsigned) StrLenPtr[0])
                        | (((unsigned) StrLenPtr[1]) << 8)) - 1;
     IdentifiersLoaded[ID]
-      = &PP->getIdentifierTable().get(StringRef(Str, StrLen));
+      = &PP.getIdentifierTable().get(StringRef(Str, StrLen));
     if (DeserializationListener)
       DeserializationListener->IdentifierRead(ID + 1, IdentifiersLoaded[ID]);
   }
@@ -5121,23 +4857,23 @@ ASTReader::ReadDeclarationName(Module &F,
     return DeclarationName(ReadSelector(F, Record, Idx));
 
   case DeclarationName::CXXConstructorName:
-    return Context->DeclarationNames.getCXXConstructorName(
-                          Context->getCanonicalType(readType(F, Record, Idx)));
+    return Context.DeclarationNames.getCXXConstructorName(
+                          Context.getCanonicalType(readType(F, Record, Idx)));
 
   case DeclarationName::CXXDestructorName:
-    return Context->DeclarationNames.getCXXDestructorName(
-                          Context->getCanonicalType(readType(F, Record, Idx)));
+    return Context.DeclarationNames.getCXXDestructorName(
+                          Context.getCanonicalType(readType(F, Record, Idx)));
 
   case DeclarationName::CXXConversionFunctionName:
-    return Context->DeclarationNames.getCXXConversionFunctionName(
-                          Context->getCanonicalType(readType(F, Record, Idx)));
+    return Context.DeclarationNames.getCXXConversionFunctionName(
+                          Context.getCanonicalType(readType(F, Record, Idx)));
 
   case DeclarationName::CXXOperatorName:
-    return Context->DeclarationNames.getCXXOperatorName(
+    return Context.DeclarationNames.getCXXOperatorName(
                                        (OverloadedOperatorKind)Record[Idx++]);
 
   case DeclarationName::CXXLiteralOperatorName:
-    return Context->DeclarationNames.getCXXLiteralOperatorName(
+    return Context.DeclarationNames.getCXXLiteralOperatorName(
                                        GetIdentifierInfo(F, Record, Idx));
 
   case DeclarationName::CXXUsingDirective:
@@ -5196,7 +4932,7 @@ void ASTReader::ReadQualifierInfo(Module &F, QualifierInfo &Info,
   unsigned NumTPLists = Record[Idx++];
   Info.NumTemplParamLists = NumTPLists;
   if (NumTPLists) {
-    Info.TemplParamLists = new (*Context) TemplateParameterList*[NumTPLists];
+    Info.TemplParamLists = new (Context) TemplateParameterList*[NumTPLists];
     for (unsigned i=0; i != NumTPLists; ++i)
       Info.TemplParamLists[i] = ReadTemplateParameterList(F, Record, Idx);
   }
@@ -5216,23 +4952,23 @@ ASTReader::ReadTemplateName(Module &F, const RecordData &Record,
     while (size--)
       Decls.addDecl(ReadDeclAs<NamedDecl>(F, Record, Idx));
 
-    return Context->getOverloadedTemplateName(Decls.begin(), Decls.end());
+    return Context.getOverloadedTemplateName(Decls.begin(), Decls.end());
   }
 
   case TemplateName::QualifiedTemplate: {
     NestedNameSpecifier *NNS = ReadNestedNameSpecifier(F, Record, Idx);
     bool hasTemplKeyword = Record[Idx++];
     TemplateDecl *Template = ReadDeclAs<TemplateDecl>(F, Record, Idx);
-    return Context->getQualifiedTemplateName(NNS, hasTemplKeyword, Template);
+    return Context.getQualifiedTemplateName(NNS, hasTemplKeyword, Template);
   }
 
   case TemplateName::DependentTemplate: {
     NestedNameSpecifier *NNS = ReadNestedNameSpecifier(F, Record, Idx);
     if (Record[Idx++])  // isIdentifier
-      return Context->getDependentTemplateName(NNS,
+      return Context.getDependentTemplateName(NNS,
                                                GetIdentifierInfo(F, Record, 
                                                                  Idx));
-    return Context->getDependentTemplateName(NNS,
+    return Context.getDependentTemplateName(NNS,
                                          (OverloadedOperatorKind)Record[Idx++]);
   }
 
@@ -5241,7 +4977,7 @@ ASTReader::ReadTemplateName(Module &F, const RecordData &Record,
       = ReadDeclAs<TemplateTemplateParmDecl>(F, Record, Idx);
     if (!param) return TemplateName();
     TemplateName replacement = ReadTemplateName(F, Record, Idx);
-    return Context->getSubstTemplateTemplateParm(param, replacement);
+    return Context.getSubstTemplateTemplateParm(param, replacement);
   }
       
   case TemplateName::SubstTemplateTemplateParmPack: {
@@ -5254,12 +4990,11 @@ ASTReader::ReadTemplateName(Module &F, const RecordData &Record,
     if (ArgPack.getKind() != TemplateArgument::Pack)
       return TemplateName();
     
-    return Context->getSubstTemplateTemplateParmPack(Param, ArgPack);
+    return Context.getSubstTemplateTemplateParmPack(Param, ArgPack);
   }
   }
 
-  assert(0 && "Unhandled template name kind!");
-  return TemplateName();
+  llvm_unreachable("Unhandled template name kind!");
 }
 
 TemplateArgument
@@ -5291,15 +5026,14 @@ ASTReader::ReadTemplateArgument(Module &F,
     return TemplateArgument(ReadExpr(F));
   case TemplateArgument::Pack: {
     unsigned NumArgs = Record[Idx++];
-    TemplateArgument *Args = new (*Context) TemplateArgument[NumArgs];
+    TemplateArgument *Args = new (Context) TemplateArgument[NumArgs];
     for (unsigned I = 0; I != NumArgs; ++I)
       Args[I] = ReadTemplateArgument(F, Record, Idx);
     return TemplateArgument(Args, NumArgs);
   }
   }
 
-  assert(0 && "Unhandled template argument kind!");
-  return TemplateArgument();
+  llvm_unreachable("Unhandled template argument kind!");
 }
 
 TemplateParameterList *
@@ -5316,7 +5050,7 @@ ASTReader::ReadTemplateParameterList(Module &F,
     Params.push_back(ReadDeclAs<NamedDecl>(F, Record, Idx));
 
   TemplateParameterList* TemplateParams =
-    TemplateParameterList::Create(*Context, TemplateLoc, LAngleLoc,
+    TemplateParameterList::Create(Context, TemplateLoc, LAngleLoc,
                                   Params.data(), Params.size(), RAngleLoc);
   return TemplateParams;
 }
@@ -5365,10 +5099,8 @@ ASTReader::ReadCXXCtorInitializers(Module &F, const RecordData &Record,
   CXXCtorInitializer **CtorInitializers = 0;
   unsigned NumInitializers = Record[Idx++];
   if (NumInitializers) {
-    ASTContext &C = *getContext();
-
     CtorInitializers
-        = new (C) CXXCtorInitializer*[NumInitializers];
+        = new (Context) CXXCtorInitializer*[NumInitializers];
     for (unsigned i=0; i != NumInitializers; ++i) {
       TypeSourceInfo *BaseClassInfo = 0;
       bool IsBaseVirtual = false;
@@ -5414,22 +5146,22 @@ ASTReader::ReadCXXCtorInitializers(Module &F, const RecordData &Record,
 
       CXXCtorInitializer *BOMInit;
       if (Type == CTOR_INITIALIZER_BASE) {
-        BOMInit = new (C) CXXCtorInitializer(C, BaseClassInfo, IsBaseVirtual,
+        BOMInit = new (Context) CXXCtorInitializer(Context, BaseClassInfo, IsBaseVirtual,
                                              LParenLoc, Init, RParenLoc,
                                              MemberOrEllipsisLoc);
       } else if (Type == CTOR_INITIALIZER_DELEGATING) {
-        BOMInit = new (C) CXXCtorInitializer(C, MemberOrEllipsisLoc, LParenLoc,
+        BOMInit = new (Context) CXXCtorInitializer(Context, MemberOrEllipsisLoc, LParenLoc,
                                              Target, Init, RParenLoc);
       } else if (IsWritten) {
         if (Member)
-          BOMInit = new (C) CXXCtorInitializer(C, Member, MemberOrEllipsisLoc,
+          BOMInit = new (Context) CXXCtorInitializer(Context, Member, MemberOrEllipsisLoc,
                                                LParenLoc, Init, RParenLoc);
         else 
-          BOMInit = new (C) CXXCtorInitializer(C, IndirectMember,
+          BOMInit = new (Context) CXXCtorInitializer(Context, IndirectMember,
                                                MemberOrEllipsisLoc, LParenLoc,
                                                Init, RParenLoc);
       } else {
-        BOMInit = CXXCtorInitializer::Create(C, Member, MemberOrEllipsisLoc,
+        BOMInit = CXXCtorInitializer::Create(Context, Member, MemberOrEllipsisLoc,
                                              LParenLoc, Init, RParenLoc,
                                              Indices.data(), Indices.size());
       }
@@ -5454,19 +5186,19 @@ ASTReader::ReadNestedNameSpecifier(Module &F,
     switch (Kind) {
     case NestedNameSpecifier::Identifier: {
       IdentifierInfo *II = GetIdentifierInfo(F, Record, Idx);
-      NNS = NestedNameSpecifier::Create(*Context, Prev, II);
+      NNS = NestedNameSpecifier::Create(Context, Prev, II);
       break;
     }
 
     case NestedNameSpecifier::Namespace: {
       NamespaceDecl *NS = ReadDeclAs<NamespaceDecl>(F, Record, Idx);
-      NNS = NestedNameSpecifier::Create(*Context, Prev, NS);
+      NNS = NestedNameSpecifier::Create(Context, Prev, NS);
       break;
     }
 
     case NestedNameSpecifier::NamespaceAlias: {
       NamespaceAliasDecl *Alias =ReadDeclAs<NamespaceAliasDecl>(F, Record, Idx);
-      NNS = NestedNameSpecifier::Create(*Context, Prev, Alias);
+      NNS = NestedNameSpecifier::Create(Context, Prev, Alias);
       break;
     }
 
@@ -5477,12 +5209,12 @@ ASTReader::ReadNestedNameSpecifier(Module &F,
         return 0;
       
       bool Template = Record[Idx++];
-      NNS = NestedNameSpecifier::Create(*Context, Prev, Template, T);
+      NNS = NestedNameSpecifier::Create(Context, Prev, Template, T);
       break;
     }
 
     case NestedNameSpecifier::Global: {
-      NNS = NestedNameSpecifier::GlobalSpecifier(*Context);
+      NNS = NestedNameSpecifier::GlobalSpecifier(Context);
       // No associated value, and there can't be a prefix.
       break;
     }
@@ -5504,21 +5236,21 @@ ASTReader::ReadNestedNameSpecifierLoc(Module &F, const RecordData &Record,
     case NestedNameSpecifier::Identifier: {
       IdentifierInfo *II = GetIdentifierInfo(F, Record, Idx);      
       SourceRange Range = ReadSourceRange(F, Record, Idx);
-      Builder.Extend(*Context, II, Range.getBegin(), Range.getEnd());
+      Builder.Extend(Context, II, Range.getBegin(), Range.getEnd());
       break;
     }
 
     case NestedNameSpecifier::Namespace: {
       NamespaceDecl *NS = ReadDeclAs<NamespaceDecl>(F, Record, Idx);
       SourceRange Range = ReadSourceRange(F, Record, Idx);
-      Builder.Extend(*Context, NS, Range.getBegin(), Range.getEnd());
+      Builder.Extend(Context, NS, Range.getBegin(), Range.getEnd());
       break;
     }
 
     case NestedNameSpecifier::NamespaceAlias: {
       NamespaceAliasDecl *Alias =ReadDeclAs<NamespaceAliasDecl>(F, Record, Idx);
       SourceRange Range = ReadSourceRange(F, Record, Idx);
-      Builder.Extend(*Context, Alias, Range.getBegin(), Range.getEnd());
+      Builder.Extend(Context, Alias, Range.getBegin(), Range.getEnd());
       break;
     }
 
@@ -5531,7 +5263,7 @@ ASTReader::ReadNestedNameSpecifierLoc(Module &F, const RecordData &Record,
       SourceLocation ColonColonLoc = ReadSourceLocation(F, Record, Idx);
 
       // FIXME: 'template' keyword location not saved anywhere, so we fake it.
-      Builder.Extend(*Context, 
+      Builder.Extend(Context, 
                      Template? T->getTypeLoc().getBeginLoc() : SourceLocation(),
                      T->getTypeLoc(), ColonColonLoc);
       break;
@@ -5539,13 +5271,13 @@ ASTReader::ReadNestedNameSpecifierLoc(Module &F, const RecordData &Record,
 
     case NestedNameSpecifier::Global: {
       SourceLocation ColonColonLoc = ReadSourceLocation(F, Record, Idx);
-      Builder.MakeGlobal(*Context, ColonColonLoc);
+      Builder.MakeGlobal(Context, ColonColonLoc);
       break;
     }
     }
   }
   
-  return Builder.getWithLocInContext(*Context);
+  return Builder.getWithLocInContext(Context);
 }
 
 SourceRange
@@ -5600,7 +5332,7 @@ CXXTemporary *ASTReader::ReadCXXTemporary(Module &F,
                                           const RecordData &Record,
                                           unsigned &Idx) {
   CXXDestructorDecl *Decl = ReadDeclAs<CXXDestructorDecl>(F, Record, Idx);
-  return CXXTemporary::Create(*Context, Decl);
+  return CXXTemporary::Create(Context, Decl);
 }
 
 DiagnosticBuilder ASTReader::Diag(unsigned DiagID) {
@@ -5614,8 +5346,7 @@ DiagnosticBuilder ASTReader::Diag(SourceLocation Loc, unsigned DiagID) {
 /// \brief Retrieve the identifier table associated with the
 /// preprocessor.
 IdentifierTable &ASTReader::getIdentifierTable() {
-  assert(PP && "Forgot to set Preprocessor ?");
-  return PP->getIdentifierTable();
+  return PP.getIdentifierTable();
 }
 
 /// \brief Record that the given ID maps to the given switch-case
@@ -5665,12 +5396,12 @@ void ASTReader::FinishedDeserializing() {
   --NumCurrentElementsDeserializing;
 }
 
-ASTReader::ASTReader(Preprocessor &PP, ASTContext *Context,
+ASTReader::ASTReader(Preprocessor &PP, ASTContext &Context,
                      StringRef isysroot, bool DisableValidation,
                      bool DisableStatCache)
   : Listener(new PCHValidator(PP, *this)), DeserializationListener(0),
     SourceMgr(PP.getSourceManager()), FileMgr(PP.getFileManager()),
-    Diags(PP.getDiagnostics()), SemaObj(0), PP(&PP), Context(Context),
+    Diags(PP.getDiagnostics()), SemaObj(0), PP(PP), Context(Context),
     Consumer(0), ModuleMgr(FileMgr.getFileSystemOptions()),
     RelocatablePCH(false), isysroot(isysroot),
     DisableValidation(DisableValidation),
@@ -5687,26 +5418,6 @@ ASTReader::ASTReader(Preprocessor &PP, ASTContext *Context,
   SourceMgr.setExternalSLocEntrySource(this);
 }
 
-ASTReader::ASTReader(SourceManager &SourceMgr, FileManager &FileMgr,
-                     Diagnostic &Diags, StringRef isysroot,
-                     bool DisableValidation, bool DisableStatCache)
-  : DeserializationListener(0), SourceMgr(SourceMgr), FileMgr(FileMgr),
-    Diags(Diags), SemaObj(0), PP(0), Context(0),
-    Consumer(0), ModuleMgr(FileMgr.getFileSystemOptions()),
-    RelocatablePCH(false), isysroot(isysroot), 
-    DisableValidation(DisableValidation), DisableStatCache(DisableStatCache), 
-    NumStatHits(0), NumStatMisses(0), NumSLocEntriesRead(0), 
-    TotalNumSLocEntries(0), NumStatementsRead(0), 
-    TotalNumStatements(0), NumMacrosRead(0), TotalNumMacros(0), 
-    NumSelectorsRead(0), NumMethodPoolEntriesRead(0), NumMethodPoolMisses(0),
-    TotalNumMethodPoolEntries(0), NumLexicalDeclContextsRead(0),
-    TotalLexicalDeclContexts(0), NumVisibleDeclContextsRead(0),
-    TotalVisibleDeclContexts(0), TotalModulesSizeInBits(0),
-    NumCurrentElementsDeserializing(0), NumCXXBaseSpecifiersLoaded(0)
-{
-  SourceMgr.setExternalSLocEntrySource(this);
-}
-
 ASTReader::~ASTReader() {
   for (DeclContextVisibleUpdatesPending::iterator
            I = PendingVisibleUpdates.begin(),
@@ -5716,293 +5427,5 @@ ASTReader::~ASTReader() {
                                              F = I->second.end();
          J != F; ++J)
       delete static_cast<ASTDeclContextNameLookupTable*>(J->first);
-  }
-}
-
-//===----------------------------------------------------------------------===//
-// Module implementation
-//===----------------------------------------------------------------------===//
-Module::Module(ModuleKind Kind)
-  : Kind(Kind), DirectlyImported(false), SizeInBits(0), 
-    LocalNumSLocEntries(0), SLocEntryBaseID(0),
-    SLocEntryBaseOffset(0), SLocEntryOffsets(0),
-    SLocFileOffsets(0), LocalNumIdentifiers(0), 
-    IdentifierOffsets(0), BaseIdentifierID(0), IdentifierTableData(0),
-    IdentifierLookupTable(0), BasePreprocessedEntityID(0),
-    LocalNumMacroDefinitions(0), MacroDefinitionOffsets(0), 
-    BaseMacroDefinitionID(0), LocalNumHeaderFileInfos(0), 
-    HeaderFileInfoTableData(0), HeaderFileInfoTable(0),
-    HeaderFileFrameworkStrings(0),
-    LocalNumSelectors(0), SelectorOffsets(0), BaseSelectorID(0),
-    SelectorLookupTableData(0), SelectorLookupTable(0), LocalNumDecls(0),
-    DeclOffsets(0), BaseDeclID(0),
-    LocalNumCXXBaseSpecifiers(0), CXXBaseSpecifiersOffsets(0),
-    LocalNumTypes(0), TypeOffsets(0), BaseTypeIndex(0), StatCache(0),
-    NumPreallocatedPreprocessingEntities(0)
-{}
-
-Module::~Module() {
-  for (DeclContextInfosMap::iterator I = DeclContextInfos.begin(),
-                                     E = DeclContextInfos.end();
-       I != E; ++I) {
-    if (I->second.NameLookupTableData)
-      delete static_cast<ASTDeclContextNameLookupTable*>(
-               I->second.NameLookupTableData);
-  }
-
-  delete static_cast<ASTIdentifierLookupTable *>(IdentifierLookupTable);
-  delete static_cast<HeaderFileInfoLookupTable *>(HeaderFileInfoTable);
-  delete static_cast<ASTSelectorLookupTable *>(SelectorLookupTable);
-}
-
-template<typename Key, typename Offset, unsigned InitialCapacity>
-static void 
-dumpLocalRemap(StringRef Name,
-               const ContinuousRangeMap<Key, Offset, InitialCapacity> &Map) {
-  if (Map.begin() == Map.end())
-    return;
-  
-  typedef ContinuousRangeMap<Key, Offset, InitialCapacity> MapType;
-  llvm::errs() << "  " << Name << ":\n";
-  for (typename MapType::const_iterator I = Map.begin(), IEnd = Map.end(); 
-       I != IEnd; ++I) {
-    llvm::errs() << "    " << I->first << " -> " << I->second
-    << "\n";
-  }
-}
-
-void Module::dump() {
-  llvm::errs() << "\nModule: " << FileName << "\n";
-  if (!Imports.empty()) {
-    llvm::errs() << "  Imports: ";
-    for (unsigned I = 0, N = Imports.size(); I != N; ++I) {
-      if (I)
-        llvm::errs() << ", ";
-      llvm::errs() << Imports[I]->FileName;
-    }
-    llvm::errs() << "\n";
-  }
-  
-  // Remapping tables.
-  llvm::errs() << "  Base source location offset: " << SLocEntryBaseOffset 
-               << '\n';
-  dumpLocalRemap("Source location offset local -> global map", SLocRemap);
-  
-  llvm::errs() << "  Base identifier ID: " << BaseIdentifierID << '\n'
-               << "  Number of identifiers: " << LocalNumIdentifiers << '\n';
-  dumpLocalRemap("Identifier ID local -> global map", IdentifierRemap);
-  
-  llvm::errs() << "  Base selector ID: " << BaseSelectorID << '\n'
-               << "  Number of selectors: " << LocalNumSelectors << '\n';
-  dumpLocalRemap("Selector ID local -> global map", SelectorRemap);
-  
-  llvm::errs() << "  Base preprocessed entity ID: " << BasePreprocessedEntityID
-               << '\n'  
-               << "  Number of preprocessed entities: " 
-               << NumPreallocatedPreprocessingEntities << '\n';
-  dumpLocalRemap("Preprocessed entity ID local -> global map", 
-                 PreprocessedEntityRemap);
-  
-  llvm::errs() << "  Base macro definition ID: " << BaseMacroDefinitionID 
-               << '\n'
-               << "  Number of macro definitions: " << LocalNumMacroDefinitions
-               << '\n';
-  dumpLocalRemap("Macro definition ID local -> global map", 
-                 MacroDefinitionRemap);
-
-  llvm::errs() << "  Base type index: " << BaseTypeIndex << '\n'
-               << "  Number of types: " << LocalNumTypes << '\n';
-  dumpLocalRemap("Type index local -> global map", TypeRemap);
-    
-  llvm::errs() << "  Base decl ID: " << BaseDeclID << '\n'
-               << "  Number of decls: " << LocalNumDecls << '\n';
-  dumpLocalRemap("Decl ID local -> global map", DeclRemap);
-}
-
-//===----------------------------------------------------------------------===//
-// Module manager implementation
-//===----------------------------------------------------------------------===//
-
-Module *ModuleManager::lookup(StringRef Name) {
-  const FileEntry *Entry = FileMgr.getFile(Name);
-  return Modules[Entry];
-}
-
-llvm::MemoryBuffer *ModuleManager::lookupBuffer(StringRef Name) {
-  const FileEntry *Entry = FileMgr.getFile(Name);
-  return InMemoryBuffers[Entry];
-}
-
-std::pair<Module *, bool>
-ModuleManager::addModule(StringRef FileName, ModuleKind Type, 
-                         Module *ImportedBy, std::string &ErrorStr) {
-  const FileEntry *Entry = FileMgr.getFile(FileName);
-  if (!Entry && FileName != "-") {
-    ErrorStr = "file not found";
-    return std::make_pair(static_cast<Module*>(0), false);
-  }
-
-  // Check whether we already loaded this module, before 
-  Module *&ModuleEntry = Modules[Entry];
-  bool NewModule = false;
-  if (!ModuleEntry) {
-    // Allocate a new module.
-    Module *New = new Module(Type);
-    New->FileName = FileName.str();
-    Chain.push_back(New);
-    NewModule = true;
-    ModuleEntry = New;
-
-    // Load the contents of the module
-    if (llvm::MemoryBuffer *Buffer = lookupBuffer(FileName)) {
-      // The buffer was already provided for us.
-      assert(Buffer && "Passed null buffer");
-      New->Buffer.reset(Buffer);
-    } else {
-      // Open the AST file.
-      llvm::error_code ec;
-      if (FileName == "-") {
-        ec = llvm::MemoryBuffer::getSTDIN(New->Buffer);
-        if (ec)
-          ErrorStr = ec.message();
-      } else
-        New->Buffer.reset(FileMgr.getBufferForFile(FileName, &ErrorStr));
-
-      if (!New->Buffer)
-        return std::make_pair(static_cast<Module*>(0), false);
-    }
-
-    // Initialize the stream
-    New->StreamFile.init((const unsigned char *)New->Buffer->getBufferStart(),
-                         (const unsigned char *)New->Buffer->getBufferEnd());     }
-
-  if (ImportedBy) {
-    ModuleEntry->ImportedBy.insert(ImportedBy);
-    ImportedBy->Imports.insert(ModuleEntry);
-  } else {
-    ModuleEntry->DirectlyImported = true;
-  }
-  
-  return std::make_pair(ModuleEntry, NewModule);
-}
-
-void ModuleManager::addInMemoryBuffer(StringRef FileName, 
-  llvm::MemoryBuffer *Buffer) {
-  
-  const FileEntry *Entry = FileMgr.getVirtualFile(FileName, 
-    Buffer->getBufferSize(), 0);
-  InMemoryBuffers[Entry] = Buffer;
-}
-
-ModuleManager::ModuleManager(const FileSystemOptions &FSO) : FileMgr(FSO) { }
-
-ModuleManager::~ModuleManager() {
-  for (unsigned i = 0, e = Chain.size(); i != e; ++i)
-    delete Chain[e - i - 1];
-}
-
-void ModuleManager::visit(bool (*Visitor)(Module &M, void *UserData), 
-                          void *UserData) {
-  unsigned N = size();
-
-  // Record the number of incoming edges for each module. When we
-  // encounter a module with no incoming edges, push it into the queue
-  // to seed the queue.
-  SmallVector<Module *, 4> Queue;
-  Queue.reserve(N);
-  llvm::DenseMap<Module *, unsigned> UnusedIncomingEdges; 
-  for (ModuleIterator M = begin(), MEnd = end(); M != MEnd; ++M) {
-    if (unsigned Size = (*M)->ImportedBy.size())
-      UnusedIncomingEdges[*M] = Size;
-    else
-      Queue.push_back(*M);
-  }
-
-  llvm::SmallPtrSet<Module *, 4> Skipped;
-  unsigned QueueStart = 0;
-  while (QueueStart < Queue.size()) {
-    Module *CurrentModule = Queue[QueueStart++];
-
-    // Check whether this module should be skipped.
-    if (Skipped.count(CurrentModule))
-      continue;
-
-    if (Visitor(*CurrentModule, UserData)) {
-      // The visitor has requested that cut off visitation of any
-      // module that the current module depends on. To indicate this
-      // behavior, we mark all of the reachable modules as having N
-      // incoming edges (which is impossible otherwise).
-      SmallVector<Module *, 4> Stack;
-      Stack.push_back(CurrentModule);
-      Skipped.insert(CurrentModule);
-      while (!Stack.empty()) {
-        Module *NextModule = Stack.back();
-        Stack.pop_back();
-
-        // For any module that this module depends on, push it on the
-        // stack (if it hasn't already been marked as visited).
-        for (llvm::SetVector<Module *>::iterator 
-                  M = NextModule->Imports.begin(),
-               MEnd = NextModule->Imports.end();
-             M != MEnd; ++M) {
-          if (Skipped.insert(*M))
-            Stack.push_back(*M);
-        }
-      }
-      continue;
-    }
-
-    // For any module that this module depends on, push it on the
-    // stack (if it hasn't already been marked as visited).
-    for (llvm::SetVector<Module *>::iterator M = CurrentModule->Imports.begin(),
-                                          MEnd = CurrentModule->Imports.end();
-         M != MEnd; ++M) {
-
-      // Remove our current module as an impediment to visiting the
-      // module we depend on. If we were the last unvisited module
-      // that depends on this particular module, push it into the
-      // queue to be visited.
-      unsigned &NumUnusedEdges = UnusedIncomingEdges[*M];
-      if (NumUnusedEdges && (--NumUnusedEdges == 0))
-        Queue.push_back(*M);
-    }
-  }
-}
-
-/// \brief Perform a depth-first visit of the current module.
-static bool visitDepthFirst(Module &M, 
-                            bool (*Visitor)(Module &M, bool Preorder, 
-                                            void *UserData), 
-                            void *UserData,
-                            llvm::SmallPtrSet<Module *, 4> &Visited) {
-  // Preorder visitation
-  if (Visitor(M, /*Preorder=*/true, UserData))
-    return true;
-
-  // Visit children
-  for (llvm::SetVector<Module *>::iterator IM = M.Imports.begin(),
-                                        IMEnd = M.Imports.end();
-       IM != IMEnd; ++IM) {
-    if (!Visited.insert(*IM))
-      continue;
-
-    if (visitDepthFirst(**IM, Visitor, UserData, Visited))
-      return true;
-  }  
-
-  // Postorder visitation
-  return Visitor(M, /*Preorder=*/false, UserData);
-}
-
-void ModuleManager::visitDepthFirst(bool (*Visitor)(Module &M, bool Preorder, 
-                                                    void *UserData), 
-                                    void *UserData) {
-  llvm::SmallPtrSet<Module *, 4> Visited;
-  for (unsigned I = 0, N = Chain.size(); I != N; ++I) {
-    if (!Visited.insert(Chain[I]))
-      continue;
-
-    if (::visitDepthFirst(*Chain[I], Visitor, UserData, Visited))
-      return;
   }
 }

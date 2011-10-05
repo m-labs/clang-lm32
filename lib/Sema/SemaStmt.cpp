@@ -47,8 +47,8 @@ StmtResult Sema::ActOnExprStmt(FullExprArg expr) {
 
 
 StmtResult Sema::ActOnNullStmt(SourceLocation SemiLoc,
-                               SourceLocation LeadingEmptyMacroLoc) {
-  return Owned(new (Context) NullStmt(SemiLoc, LeadingEmptyMacroLoc));
+                               bool HasLeadingEmptyMacro) {
+  return Owned(new (Context) NullStmt(SemiLoc, HasLeadingEmptyMacro));
 }
 
 StmtResult Sema::ActOnDeclStmt(DeclGroupPtrTy dg, SourceLocation StartLoc,
@@ -1387,8 +1387,7 @@ Sema::BuildCXXForRangeStmt(SourceLocation ForLoc, SourceLocation ColonLoc,
       else {
         // Can't be a DependentSizedArrayType or an IncompleteArrayType since
         // UnqAT is not incomplete and Range is not type-dependent.
-        assert(0 && "Unexpected array type in for-range");
-        return StmtError();
+        llvm_unreachable("Unexpected array type in for-range");
       }
 
       // end-expr is __range + __bound.
@@ -2016,7 +2015,7 @@ StmtResult Sema::ActOnAsmStmt(SourceLocation AsmLoc, bool IsSimple,
       OutputName = Names[i]->getName();
 
     TargetInfo::ConstraintInfo Info(Literal->getString(), OutputName);
-    if (!Context.Target.validateOutputConstraint(Info))
+    if (!Context.getTargetInfo().validateOutputConstraint(Info))
       return StmtError(Diag(Literal->getLocStart(),
                             diag::err_asm_invalid_output_constraint)
                        << Info.getConstraintStr());
@@ -2045,7 +2044,7 @@ StmtResult Sema::ActOnAsmStmt(SourceLocation AsmLoc, bool IsSimple,
       InputName = Names[i]->getName();
 
     TargetInfo::ConstraintInfo Info(Literal->getString(), InputName);
-    if (!Context.Target.validateInputConstraint(OutputConstraintInfos.data(),
+    if (!Context.getTargetInfo().validateInputConstraint(OutputConstraintInfos.data(),
                                                 NumOutputs, Info)) {
       return StmtError(Diag(Literal->getLocStart(),
                             diag::err_asm_invalid_input_constraint)
@@ -2089,7 +2088,7 @@ StmtResult Sema::ActOnAsmStmt(SourceLocation AsmLoc, bool IsSimple,
 
     StringRef Clobber = Literal->getString();
 
-    if (!Context.Target.isValidClobber(Clobber))
+    if (!Context.getTargetInfo().isValidClobber(Clobber))
       return StmtError(Diag(Literal->getLocStart(),
                   diag::err_asm_unknown_register_name) << Clobber);
   }
@@ -2121,6 +2120,10 @@ StmtResult Sema::ActOnAsmStmt(SourceLocation AsmLoc, bool IsSimple,
     unsigned InputOpNo = i+NumOutputs;
     Expr *OutputExpr = Exprs[TiedTo];
     Expr *InputExpr = Exprs[InputOpNo];
+
+    if (OutputExpr->isTypeDependent() || InputExpr->isTypeDependent())
+      continue;
+
     QualType InTy = InputExpr->getType();
     QualType OutTy = OutputExpr->getType();
     if (Context.hasSameType(InTy, OutTy))

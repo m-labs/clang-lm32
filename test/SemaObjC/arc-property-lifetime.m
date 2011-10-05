@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -triple x86_64-apple-darwin11 -fobjc-nonfragile-abi -fobjc-runtime-has-weak -fsyntax-only -fobjc-arc -verify %s
+// RUN: %clang_cc1 -triple x86_64-apple-darwin11 -fobjc-runtime-has-weak -fsyntax-only -fobjc-arc -verify %s
 // rdar://9340606
 
 @interface Foo {
@@ -79,7 +79,7 @@
 
 @implementation Gorf
 @synthesize x;
-@synthesize y; // expected-error {{existing ivar 'y' for unsafe_unretained property 'y' must be __unsafe_unretained}}
+@synthesize y; // expected-error {{existing ivar 'y' for property 'y' with  assign attribute must be __unsafe_unretained}}
 @synthesize z;
 @end
 
@@ -94,7 +94,7 @@
 
 @implementation Gorf2
 @synthesize x;
-@synthesize y; // expected-error {{existing ivar 'y' for unsafe_unretained property 'y' must be __unsafe_unretained}}
+@synthesize y; // expected-error {{existing ivar 'y' for property 'y' with unsafe_unretained attribute must be __unsafe_unretained}}
 @synthesize z;
 @end
 

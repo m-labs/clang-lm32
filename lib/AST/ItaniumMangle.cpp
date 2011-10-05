@@ -73,7 +73,7 @@ class ItaniumMangleContext : public MangleContext {
   
 public:
   explicit ItaniumMangleContext(ASTContext &Context,
-                                Diagnostic &Diags)
+                                DiagnosticsEngine &Diags)
     : MangleContext(Context, Diags) { }
 
   uint64_t getAnonymousStructId(const TagDecl *TD) {
@@ -310,7 +310,7 @@ private:
   void mangleCXXCtorType(CXXCtorType T);
   void mangleCXXDtorType(CXXDtorType T);
 
-  void mangleTemplateArgs(const ExplicitTemplateArgumentList &TemplateArgs);
+  void mangleTemplateArgs(const ASTTemplateArgumentListInfo &TemplateArgs);
   void mangleTemplateArgs(TemplateName Template,
                           const TemplateArgument *TemplateArgs,
                           unsigned NumTemplateArgs);  
@@ -398,7 +398,7 @@ void CXXNameMangler::mangle(const NamedDecl *D, StringRef Prefix) {
     // marker.  We also avoid adding the marker if this is an alias for an
     // LLVM intrinsic.
     StringRef UserLabelPrefix =
-      getASTContext().Target.getUserLabelPrefix();
+      getASTContext().getTargetInfo().getUserLabelPrefix();
     if (!UserLabelPrefix.empty() && !ALA->getLabel().startswith("llvm."))
       Out << '\01';  // LLVM IR Marker for __asm("foo")
 
@@ -1069,8 +1069,7 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
   case DeclarationName::ObjCZeroArgSelector:
   case DeclarationName::ObjCOneArgSelector:
   case DeclarationName::ObjCMultiArgSelector:
-    assert(false && "Can't mangle Objective-C selector names here!");
-    break;
+    llvm_unreachable("Can't mangle Objective-C selector names here!");
 
   case DeclarationName::CXXConstructorName:
     if (ND == Structor)
@@ -1124,8 +1123,7 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
     break;
 
   case DeclarationName::CXXUsingDirective:
-    assert(false && "Can't mangle a using directive name!");
-    break;
+    llvm_unreachable("Can't mangle a using directive name!");
   }
 }
 
@@ -1512,8 +1510,7 @@ CXXNameMangler::mangleOperatorName(OverloadedOperatorKind OO, unsigned Arity) {
 
   case OO_None:
   case NUM_OVERLOADED_OPERATORS:
-    assert(false && "Not an overloaded operator");
-    break;
+    llvm_unreachable("Not an overloaded operator");
   }
 }
 
@@ -2252,8 +2249,8 @@ recurse:
   case Expr::AsTypeExprClass:
   {
     // As bad as this diagnostic is, it's better than crashing.
-    Diagnostic &Diags = Context.getDiags();
-    unsigned DiagID = Diags.getCustomDiagID(Diagnostic::Error,
+    DiagnosticsEngine &Diags = Context.getDiags();
+    unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                      "cannot yet mangle expression type %0");
     Diags.Report(E->getExprLoc(), DiagID)
       << E->getStmtClassName() << E->getSourceRange();
@@ -2262,9 +2259,9 @@ recurse:
 
   // Even gcc-4.5 doesn't mangle this.
   case Expr::BinaryConditionalOperatorClass: {
-    Diagnostic &Diags = Context.getDiags();
+    DiagnosticsEngine &Diags = Context.getDiags();
     unsigned DiagID =
-      Diags.getCustomDiagID(Diagnostic::Error,
+      Diags.getCustomDiagID(DiagnosticsEngine::Error,
                 "?: operator with omitted middle operand cannot be mangled");
     Diags.Report(E->getExprLoc(), DiagID)
       << E->getStmtClassName() << E->getSourceRange();
@@ -2423,8 +2420,8 @@ recurse:
       Out << 'a';
       break;
     case UETT_VecStep:
-      Diagnostic &Diags = Context.getDiags();
-      unsigned DiagID = Diags.getCustomDiagID(Diagnostic::Error,
+      DiagnosticsEngine &Diags = Context.getDiags();
+      unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                      "cannot yet mangle vec_step expression");
       Diags.Report(DiagID);
       return;
@@ -2817,7 +2814,7 @@ void CXXNameMangler::mangleCXXDtorType(CXXDtorType T) {
 }
 
 void CXXNameMangler::mangleTemplateArgs(
-                          const ExplicitTemplateArgumentList &TemplateArgs) {
+                          const ASTTemplateArgumentListInfo &TemplateArgs) {
   // <template-args> ::= I <template-arg>+ E
   Out << 'I';
   for (unsigned i = 0, e = TemplateArgs.NumTemplateArgs; i != e; ++i)
@@ -3336,6 +3333,6 @@ void ItaniumMangleContext::mangleCXXRTTIName(QualType Ty,
 }
 
 MangleContext *clang::createItaniumMangleContext(ASTContext &Context,
-                                                 Diagnostic &Diags) {
+                                                 DiagnosticsEngine &Diags) {
   return new ItaniumMangleContext(Context, Diags);
 }

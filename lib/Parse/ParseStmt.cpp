@@ -100,8 +100,8 @@ Retry:
 
   case tok::code_completion:
     Actions.CodeCompleteOrdinaryName(getCurScope(), Sema::PCC_Statement);
-    ConsumeCodeCompletionToken();
-    return ParseStatementOrDeclaration(Stmts, OnlyStatement);
+    cutOffParsing();
+    return StmtError();
       
   case tok::identifier: {
     Token Next = NextToken();
@@ -114,6 +114,11 @@ Retry:
       CXXScopeSpec SS;
       IdentifierInfo *Name = Tok.getIdentifierInfo();
       SourceLocation NameLoc = Tok.getLocation();
+
+      if (getLang().CPlusPlus)
+        CheckForTemplateAndDigraph(Next, ParsedType(),
+                                   /*EnteringContext=*/false, *Name, SS);
+
       Sema::NameClassification Classification
         = Actions.ClassifyName(getCurScope(), SS, Name, NameLoc, Next);
       switch (Classification.getKind()) {
@@ -224,10 +229,8 @@ Retry:
   case tok::l_brace:                // C99 6.8.2: compound-statement
     return ParseCompoundStatement(attrs);
   case tok::semi: {                 // C99 6.8.3p3: expression[opt] ';'
-    SourceLocation LeadingEmptyMacroLoc;
-    if (Tok.hasLeadingEmptyMacro())
-      LeadingEmptyMacroLoc = PP.getLastEmptyMacroExpansionLoc();
-    return Actions.ActOnNullStmt(ConsumeToken(), LeadingEmptyMacroLoc);
+    bool HasLeadingEmptyMacro = Tok.hasLeadingEmptyMacro();
+    return Actions.ActOnNullStmt(ConsumeToken(), HasLeadingEmptyMacro);
   }
 
   case tok::kw_if:                  // C99 6.8.4.1: if-statement
@@ -499,7 +502,7 @@ StmtResult Parser::ParseCaseStatement(ParsedAttributes &attrs, bool MissingCase,
   // DeepestParsedCaseStmt - This is the deepest statement we have parsed, which
   // gets updated each time a new case is parsed, and whose body is unset so
   // far.  When parsing 'case 4', this is the 'case 3' node.
-  StmtTy *DeepestParsedCaseStmt = 0;
+  Stmt *DeepestParsedCaseStmt = 0;
 
   // While we have case statements, eat and stack them.
   SourceLocation ColonLoc;
@@ -509,7 +512,8 @@ StmtResult Parser::ParseCaseStatement(ParsedAttributes &attrs, bool MissingCase,
 
     if (Tok.is(tok::code_completion)) {
       Actions.CodeCompleteCase(getCurScope());
-      ConsumeCodeCompletionToken();
+      cutOffParsing();
+      return StmtError();
     }
     
     /// We don't want to treat 'case x : y' as a potential typo for 'case x::y'.
@@ -747,7 +751,7 @@ StmtResult Parser::ParseCompoundStatementBody(bool isStmtExpr) {
       continue;
     }
 
-    if (getLang().Microsoft && (Tok.is(tok::kw___if_exists) ||
+    if (getLang().MicrosoftExt && (Tok.is(tok::kw___if_exists) ||
         Tok.is(tok::kw___if_not_exists))) {
       ParseMicrosoftIfExistsStatement(Stmts);
       continue;
@@ -955,7 +959,8 @@ StmtResult Parser::ParseIfStatement(ParsedAttributes &attrs) {
     InnerScope.Exit();
   } else if (Tok.is(tok::code_completion)) {
     Actions.CodeCompleteAfterIf(getCurScope());
-    ConsumeCodeCompletionToken();
+    cutOffParsing();
+    return StmtError();
   }
 
   IfScope.Exit();
@@ -1284,7 +1289,8 @@ StmtResult Parser::ParseForStatement(ParsedAttributes &attrs) {
     Actions.CodeCompleteOrdinaryName(getCurScope(), 
                                      C99orCXXorObjC? Sema::PCC_ForInit
                                                    : Sema::PCC_Expression);
-    ConsumeCodeCompletionToken();
+    cutOffParsing();
+    return StmtError();
   }
   
   // Parse the first part of the for specifier.
@@ -1312,6 +1318,9 @@ StmtResult Parser::ParseForStatement(ParsedAttributes &attrs) {
     FirstPart = Actions.ActOnDeclStmt(DG, DeclStart, Tok.getLocation());
 
     if (ForRangeInit.ParsedForRangeDecl()) {
+      if (!getLang().CPlusPlus0x)
+        Diag(ForRangeInit.ColonLoc, diag::ext_for_range);
+
       ForRange = true;
     } else if (Tok.is(tok::semi)) {  // for (int x = 4;
       ConsumeToken();
@@ -1322,7 +1331,8 @@ StmtResult Parser::ParseForStatement(ParsedAttributes &attrs) {
       
       if (Tok.is(tok::code_completion)) {
         Actions.CodeCompleteObjCForCollection(getCurScope(), DG);
-        ConsumeCodeCompletionToken();
+        cutOffParsing();
+        return StmtError();
       }
       Collection = ParseExpression();
     } else {
@@ -1348,7 +1358,8 @@ StmtResult Parser::ParseForStatement(ParsedAttributes &attrs) {
       
       if (Tok.is(tok::code_completion)) {
         Actions.CodeCompleteObjCForCollection(getCurScope(), DeclGroupPtrTy());
-        ConsumeCodeCompletionToken();
+        cutOffParsing();
+        return StmtError();
       }
       Collection = ParseExpression();
     } else {
@@ -1539,8 +1550,7 @@ StmtResult Parser::ParseReturnStatement(ParsedAttributes &attrs) {
   if (Tok.isNot(tok::semi)) {
     if (Tok.is(tok::code_completion)) {
       Actions.CodeCompleteReturn(getCurScope());
-      ConsumeCodeCompletionToken();
-      SkipUntil(tok::semi, false, true);
+      cutOffParsing();
       return StmtError();
     }
         
@@ -1562,30 +1572,105 @@ StmtResult Parser::ParseReturnStatement(ParsedAttributes &attrs) {
   return Actions.ActOnReturnStmt(ReturnLoc, R.take());
 }
 
-/// FuzzyParseMicrosoftAsmStatement. When -fms-extensions is enabled, this
-/// routine is called to skip/ignore tokens that comprise the MS asm statement.
-StmtResult Parser::FuzzyParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
-  SourceLocation EndLoc;
-  if (Tok.is(tok::l_brace)) {
-    unsigned short savedBraceCount = BraceCount;
-    do {
-      EndLoc = Tok.getLocation();
-      ConsumeAnyToken();
-    } while (BraceCount > savedBraceCount && Tok.isNot(tok::eof));
-  } else {
-    // From the MS website: If used without braces, the __asm keyword means
-    // that the rest of the line is an assembly-language statement.
-    SourceManager &SrcMgr = PP.getSourceManager();
+/// ParseMicrosoftAsmStatement. When -fms-extensions/-fasm-blocks is enabled,
+/// this routine is called to collect the tokens for an MS asm statement.
+StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
+  SourceManager &SrcMgr = PP.getSourceManager();
+  SourceLocation EndLoc = AsmLoc;
+  do {
+    bool InBraces = false;
+    unsigned short savedBraceCount;
+    bool InAsmComment = false;
+    FileID FID;
+    unsigned LineNo;
+    unsigned NumTokensRead = 0;
+    SourceLocation LBraceLoc;
+
+    if (Tok.is(tok::l_brace)) {
+      // Braced inline asm: consume the opening brace.
+      InBraces = true;
+      savedBraceCount = BraceCount;
+      EndLoc = LBraceLoc = ConsumeBrace();
+      ++NumTokensRead;
+    } else {
+      // Single-line inline asm; compute which line it is on.
+      std::pair<FileID, unsigned> ExpAsmLoc =
+          SrcMgr.getDecomposedExpansionLoc(EndLoc);
+      FID = ExpAsmLoc.first;
+      LineNo = SrcMgr.getLineNumber(FID, ExpAsmLoc.second);
+    }
+
     SourceLocation TokLoc = Tok.getLocation();
-    unsigned LineNo = SrcMgr.getExpansionLineNumber(TokLoc);
     do {
+      // If we hit EOF, we're done, period.
+      if (Tok.is(tok::eof))
+        break;
+      // When we consume the closing brace, we're done.
+      if (InBraces && BraceCount == savedBraceCount)
+        break;
+
+      if (!InAsmComment && Tok.is(tok::semi)) {
+        // A semicolon in an asm is the start of a comment.
+        InAsmComment = true;
+        if (InBraces) {
+          // Compute which line the comment is on.
+          std::pair<FileID, unsigned> ExpSemiLoc =
+              SrcMgr.getDecomposedExpansionLoc(TokLoc);
+          FID = ExpSemiLoc.first;
+          LineNo = SrcMgr.getLineNumber(FID, ExpSemiLoc.second);
+        }
+      } else if (!InBraces || InAsmComment) {
+        // If end-of-line is significant, check whether this token is on a
+        // new line.
+        std::pair<FileID, unsigned> ExpLoc =
+            SrcMgr.getDecomposedExpansionLoc(TokLoc);
+        if (ExpLoc.first != FID ||
+            SrcMgr.getLineNumber(ExpLoc.first, ExpLoc.second) != LineNo) {
+          // If this is a single-line __asm, we're done.
+          if (!InBraces)
+            break;
+          // We're no longer in a comment.
+          InAsmComment = false;
+        } else if (!InAsmComment && Tok.is(tok::r_brace)) {
+          // Single-line asm always ends when a closing brace is seen.
+          // FIXME: This is compatible with Apple gcc's -fasm-blocks; what
+          // does MSVC do here?
+          break;
+        }
+      }
+
+      // Consume the next token; make sure we don't modify the brace count etc.
+      // if we are in a comment.
       EndLoc = TokLoc;
-      ConsumeAnyToken();
+      if (InAsmComment)
+        PP.Lex(Tok);
+      else
+        ConsumeAnyToken();
       TokLoc = Tok.getLocation();
-    } while ((SrcMgr.getExpansionLineNumber(TokLoc) == LineNo) &&
-             Tok.isNot(tok::r_brace) && Tok.isNot(tok::semi) &&
-             Tok.isNot(tok::eof));
-  }
+      ++NumTokensRead;
+    } while (1);
+
+    if (InBraces && BraceCount != savedBraceCount) {
+      // __asm without closing brace (this can happen at EOF).
+      Diag(Tok, diag::err_expected_rbrace);
+      Diag(LBraceLoc, diag::note_matching) << "{";
+      return StmtError();
+    } else if (NumTokensRead == 0) {
+      // Empty __asm.
+      Diag(Tok, diag::err_expected_lbrace);
+      return StmtError();
+    }
+    // Multiple adjacent asm's form together into a single asm statement
+    // in the AST.
+    if (!Tok.is(tok::kw_asm))
+      break;
+    EndLoc = ConsumeToken();
+  } while (1);
+  // FIXME: Need to actually grab the data and pass it on to Sema.  Ideally,
+  // what Sema wants is a string of the entire inline asm, with one instruction
+  // per line and all the __asm keywords stripped out, and a way of mapping
+  // from any character of that string to its location in the original source
+  // code. I'm not entirely sure how to go about that, though.
   Token t;
   t.setKind(tok::string_literal);
   t.setLiteralData("\"/*FIXME: not done*/\"");
@@ -1621,20 +1706,24 @@ StmtResult Parser::FuzzyParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
 ///         asm-clobbers ',' asm-string-literal
 ///
 /// [MS]  ms-asm-statement:
-///         '__asm' assembly-instruction ';'[opt]
-///         '__asm' '{' assembly-instruction-list '}' ';'[opt]
+///         ms-asm-block
+///         ms-asm-block ms-asm-statement
 ///
-/// [MS]  assembly-instruction-list:
-///         assembly-instruction ';'[opt]
-///         assembly-instruction-list ';' assembly-instruction ';'[opt]
+/// [MS]  ms-asm-block:
+///         '__asm' ms-asm-line '\n'
+///         '__asm' '{' ms-asm-instruction-block[opt] '}' ';'[opt]
+///
+/// [MS]  ms-asm-instruction-block
+///         ms-asm-line
+///         ms-asm-line '\n' ms-asm-instruction-block
 ///
 StmtResult Parser::ParseAsmStatement(bool &msAsm) {
   assert(Tok.is(tok::kw_asm) && "Not an asm stmt");
   SourceLocation AsmLoc = ConsumeToken();
 
-  if (getLang().Microsoft && Tok.isNot(tok::l_paren) && !isTypeQualifier()) {
+  if (getLang().MicrosoftExt && Tok.isNot(tok::l_paren) && !isTypeQualifier()) {
     msAsm = true;
-    return FuzzyParseMicrosoftAsmStatement(AsmLoc);
+    return ParseMicrosoftAsmStatement(AsmLoc);
   }
   DeclSpec DS(AttrFactory);
   SourceLocation Loc = Tok.getLocation();
@@ -1753,8 +1842,8 @@ StmtResult Parser::ParseAsmStatement(bool &msAsm) {
 //
 // FIXME: Avoid unnecessary std::string trashing.
 bool Parser::ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
-                                 SmallVectorImpl<ExprTy *> &Constraints,
-                                 SmallVectorImpl<ExprTy *> &Exprs) {
+                                 SmallVectorImpl<Expr *> &Constraints,
+                                 SmallVectorImpl<Expr *> &Exprs) {
   // 'asm-operands' isn't present?
   if (!isTokenStringLiteral() && Tok.isNot(tok::l_square))
     return false;
@@ -1851,7 +1940,9 @@ Decl *Parser::ParseFunctionTryBlock(Decl *Decl, ParseScope &BodyScope) {
   // Constructor initializer list?
   if (Tok.is(tok::colon))
     ParseConstructorInitializer(Decl);
-
+  else
+    Actions.ActOnDefaultCtorInitializers(Decl);
+  
   if (PP.isCodeCompletionEnabled()) {
     if (trySkippingFunctionBodyForCodeCompletion()) {
       BodyScope.Exit();

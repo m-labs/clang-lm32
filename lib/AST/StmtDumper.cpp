@@ -294,7 +294,7 @@ void StmtDumper::DumpDeclarator(Decl *D) {
     DumpSubTree(SAD->getMessage());
     OS << ");\"";
   } else {
-    assert(0 && "Unexpected decl");
+    llvm_unreachable("Unexpected decl");
   }
 }
 
@@ -416,7 +416,7 @@ void StmtDumper::VisitObjCIvarRefExpr(ObjCIvarRefExpr *Node) {
 void StmtDumper::VisitPredefinedExpr(PredefinedExpr *Node) {
   DumpExpr(Node);
   switch (Node->getIdentType()) {
-  default: assert(0 && "unknown case");
+  default: llvm_unreachable("unknown case");
   case PredefinedExpr::Func:           OS <<  " __func__"; break;
   case PredefinedExpr::Function:       OS <<  " __FUNCTION__"; break;
   case PredefinedExpr::PrettyFunction: OS <<  " __PRETTY_FUNCTION__";break;
@@ -557,7 +557,8 @@ void StmtDumper::VisitCXXThisExpr(CXXThisExpr *Node) {
 
 void StmtDumper::VisitCXXFunctionalCastExpr(CXXFunctionalCastExpr *Node) {
   DumpExpr(Node);
-  OS << " functional cast to " << Node->getTypeAsWritten().getAsString();
+  OS << " functional cast to " << Node->getTypeAsWritten().getAsString()
+     << " <" << Node->getCastKindName() << ">";
 }
 
 void StmtDumper::VisitCXXConstructExpr(CXXConstructExpr *Node) {

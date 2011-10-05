@@ -25,8 +25,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/TransferFuncs.h"
-#include "clang/StaticAnalyzer/Core/PathDiagnosticClients.h"
+#include "clang/StaticAnalyzer/Core/PathDiagnosticConsumers.h"
 
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
@@ -43,15 +42,15 @@ using namespace ento;
 static ExplodedNode::Auditor* CreateUbiViz();
 
 //===----------------------------------------------------------------------===//
-// Special PathDiagnosticClients.
+// Special PathDiagnosticConsumers.
 //===----------------------------------------------------------------------===//
 
-static PathDiagnosticClient*
-createPlistHTMLDiagnosticClient(const std::string& prefix,
+static PathDiagnosticConsumer*
+createPlistHTMLDiagnosticConsumer(const std::string& prefix,
                                 const Preprocessor &PP) {
-  PathDiagnosticClient *PD =
-    createHTMLDiagnosticClient(llvm::sys::path::parent_path(prefix), PP);
-  return createPlistDiagnosticClient(prefix, PP, PD);
+  PathDiagnosticConsumer *PD =
+    createHTMLDiagnosticConsumer(llvm::sys::path::parent_path(prefix), PP);
+  return createPlistDiagnosticConsumer(prefix, PP, PD);
 }
 
 //===----------------------------------------------------------------------===//
@@ -69,7 +68,7 @@ public:
   ArrayRef<std::string> Plugins;
 
   // PD is owned by AnalysisManager.
-  PathDiagnosticClient *PD;
+  PathDiagnosticConsumer *PD;
 
   StoreManagerCreator CreateStoreMgr;
   ConstraintManagerCreator CreateConstraintMgr;
@@ -86,7 +85,7 @@ public:
   }
 
   void DigestAnalyzerOptions() {
-    // Create the PathDiagnosticClient.
+    // Create the PathDiagnosticConsumer.
     if (!OutDir.empty()) {
       switch (Opts.AnalysisDiagOpt) {
       default:
@@ -97,13 +96,13 @@ public:
     } else if (Opts.AnalysisDiagOpt == PD_TEXT) {
       // Create the text client even without a specified output file since
       // it just uses diagnostic notes.
-      PD = createTextPathDiagnosticClient("", PP);
+      PD = createTextPathDiagnosticConsumer("", PP);
     }
 
     // Create the analyzer component creators.
     switch (Opts.AnalysisStoreOpt) {
     default:
-      assert(0 && "Unknown store manager.");
+      llvm_unreachable("Unknown store manager.");
 #define ANALYSIS_STORE(NAME, CMDFLAG, DESC, CREATEFN)           \
       case NAME##Model: CreateStoreMgr = CREATEFN; break;
 #include "clang/Frontend/Analyses.def"
@@ -111,7 +110,7 @@ public:
 
     switch (Opts.AnalysisConstraintsOpt) {
     default:
-      assert(0 && "Unknown store manager.");
+      llvm_unreachable("Unknown store manager.");
 #define ANALYSIS_CONSTRAINTS(NAME, CMDFLAG, DESC, CREATEFN)     \
       case NAME##Model: CreateConstraintMgr = CREATEFN; break;
 #include "clang/Frontend/Analyses.def"
@@ -153,7 +152,7 @@ public:
                                   /* Indexer */ 0, 
                                   Opts.MaxNodes, Opts.MaxLoop,
                                   Opts.VisualizeEGDot, Opts.VisualizeEGUbi,
-                                  Opts.PurgeDead, Opts.EagerlyAssume,
+                                  Opts.AnalysisPurgeOpt, Opts.EagerlyAssume,
                                   Opts.TrimGraph, Opts.InlineCall,
                                   Opts.UnoptimizedCFG, Opts.CFGAddImplicitDtors,
                                   Opts.CFGAddInitializers,
@@ -162,6 +161,7 @@ public:
 
   virtual void HandleTranslationUnit(ASTContext &C);
   void HandleDeclContext(ASTContext &C, DeclContext *dc);
+  void HandleDeclContextDecl(ASTContext &C, Decl *D);
 
   void HandleCode(Decl *D);
 };
@@ -172,61 +172,67 @@ public:
 //===----------------------------------------------------------------------===//
 
 void AnalysisConsumer::HandleDeclContext(ASTContext &C, DeclContext *dc) {
-  BugReporter BR(*Mgr);
   for (DeclContext::decl_iterator I = dc->decls_begin(), E = dc->decls_end();
        I != E; ++I) {
-    Decl *D = *I;
+    HandleDeclContextDecl(C, *I);
+  }
+}
+
+void AnalysisConsumer::HandleDeclContextDecl(ASTContext &C, Decl *D) {
+  { // Handle callbacks for arbitrary decls.
+    BugReporter BR(*Mgr);
     checkerMgr->runCheckersOnASTDecl(D, *Mgr, BR);
+  }
 
-    switch (D->getKind()) {
-      case Decl::Namespace: {
-        HandleDeclContext(C, cast<NamespaceDecl>(D));
-        break;
-      }
-      case Decl::CXXConstructor:
-      case Decl::CXXDestructor:
-      case Decl::CXXConversion:
-      case Decl::CXXMethod:
-      case Decl::Function: {
-        FunctionDecl *FD = cast<FunctionDecl>(D);
-        // We skip function template definitions, as their semantics is
-        // only determined when they are instantiated.
-        if (FD->isThisDeclarationADefinition() &&
-            !FD->isDependentContext()) {
-          if (!Opts.AnalyzeSpecificFunction.empty() &&
-              FD->getDeclName().getAsString() != Opts.AnalyzeSpecificFunction)
-            break;
-          DisplayFunction(FD);
-          HandleCode(FD);
-        }
-        break;
-      }
-       
-      case Decl::ObjCCategoryImpl:
-      case Decl::ObjCImplementation: {
-        ObjCImplDecl *ID = cast<ObjCImplDecl>(*I);
-        HandleCode(ID);
-        
-        for (ObjCContainerDecl::method_iterator MI = ID->meth_begin(), 
-             ME = ID->meth_end(); MI != ME; ++MI) {
-          checkerMgr->runCheckersOnASTDecl(*MI, *Mgr, BR);
-
-          if ((*MI)->isThisDeclarationADefinition()) {
-            if (!Opts.AnalyzeSpecificFunction.empty() &&
-                Opts.AnalyzeSpecificFunction != 
-                  (*MI)->getSelector().getAsString())
-              break;
-            DisplayFunction(*MI);
-            HandleCode(*MI);
-          }
-        }
-        break;
-      }
-        
-      default:
-        break;
+  switch (D->getKind()) {
+    case Decl::Namespace: {
+      HandleDeclContext(C, cast<NamespaceDecl>(D));
+      break;
     }
-  }  
+    case Decl::CXXConstructor:
+    case Decl::CXXDestructor:
+    case Decl::CXXConversion:
+    case Decl::CXXMethod:
+    case Decl::Function: {
+      FunctionDecl *FD = cast<FunctionDecl>(D);
+      // We skip function template definitions, as their semantics is
+      // only determined when they are instantiated.
+      if (FD->isThisDeclarationADefinition() &&
+          !FD->isDependentContext()) {
+        if (!Opts.AnalyzeSpecificFunction.empty() &&
+            FD->getDeclName().getAsString() != Opts.AnalyzeSpecificFunction)
+          break;
+        DisplayFunction(FD);
+        HandleCode(FD);
+      }
+      break;
+    }
+     
+    case Decl::ObjCCategoryImpl:
+    case Decl::ObjCImplementation: {
+      ObjCImplDecl *ID = cast<ObjCImplDecl>(D);
+      HandleCode(ID);
+      
+      for (ObjCContainerDecl::method_iterator MI = ID->meth_begin(), 
+           ME = ID->meth_end(); MI != ME; ++MI) {
+        BugReporter BR(*Mgr);
+        checkerMgr->runCheckersOnASTDecl(*MI, *Mgr, BR);
+
+        if ((*MI)->isThisDeclarationADefinition()) {
+          if (!Opts.AnalyzeSpecificFunction.empty() &&
+              Opts.AnalyzeSpecificFunction != 
+                (*MI)->getSelector().getAsString())
+            continue;
+          DisplayFunction(*MI);
+          HandleCode(*MI);
+        }
+      }
+      break;
+    }
+      
+    default:
+      break;
+  }
 }
 
 void AnalysisConsumer::HandleTranslationUnit(ASTContext &C) {
@@ -238,9 +244,9 @@ void AnalysisConsumer::HandleTranslationUnit(ASTContext &C) {
   // After all decls handled, run checkers on the entire TranslationUnit.
   checkerMgr->runCheckersOnEndOfTranslationUnit(TU, *Mgr, BR);
 
-  // Explicitly destroy the PathDiagnosticClient.  This will flush its output.
+  // Explicitly destroy the PathDiagnosticConsumer.  This will flush its output.
   // FIXME: This should be replaced with something that doesn't rely on
-  // side-effects in PathDiagnosticClient's destructor. This is required when
+  // side-effects in PathDiagnosticConsumer's destructor. This is required when
   // used with option -disable-free.
   Mgr.reset(NULL);
 }
@@ -255,13 +261,13 @@ static void FindBlocks(DeclContext *D, SmallVectorImpl<Decl*> &WL) {
       FindBlocks(DC, WL);
 }
 
-static void ActionObjCMemChecker(AnalysisConsumer &C, AnalysisManager& mgr,
-                                 Decl *D);
+static void RunPathSensitiveChecks(AnalysisConsumer &C, AnalysisManager &mgr,
+                                   Decl *D);
 
 void AnalysisConsumer::HandleCode(Decl *D) {
 
   // Don't run the actions if an error has occurred with parsing the file.
-  Diagnostic &Diags = PP.getDiagnostics();
+  DiagnosticsEngine &Diags = PP.getDiagnostics();
   if (Diags.hasErrorOccurred() || Diags.hasFatalErrorOccurred())
     return;
 
@@ -288,7 +294,7 @@ void AnalysisConsumer::HandleCode(Decl *D) {
     if ((*WI)->hasBody()) {
       checkerMgr->runCheckersOnASTBody(*WI, *Mgr, BR);
       if (checkerMgr->hasPathSensitiveCheckers())
-        ActionObjCMemChecker(*this, *Mgr, *WI);
+        RunPathSensitiveChecks(*this, *Mgr, *WI);
     }
 }
 
@@ -296,18 +302,14 @@ void AnalysisConsumer::HandleCode(Decl *D) {
 // Path-sensitive checking.
 //===----------------------------------------------------------------------===//
 
-static void ActionExprEngine(AnalysisConsumer &C, AnalysisManager& mgr,
-                               Decl *D,
-                               TransferFuncs* tf) {
-
-  llvm::OwningPtr<TransferFuncs> TF(tf);
-
+static void ActionExprEngine(AnalysisConsumer &C, AnalysisManager &mgr,
+                             Decl *D, bool ObjCGCEnabled) {
   // Construct the analysis engine.  We first query for the LiveVariables
   // information to see if the CFG is valid.
   // FIXME: Inter-procedural analysis will need to handle invalid CFGs.
   if (!mgr.getLiveVariables(D))
     return;
-  ExprEngine Eng(mgr, TF.take());
+  ExprEngine Eng(mgr, ObjCGCEnabled);
 
   // Set the graph auditor.
   llvm::OwningPtr<ExplodedNode::Auditor> Auditor;
@@ -331,35 +333,25 @@ static void ActionExprEngine(AnalysisConsumer &C, AnalysisManager& mgr,
   Eng.getBugReporter().FlushReports();
 }
 
-static void ActionObjCMemCheckerAux(AnalysisConsumer &C, AnalysisManager& mgr,
-                                  Decl *D, bool GCEnabled) {
+static void RunPathSensitiveChecks(AnalysisConsumer &C, AnalysisManager &mgr,
+                                   Decl *D) {
 
-  TransferFuncs* TF = MakeCFRefCountTF(mgr.getASTContext(),
-                                         GCEnabled,
-                                         mgr.getLangOptions());
-
-  ActionExprEngine(C, mgr, D, TF);
-}
-
-static void ActionObjCMemChecker(AnalysisConsumer &C, AnalysisManager& mgr,
-                               Decl *D) {
-
- switch (mgr.getLangOptions().getGCMode()) {
- default:
-   assert (false && "Invalid GC mode.");
- case LangOptions::NonGC:
-   ActionObjCMemCheckerAux(C, mgr, D, false);
-   break;
-
- case LangOptions::GCOnly:
-   ActionObjCMemCheckerAux(C, mgr, D, true);
-   break;
-
- case LangOptions::HybridGC:
-   ActionObjCMemCheckerAux(C, mgr, D, false);
-   ActionObjCMemCheckerAux(C, mgr, D, true);
-   break;
- }
+  switch (mgr.getLangOptions().getGC()) {
+  default:
+    llvm_unreachable("Invalid GC mode.");
+  case LangOptions::NonGC:
+    ActionExprEngine(C, mgr, D, false);
+    break;
+  
+  case LangOptions::GCOnly:
+    ActionExprEngine(C, mgr, D, true);
+    break;
+  
+  case LangOptions::HybridGC:
+    ActionExprEngine(C, mgr, D, false);
+    ActionExprEngine(C, mgr, D, true);
+    break;
+  }
 }
 
 //===----------------------------------------------------------------------===//

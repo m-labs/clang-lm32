@@ -44,7 +44,7 @@ namespace clang {
   class ASTRecordLayout;
   class BlockExpr;
   class CharUnits;
-  class Diagnostic;
+  class DiagnosticsEngine;
   class Expr;
   class ExternalASTSource;
   class ASTMutationListener;
@@ -211,6 +211,9 @@ class ASTContext : public llvm::RefCountedBase<ASTContext> {
   QualType ObjCConstantStringType;
   mutable RecordDecl *CFConstantStringTypeDecl;
 
+  /// \brief The typedef declaration for the Objective-C "instancetype" type.
+  TypedefDecl *ObjCInstanceTypeDecl;
+  
   /// \brief The type for the C FILE type.
   TypeDecl *FILEDecl;
 
@@ -316,7 +319,7 @@ class ASTContext : public llvm::RefCountedBase<ASTContext> {
 
   /// LangOpts - The language options used to create the AST associated with
   ///  this ASTContext object.
-  LangOptions LangOpts;
+  LangOptions &LangOpts;
 
   /// \brief The allocator used to create AST objects.
   ///
@@ -332,22 +335,29 @@ class ASTContext : public llvm::RefCountedBase<ASTContext> {
   CXXABI *createCXXABI(const TargetInfo &T);
 
   /// \brief The logical -> physical address space map.
-  const LangAS::Map &AddrSpaceMap;
+  const LangAS::Map *AddrSpaceMap;
 
   friend class ASTDeclReader;
   friend class ASTReader;
   friend class ASTWriter;
   
+  const TargetInfo *Target;
+  clang::PrintingPolicy PrintingPolicy;
+  
 public:
-  const TargetInfo &Target;
   IdentifierTable &Idents;
   SelectorTable &Selectors;
   Builtin::Context &BuiltinInfo;
   mutable DeclarationNameTable DeclarationNames;
   llvm::OwningPtr<ExternalASTSource> ExternalSource;
   ASTMutationListener *Listener;
-  clang::PrintingPolicy PrintingPolicy;
 
+  clang::PrintingPolicy getPrintingPolicy() const { return PrintingPolicy; }
+
+  void setPrintingPolicy(clang::PrintingPolicy Policy) {
+    PrintingPolicy = Policy;
+  }
+  
   SourceManager& getSourceManager() { return SourceMgr; }
   const SourceManager& getSourceManager() const { return SourceMgr; }
   void *Allocate(unsigned Size, unsigned Align = 8) const {
@@ -367,9 +377,11 @@ public:
     return DiagAllocator;
   }
 
+  const TargetInfo &getTargetInfo() const { return *Target; }
+  
   const LangOptions& getLangOptions() const { return LangOpts; }
 
-  Diagnostic &getDiagnostics() const;
+  DiagnosticsEngine &getDiagnostics() const;
 
   FullSourceLoc getFullLoc(SourceLocation Loc) const {
     return FullSourceLoc(Loc,SourceMgr);
@@ -478,10 +490,11 @@ public:
   mutable QualType AutoDeductTy;     // Deduction against 'auto'.
   mutable QualType AutoRRefDeductTy; // Deduction against 'auto &&'.
 
-  ASTContext(const LangOptions& LOpts, SourceManager &SM, const TargetInfo &t,
+  ASTContext(LangOptions& LOpts, SourceManager &SM, const TargetInfo *t,
              IdentifierTable &idents, SelectorTable &sels,
              Builtin::Context &builtins,
-             unsigned size_reserve);
+             unsigned size_reserve,
+             bool DelayInitialization = false);
 
   ~ASTContext();
 
@@ -881,6 +894,16 @@ public:
     ObjCSelRedefinitionType = RedefType;
   }
 
+  /// \brief Retrieve the Objective-C "instancetype" type, if already known;
+  /// otherwise, returns a NULL type;
+  QualType getObjCInstanceType() {
+    return getTypeDeclType(getObjCInstanceTypeDecl());
+  }
+
+  /// \brief Retrieve the typedef declaration corresponding to the Objective-C
+  /// "instancetype" type.
+  TypedefDecl *getObjCInstanceTypeDecl();
+  
   /// \brief Set the type for the C FILE type.
   void setFILEDecl(TypeDecl *FILEDecl) { this->FILEDecl = FILEDecl; }
 
@@ -1425,7 +1448,7 @@ public:
     if (AS < LangAS::Offset || AS >= LangAS::Offset + LangAS::Count)
       return AS;
     else
-      return AddrSpaceMap[AS - LangAS::Offset];
+      return (*AddrSpaceMap)[AS - LangAS::Offset];
   }
 
 private:
@@ -1487,6 +1510,10 @@ public:
                                      bool Unqualified = false);
   
   QualType mergeObjCGCQualifiers(QualType, QualType);
+    
+  bool FunctionTypesMatchOnNSConsumedAttrs(
+         const FunctionProtoType *FromFunctionType,
+         const FunctionProtoType *ToFunctionType);
 
   void ResetObjCLayout(const ObjCContainerDecl *CD) {
     ObjCLayouts[CD] = 0;
@@ -1645,7 +1672,18 @@ private:
   ASTContext(const ASTContext&); // DO NOT IMPLEMENT
   void operator=(const ASTContext&); // DO NOT IMPLEMENT
 
-  void InitBuiltinTypes();
+public:
+  /// \brief Initialize built-in types.
+  ///
+  /// This routine may only be invoked once for a given ASTContext object.
+  /// It is normally invoked by the ASTContext constructor. However, the
+  /// constructor can be asked to delay initialization, which places the burden
+  /// of calling this function on the user of that object.
+  ///
+  /// \param Target The target 
+  void InitBuiltinTypes(const TargetInfo &Target);
+  
+private:
   void InitBuiltinType(CanQualType &R, BuiltinType::Kind K);
 
   // Return the ObjC type encoding for a given type.

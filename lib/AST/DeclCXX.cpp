@@ -42,8 +42,9 @@ CXXRecordDecl::DefinitionData::DefinitionData(CXXRecordDecl *D)
     UserProvidedDefaultConstructor(false), DeclaredDefaultConstructor(false),
     DeclaredCopyConstructor(false), DeclaredMoveConstructor(false),
     DeclaredCopyAssignment(false), DeclaredMoveAssignment(false),
-    DeclaredDestructor(false), NumBases(0), NumVBases(0), Bases(), VBases(),
-    Definition(D), FirstFriend(0) {
+    DeclaredDestructor(false), FailedImplicitMoveConstructor(false),
+    FailedImplicitMoveAssignment(false), NumBases(0), NumVBases(0), Bases(),
+    VBases(), Definition(D), FirstFriend(0) {
 }
 
 CXXRecordDecl::CXXRecordDecl(Kind K, TagKind TK, DeclContext *DC,
@@ -502,18 +503,18 @@ NotASpecialMember:;
     // Note that we have a user-declared constructor.
     data().UserDeclaredConstructor = true;
 
-    // FIXME: Under C++0x, /only/ special member functions may be user-provided.
-    //        This is probably a defect.
-    bool UserProvided = false;
+    // Technically, "user-provided" is only defined for special member
+    // functions, but the intent of the standard is clearly that it should apply
+    // to all functions.
+    bool UserProvided = Constructor->isUserProvided();
 
     // C++0x [class.ctor]p5:
     //   A default constructor is trivial if it is not user-provided [...]
     if (Constructor->isDefaultConstructor()) {
       data().DeclaredDefaultConstructor = true;
-      if (Constructor->isUserProvided()) {
+      if (UserProvided) {
         data().HasTrivialDefaultConstructor = false;
         data().UserProvidedDefaultConstructor = true;
-        UserProvided = true;
       }
     }
 
@@ -527,10 +528,8 @@ NotASpecialMember:;
         // C++0x [class.copy]p13:
         //   A copy/move constructor for class X is trivial if it is not
         //   user-provided [...]
-        if (Constructor->isUserProvided()) {
+        if (UserProvided)
           data().HasTrivialCopyConstructor = false;
-          UserProvided = true;
-        }
       } else if (Constructor->isMoveConstructor()) {
         data().UserDeclaredMoveConstructor = true;
         data().DeclaredMoveConstructor = true;
@@ -538,10 +537,8 @@ NotASpecialMember:;
         // C++0x [class.copy]p13:
         //   A copy/move constructor for class X is trivial if it is not
         //   user-provided [...]
-        if (Constructor->isUserProvided()) {
+        if (UserProvided)
           data().HasTrivialMoveConstructor = false;
-          UserProvided = true;
-        }
       }
     }
     if (Constructor->isConstexpr() && !Constructor->isCopyOrMoveConstructor()) {
@@ -674,7 +671,7 @@ NotASpecialMember:;
     case AS_private:    data().HasPrivateFields = true;   break;
     case AS_protected:  data().HasProtectedFields = true; break;
     case AS_public:     data().HasPublicFields = true;    break;
-    case AS_none:       assert(0 && "Invalid access specifier");
+    case AS_none:       llvm_unreachable("Invalid access specifier");
     };
     if ((data().HasPrivateFields + data().HasProtectedFields +
          data().HasPublicFields) > 1)
@@ -1056,7 +1053,7 @@ CXXRecordDecl::setTemplateSpecializationKind(TemplateSpecializationKind TSK) {
     return;
   }
   
-  assert(false && "Not a class template or member class specialization");
+  llvm_unreachable("Not a class template or member class specialization");
 }
 
 CXXDestructorDecl *CXXRecordDecl::getDestructor() const {
@@ -1696,8 +1693,7 @@ static const char *getAccessName(AccessSpecifier AS) {
   switch (AS) {
     default:
     case AS_none:
-      assert("Invalid access specifier!");
-      return 0;
+      llvm_unreachable("Invalid access specifier!");
     case AS_public:
       return "public";
     case AS_private:

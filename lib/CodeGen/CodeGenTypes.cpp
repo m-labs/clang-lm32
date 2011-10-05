@@ -29,7 +29,7 @@ using namespace CodeGen;
 CodeGenTypes::CodeGenTypes(ASTContext &Ctx, llvm::Module& M,
                            const llvm::TargetData &TD, const ABIInfo &Info,
                            CGCXXABI &CXXABI, const CodeGenOptions &CGO)
-  : Context(Ctx), Target(Ctx.Target), TheModule(M), TheTargetData(TD),
+  : Context(Ctx), Target(Ctx.getTargetInfo()), TheModule(M), TheTargetData(TD),
     TheABIInfo(Info), TheCXXABI(CXXABI), CodeGenOpts(CGO) {
   SkippedLayout = false;
 }
@@ -273,8 +273,7 @@ static llvm::Type *getTypeForFormat(llvm::LLVMContext &VMContext,
     return llvm::Type::getPPC_FP128Ty(VMContext);
   if (&format == &llvm::APFloat::x87DoubleExtended)
     return llvm::Type::getX86_FP80Ty(VMContext);
-  assert(0 && "Unknown float format!");
-  return 0;
+  llvm_unreachable("Unknown float format!");
 }
 
 /// ConvertType - Convert the specified type to its LLVM form.

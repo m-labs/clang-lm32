@@ -198,12 +198,10 @@ unsigned MacOSKeychainAPIChecker::getTrackedFunctionIndex(StringRef Name,
 
 static SymbolRef getSymbolForRegion(CheckerContext &C,
                                    const MemRegion *R) {
+  // Implicit casts (ex: void* -> char*) can turn Symbolic region into element
+  // region, if that is the case, get the underlining region.
+  R = R->StripCasts();
   if (!isa<SymbolicRegion>(R)) {
-    // Implicit casts (ex: void* -> char*) can turn Symbolic region into element
-    // region, if that is the case, get the underlining region.
-    if (const ElementRegion *ER = dyn_cast<ElementRegion>(R))
-      R = ER->getAsArrayOffset().getRegion();
-    else
       return 0;
   }
   return cast<SymbolicRegion>(R)->getSymbol();
@@ -624,7 +622,8 @@ PathDiagnosticPiece *MacOSKeychainAPIChecker::SecKeychainBugVisitor::VisitNode(
   unsigned Idx = getTrackedFunctionIndex(funName, true);
   assert(Idx != InvalidIdx && "This should be a call to an allocator.");
   const Expr *ArgExpr = CE->getArg(FunctionsToTrack[Idx].Param);
-  PathDiagnosticLocation Pos(ArgExpr, BRC.getSourceManager());
+  PathDiagnosticLocation Pos(ArgExpr, BRC.getSourceManager(),
+                             N->getLocationContext());
   return new PathDiagnosticEventPiece(Pos, "Data is allocated here.");
 }
 

@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -emit-llvm -fobjc-nonfragile-abi -fblocks -fobjc-arc -fobjc-runtime-has-weak -O2 -disable-llvm-optzns -o - %s | FileCheck %s
-// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -emit-llvm -fobjc-nonfragile-abi -fblocks -fobjc-arc -fobjc-runtime-has-weak -o - %s | FileCheck -check-prefix=CHECK-GLOBALS %s
+// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -emit-llvm -fblocks -fobjc-arc -fobjc-runtime-has-weak -O2 -disable-llvm-optzns -o - %s | FileCheck %s
+// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -emit-llvm -fblocks -fobjc-arc -fobjc-runtime-has-weak -o - %s | FileCheck -check-prefix=CHECK-GLOBALS %s
 
 // CHECK: define void @test0
 void test0(id x) {
@@ -1855,3 +1855,84 @@ void test62(void) {
 // CHECK: call i8* @objc_getProperty
 // CHECK: call void @objc_setProperty 
 
+// rdar://problem/10088932
+void test64_helper(id);
+void test64a(void) {
+  int x;
+  test64_helper(^{ (void) x; });
+
+  // CHECK:    define void @test64a()
+  // CHECK:      [[X:%.*]] = alloca i32, align 4
+  // CHECK-NEXT: [[BLOCK:%.*]] = alloca [[BLOCK_T:<{.*}>]], align 8
+  // CHECK:      [[T0:%.*]] = bitcast [[BLOCK_T]]* [[BLOCK]] to void ()*
+  // CHECK-NEXT: [[T1:%.*]] = bitcast void ()* [[T0]] to i8*
+  // CHECK-NEXT: [[T2:%.*]] = call i8* @objc_retainBlock(i8* [[T1]])
+  // CHECK-NEXT: [[T3:%.*]] = bitcast i8* [[T2]] to void ()*
+  // CHECK-NEXT: [[T4:%.*]] = bitcast void ()* [[T3]] to i8*
+  // CHECK-NEXT: call void @test64_helper(i8* [[T4]])
+  // CHECK-NEXT: [[T5:%.*]] = bitcast void ()* [[T3]] to i8*
+  // CHECK-NEXT: call void @objc_release(i8* [[T5]])
+  // CHECK-NEXT: ret void
+}
+void test64b(void) {
+  int x;
+  id b = ^{ (void) x; };
+
+  // CHECK:    define void @test64b()
+  // CHECK:      [[X:%.*]] = alloca i32, align 4
+  // CHECK-NEXT: [[B:%.*]] = alloca i8*, align 8
+  // CHECK-NEXT: [[BLOCK:%.*]] = alloca [[BLOCK_T:<{.*}>]], align 8
+  // CHECK:      [[T0:%.*]] = bitcast [[BLOCK_T]]* [[BLOCK]] to void ()*
+  // CHECK-NEXT: [[T1:%.*]] = bitcast void ()* [[T0]] to i8*
+  // CHECK-NEXT: [[T2:%.*]] = call i8* @objc_retainBlock(i8* [[T1]])
+  // CHECK-NEXT: [[T3:%.*]] = bitcast i8* [[T2]] to void ()*
+  // CHECK-NEXT: [[T4:%.*]] = bitcast void ()* [[T3]] to i8*
+  // CHECK-NEXT: store i8* [[T4]], i8** [[B]], align 8
+  // CHECK-NEXT: [[T5:%.*]] = load i8** [[B]]
+  // CHECK-NEXT: call void @objc_release(i8* [[T5]])
+  // CHECK-NEXT: ret void
+}
+
+// rdar://problem/9979150
+@interface Test65
+@property (strong) void(^ablock)(void);
+@property (nonatomic, strong) void(^nblock)(void);
+@end
+@implementation Test65
+@synthesize ablock, nblock;
+// CHECK:    define internal void ()* @"\01-[Test65 ablock]"(
+// CHECK:    call i8* @objc_getProperty(i8* {{%.*}}, i8* {{%.*}}, i64 {{%.*}}, i1 zeroext true)
+
+// CHECK:    define internal void @"\01-[Test65 setAblock:]"(
+// CHECK:    call void @objc_setProperty(i8* {{%.*}}, i8* {{%.*}}, i64 {{%.*}}, i8* {{%.*}}, i1 zeroext true, i1 zeroext true)
+
+// CHECK:    define internal void ()* @"\01-[Test65 nblock]"(
+// CHECK:    call i8* @objc_getProperty(i8* {{%.*}}, i8* {{%.*}}, i64 {{%.*}}, i1 zeroext false)
+
+// CHECK:    define internal void @"\01-[Test65 setNblock:]"(
+// CHECK:    call void @objc_setProperty(i8* {{%.*}}, i8* {{%.*}}, i64 {{%.*}}, i8* {{%.*}}, i1 zeroext false, i1 zeroext true)
+@end
+
+// Verify that we successfully parse and preserve this attribute in
+// this position.
+@interface Test66
+- (void) consume: (id __attribute__((ns_consumed))) ptr;
+@end
+void test66(void) {
+  extern Test66 *test66_receiver(void);
+  extern id test66_arg(void);
+  [test66_receiver() consume: test66_arg()];
+}
+// CHECK:    define void @test66()
+// CHECK:      [[T0:%.*]] = call [[TEST66:%.*]]* @test66_receiver()
+// CHECK-NEXT: [[T1:%.*]] = bitcast [[TEST66]]* [[T0]] to i8*
+// CHECK-NEXT: [[T2:%.*]] = call i8* @objc_retainAutoreleasedReturnValue(i8* [[T1]])
+// CHECK-NEXT: [[T3:%.*]] = bitcast i8* [[T2]] to [[TEST66]]*
+// CHECK-NEXT: [[T4:%.*]] = call i8* @test66_arg()
+// CHECK-NEXT: [[T5:%.*]] = call i8* @objc_retainAutoreleasedReturnValue(i8* [[T4]])
+// CHECK-NEXT: [[T6:%.*]] = load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: [[T7:%.*]] = bitcast [[TEST66]]* [[T3]] to i8*
+// CHECK-NEXT: call void bitcast (i8* (i8*, i8*, ...)* @objc_msgSend to void (i8*, i8*, i8*)*)(i8* [[T7]], i8* [[T6]], i8* [[T5]])
+// CHECK-NEXT: [[T8:%.*]] = bitcast [[TEST66]]* [[T3]] to i8*
+// CHECK-NEXT: call void @objc_release(i8* [[T8]])
+// CHECK-NEXT: ret void

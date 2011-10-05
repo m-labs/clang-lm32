@@ -833,14 +833,16 @@ Type::ScalarTypeKind Type::getScalarTypeKind() const {
   const Type *T = CanonicalType.getTypePtr();
   if (const BuiltinType *BT = dyn_cast<BuiltinType>(T)) {
     if (BT->getKind() == BuiltinType::Bool) return STK_Bool;
-    if (BT->getKind() == BuiltinType::NullPtr) return STK_Pointer;
+    if (BT->getKind() == BuiltinType::NullPtr) return STK_CPointer;
     if (BT->isInteger()) return STK_Integral;
     if (BT->isFloatingPoint()) return STK_Floating;
     llvm_unreachable("unknown scalar builtin type");
-  } else if (isa<PointerType>(T) ||
-             isa<BlockPointerType>(T) ||
-             isa<ObjCObjectPointerType>(T)) {
-    return STK_Pointer;
+  } else if (isa<PointerType>(T)) {
+    return STK_CPointer;
+  } else if (isa<BlockPointerType>(T)) {
+    return STK_BlockPointer;
+  } else if (isa<ObjCObjectPointerType>(T)) {
+    return STK_ObjCObjectPointer;
   } else if (isa<MemberPointerType>(T)) {
     return STK_MemberPointer;
   } else if (isa<EnumType>(T)) {
@@ -853,7 +855,6 @@ Type::ScalarTypeKind Type::getScalarTypeKind() const {
   }
 
   llvm_unreachable("unknown scalar type");
-  return STK_Pointer;
 }
 
 /// \brief Determines whether the type is a C++ aggregate type or C
@@ -1133,29 +1134,19 @@ bool Type::isLiteralType() const {
     return true;
   //    -- a class type that has all of the following properties:
   if (const RecordType *RT = BaseTy->getAs<RecordType>()) {
+    //    -- a trivial destructor,
+    //    -- every constructor call and full-expression in the
+    //       brace-or-equal-initializers for non-static data members (if any)
+    //       is a constant expression,
+    //    -- it is an aggregate type or has at least one constexpr
+    //       constructor or constructor template that is not a copy or move
+    //       constructor, and
+    //    -- all non-static data members and base classes of literal types
+    //
+    // We resolve DR1361 by ignoring the second bullet.
     if (const CXXRecordDecl *ClassDecl =
-        dyn_cast<CXXRecordDecl>(RT->getDecl())) {
-      //    -- a trivial destructor,
-      if (!ClassDecl->hasTrivialDestructor())
-        return false;
-
-      //    -- every constructor call and full-expression in the
-      //       brace-or-equal-initializers for non-static data members (if any)
-      //       is a constant expression,
-      // We deliberately do not implement this restriction. It isn't necessary
-      // and doesn't make any sense.
-
-      //    -- it is an aggregate type or has at least one constexpr
-      //       constructor or constructor template that is not a copy or move
-      //       constructor, and
-      if (!ClassDecl->isAggregate() &&
-          !ClassDecl->hasConstexprNonCopyMoveConstructor())
-        return false;
-
-      //    -- all non-static data members and base classes of literal types
-      if (ClassDecl->hasNonLiteralTypeFieldsOrBases())
-        return false;
-    }
+        dyn_cast<CXXRecordDecl>(RT->getDecl()))
+      return ClassDecl->isLiteral();
 
     return true;
   }
@@ -1198,7 +1189,7 @@ bool Type::isStandardLayoutType() const {
 }
 
 // This is effectively the intersection of isTrivialType and
-// isStandardLayoutType. We implement it dircetly to avoid redundant
+// isStandardLayoutType. We implement it directly to avoid redundant
 // conversions from a type to a CXXRecordDecl.
 bool QualType::isCXX11PODType(ASTContext &Context) const {
   const Type *ty = getTypePtr();
@@ -1466,10 +1457,10 @@ const char *Type::getTypeClassName() const {
   return 0;
 }
 
-const char *BuiltinType::getName(const LangOptions &LO) const {
+const char *BuiltinType::getName(const PrintingPolicy &Policy) const {
   switch (getKind()) {
   case Void:              return "void";
-  case Bool:              return LO.Bool ? "bool" : "_Bool";
+  case Bool:              return Policy.Bool ? "bool" : "_Bool";
   case Char_S:            return "char";
   case Char_U:            return "char";
   case SChar:             return "signed char";
@@ -2273,7 +2264,7 @@ QualType::DestructionKind QualType::isDestructedTypeImpl(QualType type) {
   return DK_none;
 }
 
-bool QualType::hasTrivialCopyAssignment(ASTContext &Context) const {
+bool QualType::hasTrivialAssignment(ASTContext &Context, bool Copying) const {
   switch (getObjCLifetime()) {
   case Qualifiers::OCL_None:
     break;
@@ -2289,7 +2280,8 @@ bool QualType::hasTrivialCopyAssignment(ASTContext &Context) const {
   
   if (const CXXRecordDecl *Record 
             = getTypePtr()->getBaseElementTypeUnsafe()->getAsCXXRecordDecl())
-    return Record->hasTrivialCopyAssignment();
+    return Copying ? Record->hasTrivialCopyAssignment() :
+                     Record->hasTrivialMoveAssignment();
   
   return true;
 }

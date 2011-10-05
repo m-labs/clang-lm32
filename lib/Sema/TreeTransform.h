@@ -31,6 +31,7 @@
 #include "clang/Sema/Ownership.h"
 #include "clang/Sema/Designator.h"
 #include "clang/Lex/Preprocessor.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "TypeLocBuilder.h"
 #include <algorithm>
@@ -244,8 +245,7 @@ public:
   /// must be set.
   bool TryExpandParameterPacks(SourceLocation EllipsisLoc,
                                SourceRange PatternRange,
-                               const UnexpandedParameterPack *Unexpanded,
-                               unsigned NumUnexpanded,
+                             llvm::ArrayRef<UnexpandedParameterPack> Unexpanded,
                                bool &ShouldExpand,
                                bool &RetainExpansion,
                                llvm::Optional<unsigned> &NumExpansions) {
@@ -1728,8 +1728,7 @@ public:
                                                    SubExpr, RParenLoc);
 
     default:
-      assert(false && "Invalid C++ named cast");
-      break;
+      llvm_unreachable("Invalid C++ named cast");
     }
 
     return ExprError();
@@ -2032,13 +2031,14 @@ public:
   /// By default, performs semantic analysis to build the new expression.
   /// Subclasses may override this routine to provide different behavior.
   ExprResult RebuildCXXConstructExpr(QualType T,
-                                           SourceLocation Loc,
-                                           CXXConstructorDecl *Constructor,
-                                           bool IsElidable,
-                                           MultiExprArg Args,
-                                           bool RequiresZeroInit,
+                                     SourceLocation Loc,
+                                     CXXConstructorDecl *Constructor,
+                                     bool IsElidable,
+                                     MultiExprArg Args,
+                                     bool HadMultipleCandidates,
+                                     bool RequiresZeroInit,
                              CXXConstructExpr::ConstructionKind ConstructKind,
-                                           SourceRange ParenRange) {
+                                     SourceRange ParenRange) {
     ASTOwningVector<Expr*> ConvertedArgs(SemaRef);
     if (getSema().CompleteConstructorCall(Constructor, move(Args), Loc, 
                                           ConvertedArgs))
@@ -2046,6 +2046,7 @@ public:
     
     return getSema().BuildCXXConstructExpr(Loc, T, Constructor, IsElidable,
                                            move_arg(ConvertedArgs),
+                                           HadMultipleCandidates,
                                            RequiresZeroInit, ConstructKind,
                                            ParenRange);
   }
@@ -2153,7 +2154,7 @@ public:
   /// \brief Build a new Objective-C class message.
   ExprResult RebuildObjCMessageExpr(TypeSourceInfo *ReceiverTypeInfo,
                                           Selector Sel,
-                                          SourceLocation SelectorLoc,
+                                          ArrayRef<SourceLocation> SelectorLocs,
                                           ObjCMethodDecl *Method,
                                           SourceLocation LBracLoc, 
                                           MultiExprArg Args,
@@ -2161,14 +2162,14 @@ public:
     return SemaRef.BuildClassMessage(ReceiverTypeInfo,
                                      ReceiverTypeInfo->getType(),
                                      /*SuperLoc=*/SourceLocation(),
-                                     Sel, Method, LBracLoc, SelectorLoc,
+                                     Sel, Method, LBracLoc, SelectorLocs,
                                      RBracLoc, move(Args));
   }
 
   /// \brief Build a new Objective-C instance message.
   ExprResult RebuildObjCMessageExpr(Expr *Receiver,
                                           Selector Sel,
-                                          SourceLocation SelectorLoc,
+                                          ArrayRef<SourceLocation> SelectorLocs,
                                           ObjCMethodDecl *Method,
                                           SourceLocation LBracLoc, 
                                           MultiExprArg Args,
@@ -2176,7 +2177,7 @@ public:
     return SemaRef.BuildInstanceMessage(Receiver,
                                         Receiver->getType(),
                                         /*SuperLoc=*/SourceLocation(),
-                                        Sel, Method, LBracLoc, SelectorLoc,
+                                        Sel, Method, LBracLoc, SelectorLocs,
                                         RBracLoc, move(Args));
   }
 
@@ -2467,8 +2468,7 @@ bool TreeTransform<Derived>::TransformExprs(Expr **Inputs,
       llvm::Optional<unsigned> NumExpansions = OrigNumExpansions;
       if (getDerived().TryExpandParameterPacks(Expansion->getEllipsisLoc(),
                                                Pattern->getSourceRange(),
-                                               Unexpanded.data(),
-                                               Unexpanded.size(),
+                                               Unexpanded,
                                                Expand, RetainExpansion,
                                                NumExpansions))
         return true;
@@ -2682,8 +2682,7 @@ TreeTransform<Derived>
   }
   }
 
-  assert(0 && "Unknown name kind.");
-  return DeclarationNameInfo();
+  llvm_unreachable("Unknown name kind.");
 }
 
 template<typename Derived>
@@ -3043,8 +3042,7 @@ bool TreeTransform<Derived>::TransformTemplateArguments(InputIterator First,
       llvm::Optional<unsigned> NumExpansions = OrigNumExpansions;
       if (getDerived().TryExpandParameterPacks(Ellipsis,
                                                Pattern.getSourceRange(),
-                                               Unexpanded.data(),
-                                               Unexpanded.size(),
+                                               Unexpanded,
                                                Expand, 
                                                RetainExpansion,
                                                NumExpansions))
@@ -3854,8 +3852,7 @@ bool TreeTransform<Derived>::
         NumExpansions = OrigNumExpansions;
         if (getDerived().TryExpandParameterPacks(ExpansionTL.getEllipsisLoc(),
                                                  Pattern.getSourceRange(),
-                                                 Unexpanded.data(), 
-                                                 Unexpanded.size(),
+                                                 Unexpanded, 
                                                  ShouldExpand, 
                                                  RetainExpansion,
                                                  NumExpansions)) {
@@ -3944,8 +3941,7 @@ bool TreeTransform<Derived>::
       bool ShouldExpand = false;
       bool RetainExpansion = false;
       if (getDerived().TryExpandParameterPacks(Loc, SourceRange(),
-                                               Unexpanded.data(), 
-                                               Unexpanded.size(),
+                                               Unexpanded, 
                                                ShouldExpand, 
                                                RetainExpansion,
                                                NumExpansions)) {
@@ -7351,6 +7347,7 @@ TreeTransform<Derived>::TransformCXXConstructExpr(CXXConstructExpr *E) {
   return getDerived().RebuildCXXConstructExpr(T, /*FIXME:*/E->getLocStart(),
                                               Constructor, E->isElidable(),
                                               move_arg(Args),
+                                              E->hadMultipleCandidates(),
                                               E->requiresZeroInitialization(),
                                               E->getConstructionKind(),
                                               E->getParenRange());
@@ -7678,7 +7675,7 @@ TreeTransform<Derived>::TransformSizeOfPackExpr(SizeOfPackExpr *E) {
   bool RetainExpansion = false;
   llvm::Optional<unsigned> NumExpansions;
   if (getDerived().TryExpandParameterPacks(E->getOperatorLoc(), E->getPackLoc(), 
-                                           &Unexpanded, 1, 
+                                           Unexpanded,
                                            ShouldExpand, RetainExpansion,
                                            NumExpansions))
     return ExprError();
@@ -7800,9 +7797,11 @@ TreeTransform<Derived>::TransformObjCMessageExpr(ObjCMessageExpr *E) {
       return SemaRef.Owned(E);
 
     // Build a new class message send.
+    SmallVector<SourceLocation, 16> SelLocs;
+    E->getSelectorLocs(SelLocs);
     return getDerived().RebuildObjCMessageExpr(ReceiverTypeInfo,
                                                E->getSelector(),
-                                               E->getSelectorLoc(),
+                                               SelLocs,
                                                E->getMethodDecl(),
                                                E->getLeftLoc(),
                                                move_arg(Args),
@@ -7823,9 +7822,11 @@ TreeTransform<Derived>::TransformObjCMessageExpr(ObjCMessageExpr *E) {
     return SemaRef.Owned(E);
   
   // Build a new instance message send.
+  SmallVector<SourceLocation, 16> SelLocs;
+  E->getSelectorLocs(SelLocs);
   return getDerived().RebuildObjCMessageExpr(Receiver.get(),
                                              E->getSelector(),
-                                             E->getSelectorLoc(),
+                                             SelLocs,
                                              E->getMethodDecl(),
                                              E->getLeftLoc(),
                                              move_arg(Args),
@@ -7989,7 +7990,7 @@ TreeTransform<Derived>::TransformBlockExpr(BlockExpr *E) {
 
   // Set the parameters on the block decl.
   if (!params.empty())
-    blockScope->TheDecl->setParams(params.data(), params.size());
+    blockScope->TheDecl->setParams(params);
   
   // If the return type wasn't explicitly set, it will have been marked as a 
   // dependent type (DependentTy); clear out the return type setting so 
@@ -8053,8 +8054,7 @@ TreeTransform<Derived>::TransformBlockDeclRefExpr(BlockDeclRefExpr *E) {
 template<typename Derived>
 ExprResult
 TreeTransform<Derived>::TransformAsTypeExpr(AsTypeExpr *E) {
-  assert(false && "Cannot transform asType expressions yet");
-  return SemaRef.Owned(E);
+  llvm_unreachable("Cannot transform asType expressions yet");
 }
   
 //===----------------------------------------------------------------------===//

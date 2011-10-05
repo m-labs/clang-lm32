@@ -34,7 +34,7 @@ namespace clang {
   class ASTContext;
   class TypeLoc;
   class LangOptions;
-  class Diagnostic;
+  class DiagnosticsEngine;
   class IdentifierInfo;
   class NamespaceAliasDecl;
   class NamespaceDecl;
@@ -345,7 +345,7 @@ private:
   SourceRange TypeofParensRange;
   SourceLocation TQ_constLoc, TQ_restrictLoc, TQ_volatileLoc;
   SourceLocation FS_inlineLoc, FS_virtualLoc, FS_explicitLoc;
-  SourceLocation FriendLoc, ConstexprLoc;
+  SourceLocation FriendLoc, ModulePrivateLoc, ConstexprLoc;
 
   WrittenBuiltinSpecs writtenBS;
   void SaveWrittenBuiltinSpecs();
@@ -592,13 +592,17 @@ public:
 
   bool SetFriendSpec(SourceLocation Loc, const char *&PrevSpec,
                      unsigned &DiagID);
-
+  bool setModulePrivateSpec(SourceLocation Loc, const char *&PrevSpec,
+                            unsigned &DiagID);
   bool SetConstexprSpec(SourceLocation Loc, const char *&PrevSpec,
                         unsigned &DiagID);
 
   bool isFriendSpecified() const { return Friend_specified; }
   SourceLocation getFriendSpecLoc() const { return FriendLoc; }
 
+  bool isModulePrivateSpecified() const { return ModulePrivateLoc.isValid(); }
+  SourceLocation getModulePrivateSpecLoc() const { return ModulePrivateLoc; }
+  
   bool isConstexprSpecified() const { return Constexpr_specified; }
   SourceLocation getConstexprSpecLoc() const { return ConstexprLoc; }
 
@@ -657,7 +661,7 @@ public:
   /// Finish - This does final analysis of the declspec, issuing diagnostics for
   /// things like "_Imaginary" (lacking an FP type).  After calling this method,
   /// DeclSpec is guaranteed self-consistent, even if an error occurred.
-  void Finish(Diagnostic &D, Preprocessor &PP);
+  void Finish(DiagnosticsEngine &D, Preprocessor &PP);
 
   const WrittenBuiltinSpecs& getWrittenBuiltinSpecs() const {
     return writtenBS;
@@ -732,6 +736,7 @@ public:
   const IdentifierInfo *getSetterName() const { return SetterName; }
   IdentifierInfo *getSetterName() { return SetterName; }
   void setSetterName(IdentifierInfo *name) { SetterName = name; }
+
 private:
   // FIXME: These two are unrelated and mutially exclusive. So perhaps
   // we can put them in a union to reflect their mutual exclusiveness
@@ -1222,7 +1227,7 @@ struct DeclaratorChunk {
 
   void destroy() {
     switch (Kind) {
-    default: assert(0 && "Unknown decl type!");
+    default: llvm_unreachable("Unknown decl type!");
     case DeclaratorChunk::Function:      return Fun.destroy();
     case DeclaratorChunk::Pointer:       return Ptr.destroy();
     case DeclaratorChunk::BlockPointer:  return Cls.destroy();
@@ -1364,7 +1369,8 @@ public:
   enum TheContext {
     FileContext,         // File scope declaration.
     PrototypeContext,    // Within a function prototype.
-    ObjCPrototypeContext,// Within a method prototype.
+    ObjCResultContext,   // An ObjC method result type.
+    ObjCParameterContext,// An ObjC method parameter type.
     KNRTypeListContext,  // K&R type definition list for formals.
     TypeNameContext,     // Abstract declarator for types.
     MemberContext,       // Struct/Union field.
@@ -1462,7 +1468,9 @@ public:
   TheContext getContext() const { return Context; }
 
   bool isPrototypeContext() const {
-    return (Context == PrototypeContext || Context == ObjCPrototypeContext);
+    return (Context == PrototypeContext ||
+            Context == ObjCParameterContext ||
+            Context == ObjCResultContext);
   }
 
   /// getSourceRange - Get the source range that spans this declarator.
@@ -1522,7 +1530,8 @@ public:
     case AliasDeclContext:
     case AliasTemplateContext:
     case PrototypeContext:
-    case ObjCPrototypeContext:
+    case ObjCParameterContext:
+    case ObjCResultContext:
     case TemplateParamContext:
     case CXXNewContext:
     case CXXCatchContext:
@@ -1555,7 +1564,8 @@ public:
     case CXXNewContext:
     case AliasDeclContext:
     case AliasTemplateContext:
-    case ObjCPrototypeContext:
+    case ObjCParameterContext:
+    case ObjCResultContext:
     case BlockLiteralContext:
     case TemplateTypeArgContext:
       return false;
@@ -1578,7 +1588,8 @@ public:
     case MemberContext:
     case ConditionContext:
     case PrototypeContext:
-    case ObjCPrototypeContext:
+    case ObjCParameterContext:
+    case ObjCResultContext:
     case TemplateParamContext:
     case CXXCatchContext:
     case ObjCCatchContext:

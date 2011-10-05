@@ -46,7 +46,7 @@ CGDebugInfo::CGDebugInfo(CodeGenModule &CGM)
 }
 
 CGDebugInfo::~CGDebugInfo() {
-  assert(RegionStack.empty() && "Region stack mismatch, stack not empty!");
+  assert(LexicalBlockStack.empty() && "Region stack mismatch, stack not empty!");
 }
 
 void CGDebugInfo::setLocation(SourceLocation Loc) {
@@ -289,7 +289,17 @@ llvm::DIType CGDebugInfo::CreateType(const BuiltinType *BT) {
   unsigned Encoding = 0;
   const char *BTName = NULL;
   switch (BT->getKind()) {
-  default:
+  case BuiltinType::Dependent:
+    llvm_unreachable("Unexpected builtin type Dependent");
+  case BuiltinType::Overload:
+    llvm_unreachable("Unexpected builtin type Overload");
+  case BuiltinType::BoundMember:
+    llvm_unreachable("Unexpected builtin type BoundMember");
+  case BuiltinType::UnknownAny:
+    llvm_unreachable("Unexpected builtin type UnknownAny");
+  case BuiltinType::NullPtr:
+    return DBuilder.
+      createNullPtrType(BT->getName(CGM.getContext().getLangOptions()));
   case BuiltinType::Void:
     return llvm::DIType();
   case BuiltinType::ObjCClass:
@@ -334,15 +344,19 @@ llvm::DIType CGDebugInfo::CreateType(const BuiltinType *BT) {
   case BuiltinType::Char_U: Encoding = llvm::dwarf::DW_ATE_unsigned_char; break;
   case BuiltinType::Char_S:
   case BuiltinType::SChar: Encoding = llvm::dwarf::DW_ATE_signed_char; break;
+  case BuiltinType::Char16:
+  case BuiltinType::Char32: Encoding = llvm::dwarf::DW_ATE_UTF; break;
   case BuiltinType::UShort:
   case BuiltinType::UInt:
   case BuiltinType::UInt128:
   case BuiltinType::ULong:
+  case BuiltinType::WChar_U:
   case BuiltinType::ULongLong: Encoding = llvm::dwarf::DW_ATE_unsigned; break;
   case BuiltinType::Short:
   case BuiltinType::Int:
   case BuiltinType::Int128:
   case BuiltinType::Long:
+  case BuiltinType::WChar_S:
   case BuiltinType::LongLong:  Encoding = llvm::dwarf::DW_ATE_signed; break;
   case BuiltinType::Bool:      Encoding = llvm::dwarf::DW_ATE_boolean; break;
   case BuiltinType::Float:
@@ -432,7 +446,7 @@ llvm::DIType CGDebugInfo::CreateType(const PointerType *Ty,
                                Ty->getPointeeType(), Unit);
 }
 
-/// CreatePointeeType - Create PointTee type. If Pointee is a record
+/// CreatePointeeType - Create Pointee type. If Pointee is a record
 /// then emit record's fwd if debug info size reduction is enabled.
 llvm::DIType CGDebugInfo::CreatePointeeType(QualType PointeeTy,
                                             llvm::DIFile Unit) {
@@ -477,7 +491,7 @@ llvm::DIType CGDebugInfo::CreatePointerLikeType(unsigned Tag,
   // Size is always the size of a pointer. We can't use getTypeSize here
   // because that does not return the correct value for references.
   unsigned AS = CGM.getContext().getTargetAddressSpace(PointeeTy);
-  uint64_t Size = CGM.getContext().Target.getPointerWidth(AS);
+  uint64_t Size = CGM.getContext().getTargetInfo().getPointerWidth(AS);
   uint64_t Align = CGM.getContext().getTypeAlign(Ty);
 
   return 
@@ -674,7 +688,6 @@ CGDebugInfo::getOrCreateMethodType(const CXXMethodDecl *Method,
                       Unit);
   
   // Add "this" pointer.
-
   llvm::DIArray Args = llvm::DICompositeType(FnTy).getTypeArray();
   assert (Args.getNumElements() && "Invalid number of arguments!");
 
@@ -683,16 +696,15 @@ CGDebugInfo::getOrCreateMethodType(const CXXMethodDecl *Method,
   // First element is always return type. For 'void' functions it is NULL.
   Elts.push_back(Args.getElement(0));
 
-  if (!Method->isStatic())
-  {
-        // "this" pointer is always first argument.
-        QualType ThisPtr = Method->getThisType(CGM.getContext());
-        llvm::DIType ThisPtrType =
-          DBuilder.createArtificialType(getOrCreateType(ThisPtr, Unit));
-
-        TypeCache[ThisPtr.getAsOpaquePtr()] = ThisPtrType;
-        Elts.push_back(ThisPtrType);
-    }
+  if (!Method->isStatic()) {
+    // "this" pointer is always first argument.
+    QualType ThisPtr = Method->getThisType(CGM.getContext());
+    llvm::DIType ThisPtrType =
+      DBuilder.createArtificialType(getOrCreateType(ThisPtr, Unit));
+    
+    TypeCache[ThisPtr.getAsOpaquePtr()] = ThisPtrType;
+    Elts.push_back(ThisPtrType);
+  }
 
   // Copy rest of the arguments.
   for (unsigned i = 1, e = Args.getNumElements(); i != e; ++i)
@@ -750,7 +762,7 @@ CGDebugInfo::CreateCXXMemberFunction(const CXXMethodDecl *Method,
     // It doesn't make sense to give a virtual destructor a vtable index,
     // since a single destructor has two entries in the vtable.
     if (!isa<CXXDestructorDecl>(Method))
-      VIndex = CGM.getVTables().getMethodVTableIndex(Method);
+      VIndex = CGM.getVTableContext().getMethodVTableIndex(Method);
     ContainingType = RecordTy;
   }
 
@@ -774,7 +786,7 @@ CGDebugInfo::CreateCXXMemberFunction(const CXXMethodDecl *Method,
     Flags |= llvm::DIDescriptor::FlagPrototyped;
     
   llvm::DISubprogram SP =
-    DBuilder.createMethod(RecordTy , MethodName, MethodLinkageName, 
+    DBuilder.createMethod(RecordTy, MethodName, MethodLinkageName, 
                           MethodDefUnit, MethodLine,
                           MethodTy, /*isLocalToUnit=*/false, 
                           /* isDefinition=*/ false,
@@ -811,9 +823,10 @@ void CGDebugInfo::
 CollectCXXFriends(const CXXRecordDecl *RD, llvm::DIFile Unit,
                 SmallVectorImpl<llvm::Value *> &EltTys,
                 llvm::DIType RecordTy) {
-
   for (CXXRecordDecl::friend_iterator BI =  RD->friend_begin(),
          BE = RD->friend_end(); BI != BE; ++BI) {
+    if ((*BI)->isUnsupportedFriend())
+      continue;
     if (TypeSourceInfo *TInfo = (*BI)->getFriendType())
       EltTys.push_back(DBuilder.createFriend(RecordTy, 
                                              getOrCreateType(TInfo->getType(), 
@@ -842,7 +855,8 @@ CollectCXXBases(const CXXRecordDecl *RD, llvm::DIFile Unit,
       // virtual base offset offset is -ve. The code generator emits dwarf
       // expression where it expects +ve number.
       BaseOffset = 
-        0 - CGM.getVTables().getVirtualBaseOffsetOffset(RD, Base).getQuantity();
+        0 - CGM.getVTableContext()
+               .getVirtualBaseOffsetOffset(RD, Base).getQuantity();
       BFlags = llvm::DIDescriptor::FlagVirtual;
     } else
       BaseOffset = RL.getBaseClassOffsetInBits(Base);
@@ -1016,7 +1030,7 @@ llvm::DIType CGDebugInfo::CreateType(const RecordType *Ty) {
   // it.
   TypeCache[QualType(Ty, 0).getAsOpaquePtr()] = FwdDecl;
   // Push the struct on region stack.
-  RegionStack.push_back(FwdDeclNode);
+  LexicalBlockStack.push_back(FwdDeclNode);
   RegionMap[Ty->getDecl()] = llvm::WeakVH(FwdDecl);
 
   // Convert all the elements.
@@ -1062,7 +1076,7 @@ llvm::DIType CGDebugInfo::CreateType(const RecordType *Ty) {
       TParamsArray = CollectCXXTemplateParams(TSpecial, Unit);
   }
 
-  RegionStack.pop_back();
+  LexicalBlockStack.pop_back();
   llvm::DenseMap<const Decl *, llvm::WeakVH>::iterator RI = 
     RegionMap.find(Ty->getDecl());
   if (RI != RegionMap.end())
@@ -1158,7 +1172,7 @@ llvm::DIType CGDebugInfo::CreateType(const ObjCInterfaceType *Ty,
   // it.
   TypeCache[QualType(Ty, 0).getAsOpaquePtr()] = FwdDecl;
   // Push the struct on region stack.
-  RegionStack.push_back(FwdDeclNode);
+  LexicalBlockStack.push_back(FwdDeclNode);
   RegionMap[Ty->getDecl()] = llvm::WeakVH(FwdDecl);
 
   // Convert all the elements.
@@ -1177,7 +1191,7 @@ llvm::DIType CGDebugInfo::CreateType(const ObjCInterfaceType *Ty,
   }
 
   const ASTRecordLayout &RL = CGM.getContext().getASTObjCInterfaceLayout(ID);
-
+  ObjCImplementationDecl *ImpD = ID->getImplementation();
   unsigned FieldNo = 0;
   for (ObjCIvarDecl *Field = ID->all_declared_ivar_begin(); Field;
        Field = Field->getNextIvar(), ++FieldNo) {
@@ -1221,13 +1235,17 @@ llvm::DIType CGDebugInfo::CreateType(const ObjCInterfaceType *Ty,
     StringRef PropertyGetter;
     StringRef PropertySetter;
     unsigned PropertyAttributes = 0;
-    if (ObjCPropertyDecl *PD =
-        ID->FindPropertyVisibleInPrimaryClass(Field->getIdentifier())) {
+    ObjCPropertyDecl *PD = NULL;
+    if (ImpD)
+      if (ObjCPropertyImplDecl *PImpD = 
+	  ImpD->FindPropertyImplIvarDecl(Field->getIdentifier()))
+	PD = PImpD->getPropertyDecl();
+    if (PD) {
       PropertyName = PD->getName();
       PropertyGetter = getSelectorName(PD->getGetterName());
       PropertySetter = getSelectorName(PD->getSetterName());
       PropertyAttributes = PD->getPropertyAttributes();
-    }
+    } 
     FieldTy = DBuilder.createObjCIVar(FieldName, FieldDefUnit,
                                       FieldLine, FieldSize, FieldAlign,
                                       FieldOffset, Flags, FieldTy,
@@ -1238,7 +1256,7 @@ llvm::DIType CGDebugInfo::CreateType(const ObjCInterfaceType *Ty,
 
   llvm::DIArray Elements = DBuilder.getOrCreateArray(EltTys);
 
-  RegionStack.pop_back();
+  LexicalBlockStack.pop_back();
   llvm::DenseMap<const Decl *, llvm::WeakVH>::iterator RI = 
     RegionMap.find(Ty->getDecl());
   if (RI != RegionMap.end())
@@ -1522,7 +1540,7 @@ llvm::DIType CGDebugInfo::CreateTypeNode(QualType Ty,
 #define NON_CANONICAL_TYPE(Class, Base)
 #define DEPENDENT_TYPE(Class, Base) case Type::Class:
 #include "clang/AST/TypeNodes.def"
-    assert(false && "Dependent types cannot show up in debug information");
+    llvm_unreachable("Dependent types cannot show up in debug information");
 
   case Type::ExtVector:
   case Type::Vector:
@@ -1573,7 +1591,7 @@ llvm::DIType CGDebugInfo::CreateTypeNode(QualType Ty,
   }
   
   assert(Diag && "Fall through without a diagnostic?");
-  unsigned DiagID = CGM.getDiags().getCustomDiagID(Diagnostic::Error,
+  unsigned DiagID = CGM.getDiags().getCustomDiagID(DiagnosticsEngine::Error,
                                "debug information for %0 is not yet supported");
   CGM.getDiags().Report(DiagID)
     << Diag;
@@ -1642,7 +1660,7 @@ llvm::DIType CGDebugInfo::getOrCreateFunctionType(const Decl * D, QualType FnTyp
     // "cmd" pointer is always second argument.
     Elts.push_back(getOrCreateType(OMethod->getCmdDecl()->getType(), F));
     // Get rest of the arguments.
-    for (ObjCMethodDecl::param_iterator PI = OMethod->param_begin(), 
+    for (ObjCMethodDecl::param_const_iterator PI = OMethod->param_begin(), 
            PE = OMethod->param_end(); PI != PE; ++PI)
       Elts.push_back(getOrCreateType((*PI)->getType(), F));
 
@@ -1661,7 +1679,7 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
   StringRef Name;
   StringRef LinkageName;
 
-  FnBeginRegionCount.push_back(RegionStack.size());
+  FnBeginRegionCount.push_back(LexicalBlockStack.size());
 
   const Decl *D = GD.getDecl();
 
@@ -1677,7 +1695,7 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
       llvm::DIDescriptor SP(dyn_cast_or_null<llvm::MDNode>(&*FI->second));
       if (SP.isSubprogram() && llvm::DISubprogram(SP).isDefinition()) {
         llvm::MDNode *SPN = SP;
-        RegionStack.push_back(SPN);
+        LexicalBlockStack.push_back(SPN);
         RegionMap[D] = llvm::WeakVH(SP);
         return;
       }
@@ -1726,36 +1744,15 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, QualType FnType,
 
   // Push function on region stack.
   llvm::MDNode *SPN = SP;
-  RegionStack.push_back(SPN);
+  LexicalBlockStack.push_back(SPN);
   RegionMap[D] = llvm::WeakVH(SP);
 
   // Clear stack used to keep track of #line directives.
   LineDirectiveFiles.clear();
 }
 
-
-void CGDebugInfo::EmitStopPoint(CGBuilderTy &Builder) {
-  if (CurLoc.isInvalid() || CurLoc.isMacroID()) return;
-
-  // Don't bother if things are the same as last time.
-  SourceManager &SM = CGM.getContext().getSourceManager();
-  if (CurLoc == PrevLoc || 
-      SM.getExpansionLoc(CurLoc) == SM.getExpansionLoc(PrevLoc))
-    // New Builder may not be in sync with CGDebugInfo.
-    if (!Builder.getCurrentDebugLocation().isUnknown())
-      return;
-
-  // Update last state.
-  PrevLoc = CurLoc;
-
-  llvm::MDNode *Scope = RegionStack.back();
-  Builder.SetCurrentDebugLocation(llvm::DebugLoc::get(getLineNumber(CurLoc),
-                                                      getColumnNumber(CurLoc),
-                                                      Scope));
-}
-
-/// UpdateLineDirectiveRegion - Update region stack only if #line directive
-/// has introduced scope change.
+// UpdateLineDirectiveRegion - Update region stack only if #line directive
+// has introduced scope change.
 void CGDebugInfo::UpdateLineDirectiveRegion(CGBuilderTy &Builder) {
   if (CurLoc.isInvalid() || CurLoc.isMacroID() ||
       PrevLoc.isInvalid() || PrevLoc.isMacroID())
@@ -1770,18 +1767,18 @@ void CGDebugInfo::UpdateLineDirectiveRegion(CGBuilderTy &Builder) {
 
   // If #line directive stack is empty then we are entering a new scope.
   if (LineDirectiveFiles.empty()) {
-    EmitRegionStart(Builder);
+    EmitLexicalBlockStart(Builder);
     LineDirectiveFiles.push_back(PCLoc.getFilename());
     return;
   }
 
-  assert (RegionStack.size() >= LineDirectiveFiles.size()
-          && "error handling  #line regions!");
+  assert (LexicalBlockStack.size() >= LineDirectiveFiles.size()
+	  && "error handling #line regions!");
 
   bool SeenThisFile = false;
   // Chek if current file is already seen earlier.
   for(std::vector<const char *>::iterator I = LineDirectiveFiles.begin(),
-        E = LineDirectiveFiles.end(); I != E; ++I)
+	E = LineDirectiveFiles.end(); I != E; ++I)
     if (!strcmp(PCLoc.getFilename(), *I)) {
       SeenThisFile = true;
       break;
@@ -1791,54 +1788,81 @@ void CGDebugInfo::UpdateLineDirectiveRegion(CGBuilderTy &Builder) {
   if (SeenThisFile) {
     while (!LineDirectiveFiles.empty()) {
       const char *LastFile = LineDirectiveFiles.back();
-      RegionStack.pop_back();
+      LexicalBlockStack.pop_back();
       LineDirectiveFiles.pop_back();
       if (!strcmp(PPLoc.getFilename(), LastFile))
-        break;
+	break;
     }
     return;
-  } 
+  }
 
   // .. otherwise insert new #line region.
-  EmitRegionStart(Builder);
+  EmitLexicalBlockStart(Builder);
   LineDirectiveFiles.push_back(PCLoc.getFilename());
 
   return;
 }
-/// EmitRegionStart- Constructs the debug code for entering a declarative
-/// region - "llvm.dbg.region.start.".
-void CGDebugInfo::EmitRegionStart(CGBuilderTy &Builder) {
+
+/// EmitLocation - Emit metadata to indicate a change in line/column
+/// information in the source file.
+void CGDebugInfo::EmitLocation(CGBuilderTy &Builder) {
+  if (CurLoc.isInvalid() || CurLoc.isMacroID()) return;
+
+  // Don't bother if things are the same as last time.
+  SourceManager &SM = CGM.getContext().getSourceManager();
+  if (CurLoc == PrevLoc || 
+      SM.getExpansionLoc(CurLoc) == SM.getExpansionLoc(PrevLoc))
+    // New Builder may not be in sync with CGDebugInfo.
+    if (!Builder.getCurrentDebugLocation().isUnknown())
+      return;
+
+  // The file may have had a line directive change. Process any of
+  // those before updating the state.
+  UpdateLineDirectiveRegion(Builder);
+  
+  // Update last state.
+  PrevLoc = CurLoc;
+
+  llvm::MDNode *Scope = LexicalBlockStack.back();
+  Builder.SetCurrentDebugLocation(llvm::DebugLoc::get(getLineNumber(CurLoc),
+                                                      getColumnNumber(CurLoc),
+                                                      Scope));
+}
+
+/// EmitLexicalBlockStart - Constructs the debug code for entering a declarative
+/// region - beginning of a DW_TAG_lexical_block.
+void CGDebugInfo::EmitLexicalBlockStart(CGBuilderTy &Builder) {
   llvm::DIDescriptor D =
-    DBuilder.createLexicalBlock(RegionStack.empty() ? 
+    DBuilder.createLexicalBlock(LexicalBlockStack.empty() ? 
                                 llvm::DIDescriptor() : 
-                                llvm::DIDescriptor(RegionStack.back()),
+                                llvm::DIDescriptor(LexicalBlockStack.back()),
                                 getOrCreateFile(CurLoc),
                                 getLineNumber(CurLoc), 
                                 getColumnNumber(CurLoc));
   llvm::MDNode *DN = D;
-  RegionStack.push_back(DN);
+  LexicalBlockStack.push_back(DN);
 }
 
-/// EmitRegionEnd - Constructs the debug code for exiting a declarative
-/// region - "llvm.dbg.region.end."
-void CGDebugInfo::EmitRegionEnd(CGBuilderTy &Builder) {
-  assert(!RegionStack.empty() && "Region stack mismatch, stack empty!");
+/// EmitLexicalBlockEnd - Constructs the debug code for exiting a declarative
+/// region - end of a DW_TAG_lexical_block.
+void CGDebugInfo::EmitLexicalBlockEnd(CGBuilderTy &Builder) {
+  assert(!LexicalBlockStack.empty() && "Region stack mismatch, stack empty!");
 
-  // Provide an region stop point.
-  EmitStopPoint(Builder);
+  // Provide a region stop point.
+  EmitLocation(Builder);
 
-  RegionStack.pop_back();
+  LexicalBlockStack.pop_back();
 }
 
 /// EmitFunctionEnd - Constructs the debug code for exiting a function.
 void CGDebugInfo::EmitFunctionEnd(CGBuilderTy &Builder) {
-  assert(!RegionStack.empty() && "Region stack mismatch, stack empty!");
+  assert(!LexicalBlockStack.empty() && "Region stack mismatch, stack empty!");
   unsigned RCount = FnBeginRegionCount.back();
-  assert(RCount <= RegionStack.size() && "Region stack mismatch");
+  assert(RCount <= LexicalBlockStack.size() && "Region stack mismatch");
 
   // Pop all regions for this function.
-  while (RegionStack.size() != RCount)
-    EmitRegionEnd(Builder);
+  while (LexicalBlockStack.size() != RCount)
+    EmitLexicalBlockEnd(Builder);
   FnBeginRegionCount.pop_back();
 }
 
@@ -1874,7 +1898,7 @@ llvm::DIType CGDebugInfo::EmitTypeForVarWithBlocksAttr(const ValueDecl *VD,
   
   CharUnits Align = CGM.getContext().getDeclAlign(VD);
   if (Align > CGM.getContext().toCharUnitsFromBits(
-        CGM.getContext().Target.getPointerAlign(0))) {
+        CGM.getContext().getTargetInfo().getPointerAlign(0))) {
     CharUnits FieldOffsetInBytes 
       = CGM.getContext().toCharUnitsFromBits(FieldOffset);
     CharUnits AlignedOffsetInBytes
@@ -1914,7 +1938,7 @@ llvm::DIType CGDebugInfo::EmitTypeForVarWithBlocksAttr(const ValueDecl *VD,
 void CGDebugInfo::EmitDeclare(const VarDecl *VD, unsigned Tag,
                               llvm::Value *Storage, 
                               unsigned ArgNo, CGBuilderTy &Builder) {
-  assert(!RegionStack.empty() && "Region stack mismatch, stack empty!");
+  assert(!LexicalBlockStack.empty() && "Region stack mismatch, stack empty!");
 
   llvm::DIFile Unit = getOrCreateFile(VD->getLocation());
   llvm::DIType Ty;
@@ -1949,7 +1973,7 @@ void CGDebugInfo::EmitDeclare(const VarDecl *VD, unsigned Tag,
   unsigned Flags = 0;
   if (VD->isImplicit())
     Flags |= llvm::DIDescriptor::FlagArtificial;
-  llvm::MDNode *Scope = RegionStack.back();
+  llvm::MDNode *Scope = LexicalBlockStack.back();
     
   StringRef Name = VD->getName();
   if (!Name.empty()) {
@@ -1960,7 +1984,7 @@ void CGDebugInfo::EmitDeclare(const VarDecl *VD, unsigned Tag,
       addr.push_back(llvm::ConstantInt::get(Int64Ty, llvm::DIBuilder::OpPlus));
       // offset of __forwarding field
       offset = CGM.getContext().toCharUnitsFromBits(
-        CGM.getContext().Target.getPointerWidth(0));
+        CGM.getContext().getTargetInfo().getPointerWidth(0));
       addr.push_back(llvm::ConstantInt::get(Int64Ty, offset.getQuantity()));
       addr.push_back(llvm::ConstantInt::get(Int64Ty, llvm::DIBuilder::OpDeref));
       addr.push_back(llvm::ConstantInt::get(Int64Ty, llvm::DIBuilder::OpPlus));
@@ -1971,7 +1995,7 @@ void CGDebugInfo::EmitDeclare(const VarDecl *VD, unsigned Tag,
       // Create the descriptor for the variable.
       llvm::DIVariable D =
         DBuilder.createComplexVariable(Tag, 
-                                       llvm::DIDescriptor(RegionStack.back()),
+                                       llvm::DIDescriptor(LexicalBlockStack.back()),
                                        VD->getName(), Unit, Line, Ty,
                                        addr, ArgNo);
       
@@ -2038,7 +2062,7 @@ void CGDebugInfo::EmitDeclareOfAutoVariable(const VarDecl *VD,
 void CGDebugInfo::EmitDeclareOfBlockDeclRefVariable(
   const VarDecl *VD, llvm::Value *Storage, CGBuilderTy &Builder,
   const CGBlockInfo &blockInfo) {
-  assert(!RegionStack.empty() && "Region stack mismatch, stack empty!");
+  assert(!LexicalBlockStack.empty() && "Region stack mismatch, stack empty!");
   
   if (Builder.GetInsertBlock() == 0)
     return;
@@ -2083,13 +2107,13 @@ void CGDebugInfo::EmitDeclareOfBlockDeclRefVariable(
   // Create the descriptor for the variable.
   llvm::DIVariable D =
     DBuilder.createComplexVariable(llvm::dwarf::DW_TAG_auto_variable, 
-                                   llvm::DIDescriptor(RegionStack.back()),
+                                   llvm::DIDescriptor(LexicalBlockStack.back()),
                                    VD->getName(), Unit, Line, Ty, addr);
   // Insert an llvm.dbg.declare into the current block.
   llvm::Instruction *Call = 
     DBuilder.insertDeclare(Storage, D, Builder.GetInsertPoint());
   
-  llvm::MDNode *Scope = RegionStack.back();
+  llvm::MDNode *Scope = LexicalBlockStack.back();
   Call->setDebugLoc(llvm::DebugLoc::get(Line, Column, Scope));
 }
 
@@ -2237,7 +2261,7 @@ void CGDebugInfo::EmitDeclareOfBlockLiteralArgVariable(const CGBlockInfo &block,
 
   // Get overall information about the block.
   unsigned flags = llvm::DIDescriptor::FlagArtificial;
-  llvm::MDNode *scope = RegionStack.back();
+  llvm::MDNode *scope = LexicalBlockStack.back();
   StringRef name = ".block_descriptor";
 
   // Create the descriptor for the parameter.

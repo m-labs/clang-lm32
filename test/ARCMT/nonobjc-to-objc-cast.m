@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -fobjc-nonfragile-abi -fsyntax-only -fobjc-arc -x objective-c %s.result
-// RUN: arcmt-test --args -triple x86_64-apple-darwin10 -fobjc-nonfragile-abi -fsyntax-only -x objective-c %s > %t
+// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -fsyntax-only -fobjc-arc -x objective-c %s.result
+// RUN: arcmt-test --args -triple x86_64-apple-darwin10 -fsyntax-only -x objective-c %s > %t
 // RUN: diff %t %s.result
 
 #include "Common.h"
@@ -40,6 +40,8 @@ void f(BOOL b, id p) {
 }
 @end
 
+extern void consumeParam(CFStringRef CF_CONSUMED p);
+
 void f2(NSString *s) {
   CFStringRef ref = [s string];
   ref = (CFStringRef)[s string];
@@ -53,4 +55,7 @@ void f2(NSString *s) {
   ref = CFRetain([s string]);
   ref = CFRetain(s);
   ref = [s retain];
+
+  consumeParam((CFStringRef)s);
+  consumeParam(s);
 }

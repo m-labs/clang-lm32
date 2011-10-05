@@ -612,12 +612,12 @@ public:
   /// EHResumeBlock - Unified block containing a call to llvm.eh.resume.
   llvm::BasicBlock *EHResumeBlock;
 
-  /// The exception slot.  All landing pads write the current
-  /// exception pointer into this alloca.
+  /// The exception slot.  All landing pads write the current exception pointer
+  /// into this alloca.
   llvm::Value *ExceptionSlot;
 
-  /// The selector slot.  Under the MandatoryCleanup model, all
-  /// landing pads write the current selector value into this alloca.
+  /// The selector slot.  Under the MandatoryCleanup model, all landing pads
+  /// write the current selector value into this alloca.
   llvm::AllocaInst *EHSelectorSlot;
 
   /// Emits a landing pad for the current EH stack.
@@ -1116,10 +1116,15 @@ public:
 
   const LangOptions &getLangOptions() const { return CGM.getLangOptions(); }
 
-  /// Returns a pointer to the function's exception object slot, which
-  /// is assigned in every landing pad.
+  /// Returns a pointer to the function's exception object and selector slot,
+  /// which is assigned in every landing pad.
   llvm::Value *getExceptionSlot();
   llvm::Value *getEHSelectorSlot();
+
+  /// Returns the contents of the function's exception object and selector
+  /// slots.
+  llvm::Value *getExceptionFromSlot();
+  llvm::Value *getSelectorFromSlot();
 
   llvm::Value *getNormalCleanupDestSlot();
 
@@ -1202,9 +1207,8 @@ public:
   /// GenerateObjCGetter - Synthesize an Objective-C property getter function.
   void GenerateObjCGetter(ObjCImplementationDecl *IMP,
                           const ObjCPropertyImplDecl *PID);
-  void GenerateObjCGetterBody(ObjCIvarDecl *Ivar, bool IsAtomic, bool IsStrong);
-  void GenerateObjCAtomicSetterBody(ObjCMethodDecl *OMD,
-                                    ObjCIvarDecl *Ivar);
+  void generateObjCGetterBody(const ObjCImplementationDecl *classImpl,
+                              const ObjCPropertyImplDecl *propImpl);
 
   void GenerateObjCCtorDtorMethod(ObjCImplementationDecl *IMP,
                                   ObjCMethodDecl *MD, bool ctor);
@@ -1213,6 +1217,8 @@ public:
   /// for the given property.
   void GenerateObjCSetter(ObjCImplementationDecl *IMP,
                           const ObjCPropertyImplDecl *PID);
+  void generateObjCSetterBody(const ObjCImplementationDecl *classImpl,
+                              const ObjCPropertyImplDecl *propImpl);
   bool IndirectObjCSetterArg(const CGFunctionInfo &FI);
   bool IvarTypeWithAggrGCObjects(QualType Ty);
 
@@ -1465,7 +1471,9 @@ public:
   /// aggregate type.
   AggValueSlot CreateAggTemp(QualType T, const Twine &Name = "tmp") {
     return AggValueSlot::forAddr(CreateMemTemp(T, Name), T.getQualifiers(),
-                                 false);
+                                 AggValueSlot::IsNotDestructed,
+                                 AggValueSlot::DoesNotNeedGCBarriers,
+                                 AggValueSlot::IsNotAliased);
   }
 
   /// Emit a cast to void* in the appropriate address space.
@@ -1666,8 +1674,8 @@ public:
   void EmitCXXDestructorCall(const CXXDestructorDecl *D, CXXDtorType Type,
                              bool ForVirtualBase, llvm::Value *This);
 
-  void EmitNewArrayInitializer(const CXXNewExpr *E, llvm::Value *NewPtr,
-                               llvm::Value *NumElements);
+  void EmitNewArrayInitializer(const CXXNewExpr *E, QualType elementType,
+                               llvm::Value *NewPtr, llvm::Value *NumElements);
 
   void EmitCXXTemporary(const CXXTemporary *Temporary, llvm::Value *Ptr);
 
@@ -2121,7 +2129,7 @@ public:
                                       bool ignored);
   llvm::Value *EmitARCRetain(QualType type, llvm::Value *value);
   llvm::Value *EmitARCRetainNonBlock(llvm::Value *value);
-  llvm::Value *EmitARCRetainBlock(llvm::Value *value);
+  llvm::Value *EmitARCRetainBlock(llvm::Value *value, bool mandatory);
   void EmitARCRelease(llvm::Value *value, bool precise);
   llvm::Value *EmitARCAutorelease(llvm::Value *value);
   llvm::Value *EmitARCAutoreleaseReturnValue(llvm::Value *value);
@@ -2133,10 +2141,13 @@ public:
   std::pair<LValue,llvm::Value*>
   EmitARCStoreStrong(const BinaryOperator *e, bool ignored);
 
+  llvm::Value *EmitObjCThrowOperand(const Expr *expr);
+
   llvm::Value *EmitObjCProduceObject(QualType T, llvm::Value *Ptr);
   llvm::Value *EmitObjCConsumeObject(QualType T, llvm::Value *Ptr);
   llvm::Value *EmitObjCExtendObjectLifetime(QualType T, llvm::Value *Ptr);
 
+  llvm::Value *EmitARCExtendBlockObject(const Expr *expr);
   llvm::Value *EmitARCRetainScalarExpr(const Expr *expr);
   llvm::Value *EmitARCRetainAutoreleaseScalarExpr(const Expr *expr);
 
@@ -2268,6 +2279,23 @@ public:
                               AggValueSlot Slot =AggValueSlot::ignored());
 
   void EmitCXXThrowExpr(const CXXThrowExpr *E);
+
+  //===--------------------------------------------------------------------===//
+  //                         Annotations Emission
+  //===--------------------------------------------------------------------===//
+
+  /// Emit an annotation call (intrinsic or builtin).
+  llvm::Value *EmitAnnotationCall(llvm::Value *AnnotationFn,
+                                  llvm::Value *AnnotatedVal,
+                                  llvm::StringRef AnnotationStr,
+                                  SourceLocation Location);
+
+  /// Emit local annotations for the local variable V, declared by D.
+  void EmitVarAnnotations(const VarDecl *D, llvm::Value *V);
+
+  /// Emit field annotations for the given field & value. Returns the
+  /// annotation result.
+  llvm::Value *EmitFieldAnnotations(const FieldDecl *D, llvm::Value *V);
 
   //===--------------------------------------------------------------------===//
   //                             Internal Helpers

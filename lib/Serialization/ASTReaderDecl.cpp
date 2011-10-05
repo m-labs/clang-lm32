@@ -14,6 +14,7 @@
 
 #include "ASTCommon.h"
 #include "clang/Serialization/ASTReader.h"
+#include "clang/Sema/SemaDiagnostic.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclVisitor.h"
@@ -103,6 +104,11 @@ namespace clang {
 
     void UpdateDecl(Decl *D, Module &Module,
                     const RecordData &Record);
+
+    static void setNextObjCCategory(ObjCCategoryDecl *Cat,
+                                    ObjCCategoryDecl *Next) {
+      Cat->NextClassCategory = Next;
+    }
 
     void VisitDecl(Decl *D);
     void VisitTranslationUnitDecl(TranslationUnitDecl *TU);
@@ -225,7 +231,7 @@ void ASTDeclReader::VisitDecl(Decl *D) {
     // unit DeclContext as a placeholder.
     DeclContextIDForTemplateParmDecl = ReadDeclID(Record, Idx);
     LexicalDeclContextIDForTemplateParmDecl = ReadDeclID(Record, Idx);
-    D->setDeclContext(Reader.getContext()->getTranslationUnitDecl()); 
+    D->setDeclContext(Reader.getContext().getTranslationUnitDecl()); 
   } else {
     D->setDeclContext(ReadDeclAs<DeclContext>(Record, Idx));
     D->setLexicalDeclContext(ReadDeclAs<DeclContext>(Record, Idx));
@@ -241,7 +247,8 @@ void ASTDeclReader::VisitDecl(Decl *D) {
   D->setUsed(Record[Idx++]);
   D->setReferenced(Record[Idx++]);
   D->setAccess((AccessSpecifier)Record[Idx++]);
-  D->setPCHLevel(Record[Idx++] + (F.Kind <= MK_PCH));
+  D->FromASTFile = true;
+  D->ModulePrivate = Record[Idx++];
 }
 
 void ASTDeclReader::VisitTranslationUnitDecl(TranslationUnitDecl *TU) {
@@ -277,9 +284,10 @@ void ASTDeclReader::VisitTagDecl(TagDecl *TD) {
   TD->setTagKind((TagDecl::TagKind)Record[Idx++]);
   TD->setDefinition(Record[Idx++]);
   TD->setEmbeddedInDeclarator(Record[Idx++]);
+  TD->setFreeStanding(Record[Idx++]);
   TD->setRBraceLoc(ReadSourceLocation(Record, Idx));
   if (Record[Idx++]) { // hasExtInfo
-    TagDecl::ExtInfo *Info = new (*Reader.getContext()) TagDecl::ExtInfo();
+    TagDecl::ExtInfo *Info = new (Reader.getContext()) TagDecl::ExtInfo();
     ReadQualifierInfo(*Info, Record, Idx);
     TD->TypedefNameDeclOrQualifier = Info;
   } else
@@ -325,7 +333,7 @@ void ASTDeclReader::VisitDeclaratorDecl(DeclaratorDecl *DD) {
   DD->setInnerLocStart(ReadSourceLocation(Record, Idx));
   if (Record[Idx++]) { // hasExtInfo
     DeclaratorDecl::ExtInfo *Info
-        = new (*Reader.getContext()) DeclaratorDecl::ExtInfo();
+        = new (Reader.getContext()) DeclaratorDecl::ExtInfo();
     ReadQualifierInfo(*Info, Record, Idx);
     DD->DeclInfo = Info;
   }
@@ -338,8 +346,7 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
   ReadDeclarationNameLoc(FD->DNLoc, FD->getDeclName(), Record, Idx);
   FD->IdentifierNamespace = Record[Idx++];
   switch ((FunctionDecl::TemplatedKind)Record[Idx++]) {
-  default: assert(false && "Unhandled TemplatedKind!");
-    break;
+  default: llvm_unreachable("Unhandled TemplatedKind!");
   case FunctionDecl::TK_NonTemplate:
     break;
   case FunctionDecl::TK_FunctionTemplate:
@@ -350,7 +357,7 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
     FunctionDecl *InstFD = ReadDeclAs<FunctionDecl>(Record, Idx);
     TemplateSpecializationKind TSK = (TemplateSpecializationKind)Record[Idx++];
     SourceLocation POI = ReadSourceLocation(Record, Idx);
-    FD->setInstantiationOfMemberFunction(*Reader.getContext(), InstFD, TSK);
+    FD->setInstantiationOfMemberFunction(Reader.getContext(), InstFD, TSK);
     FD->getMemberSpecializationInfo()->setPointOfInstantiation(POI);
     break;
   }
@@ -366,7 +373,8 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
     // Template args as written.
     SmallVector<TemplateArgumentLoc, 8> TemplArgLocs;
     SourceLocation LAngleLoc, RAngleLoc;
-    if (Record[Idx++]) {  // TemplateArgumentsAsWritten != 0
+    bool HasTemplateArgumentsAsWritten = Record[Idx++];
+    if (HasTemplateArgumentsAsWritten) {
       unsigned NumTemplateArgLocs = Record[Idx++];
       TemplArgLocs.reserve(NumTemplateArgLocs);
       for (unsigned i=0; i != NumTemplateArgLocs; ++i)
@@ -379,17 +387,17 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
     
     SourceLocation POI = ReadSourceLocation(Record, Idx);
 
-    ASTContext &C = *Reader.getContext();
+    ASTContext &C = Reader.getContext();
     TemplateArgumentList *TemplArgList
       = TemplateArgumentList::CreateCopy(C, TemplArgs.data(), TemplArgs.size());
-    TemplateArgumentListInfo *TemplArgsInfo
-      = new (C) TemplateArgumentListInfo(LAngleLoc, RAngleLoc);
+    TemplateArgumentListInfo TemplArgsInfo(LAngleLoc, RAngleLoc);
     for (unsigned i=0, e = TemplArgLocs.size(); i != e; ++i)
-      TemplArgsInfo->addArgument(TemplArgLocs[i]);
+      TemplArgsInfo.addArgument(TemplArgLocs[i]);
     FunctionTemplateSpecializationInfo *FTInfo
         = FunctionTemplateSpecializationInfo::Create(C, FD, Template, TSK,
                                                      TemplArgList,
-                                                     TemplArgsInfo, POI);
+                             HasTemplateArgumentsAsWritten ? &TemplArgsInfo : 0,
+                                                     POI);
     FD->TemplateOrSpecialization = FTInfo;
 
     if (FD->isCanonicalDecl()) { // if canonical add to template's set.
@@ -427,7 +435,7 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
     TemplArgs.setLAngleLoc(ReadSourceLocation(Record, Idx));
     TemplArgs.setRAngleLoc(ReadSourceLocation(Record, Idx));
     
-    FD->setDependentTemplateSpecialization(*Reader.getContext(),
+    FD->setDependentTemplateSpecialization(Reader.getContext(),
                                            TemplDecls, TemplArgs);
     break;
   }
@@ -458,7 +466,7 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
   Params.reserve(NumParams);
   for (unsigned I = 0; I != NumParams; ++I)
     Params.push_back(ReadDeclAs<ParmVarDecl>(Record, Idx));
-  FD->setParams(*Reader.getContext(), Params.data(), NumParams);
+  FD->setParams(Reader.getContext(), Params);
 }
 
 void ASTDeclReader::VisitObjCMethodDecl(ObjCMethodDecl *MD) {
@@ -477,7 +485,6 @@ void ASTDeclReader::VisitObjCMethodDecl(ObjCMethodDecl *MD) {
   MD->setDeclImplementation((ObjCMethodDecl::ImplementationControl)Record[Idx++]);
   MD->setObjCDeclQualifier((Decl::ObjCDeclQualifier)Record[Idx++]);
   MD->SetRelatedResultType(Record[Idx++]);
-  MD->setNumSelectorArgs(unsigned(Record[Idx++]));
   MD->setResultType(Reader.readType(F, Record, Idx));
   MD->setResultTypeSourceInfo(GetTypeSourceInfo(Record, Idx));
   MD->setEndLoc(ReadSourceLocation(Record, Idx));
@@ -486,15 +493,21 @@ void ASTDeclReader::VisitObjCMethodDecl(ObjCMethodDecl *MD) {
   Params.reserve(NumParams);
   for (unsigned I = 0; I != NumParams; ++I)
     Params.push_back(ReadDeclAs<ParmVarDecl>(Record, Idx));
-  MD->setMethodParams(*Reader.getContext(), Params.data(), NumParams,
-                      NumParams);
+
+  MD->SelLocsKind = Record[Idx++];
+  unsigned NumStoredSelLocs = Record[Idx++];
+  SmallVector<SourceLocation, 16> SelLocs;
+  SelLocs.reserve(NumStoredSelLocs);
+  for (unsigned i = 0; i != NumStoredSelLocs; ++i)
+    SelLocs.push_back(ReadSourceLocation(Record, Idx));
+
+  MD->setParamsAndSelLocs(Reader.getContext(), Params, SelLocs);
 }
 
 void ASTDeclReader::VisitObjCContainerDecl(ObjCContainerDecl *CD) {
   VisitNamedDecl(CD);
-  SourceLocation A = ReadSourceLocation(Record, Idx);
-  SourceLocation B = ReadSourceLocation(Record, Idx);
-  CD->setAtEndRange(SourceRange(A, B));
+  CD->setAtStartLoc(ReadSourceLocation(Record, Idx));
+  CD->setAtEndRange(ReadSourceRange(Record, Idx));
 }
 
 void ASTDeclReader::VisitObjCInterfaceDecl(ObjCInterfaceDecl *ID) {
@@ -513,7 +526,7 @@ void ASTDeclReader::VisitObjCInterfaceDecl(ObjCInterfaceDecl *ID) {
   for (unsigned I = 0; I != NumProtocols; ++I)
     ProtoLocs.push_back(ReadSourceLocation(Record, Idx));
   ID->setProtocolList(Protocols.data(), NumProtocols, ProtoLocs.data(),
-                      *Reader.getContext());
+                      Reader.getContext());
   
   // Read the transitive closure of protocols referenced by this class.
   NumProtocols = Record[Idx++];
@@ -522,7 +535,7 @@ void ASTDeclReader::VisitObjCInterfaceDecl(ObjCInterfaceDecl *ID) {
   for (unsigned I = 0; I != NumProtocols; ++I)
     Protocols.push_back(ReadDeclAs<ObjCProtocolDecl>(Record, Idx));
   ID->AllReferencedProtocols.set(Protocols.data(), NumProtocols,
-                                 *Reader.getContext());
+                                 Reader.getContext());
   
   // Read the ivars.
   unsigned NumIvars = Record[Idx++];
@@ -536,7 +549,6 @@ void ASTDeclReader::VisitObjCInterfaceDecl(ObjCInterfaceDecl *ID) {
   ID->setIvarList(0);
   ID->setForwardDecl(Record[Idx++]);
   ID->setImplicitInterfaceDecl(Record[Idx++]);
-  ID->setClassLoc(ReadSourceLocation(Record, Idx));
   ID->setSuperClassLoc(ReadSourceLocation(Record, Idx));
   ID->setLocEnd(ReadSourceLocation(Record, Idx));
 }
@@ -564,7 +576,7 @@ void ASTDeclReader::VisitObjCProtocolDecl(ObjCProtocolDecl *PD) {
   for (unsigned I = 0; I != NumProtoRefs; ++I)
     ProtoLocs.push_back(ReadSourceLocation(Record, Idx));
   PD->setProtocolList(ProtoRefs.data(), NumProtoRefs, ProtoLocs.data(),
-                      *Reader.getContext());
+                      Reader.getContext());
 }
 
 void ASTDeclReader::VisitObjCAtDefsFieldDecl(ObjCAtDefsFieldDecl *FD) {
@@ -573,17 +585,9 @@ void ASTDeclReader::VisitObjCAtDefsFieldDecl(ObjCAtDefsFieldDecl *FD) {
 
 void ASTDeclReader::VisitObjCClassDecl(ObjCClassDecl *CD) {
   VisitDecl(CD);
-  unsigned NumClassRefs = Record[Idx++];
-  SmallVector<ObjCInterfaceDecl *, 16> ClassRefs;
-  ClassRefs.reserve(NumClassRefs);
-  for (unsigned I = 0; I != NumClassRefs; ++I)
-    ClassRefs.push_back(ReadDeclAs<ObjCInterfaceDecl>(Record, Idx));
-  SmallVector<SourceLocation, 16> SLocs;
-  SLocs.reserve(NumClassRefs);
-  for (unsigned I = 0; I != NumClassRefs; ++I)
-    SLocs.push_back(ReadSourceLocation(Record, Idx));
-  CD->setClassList(*Reader.getContext(), ClassRefs.data(), SLocs.data(),
-                   NumClassRefs);
+  ObjCInterfaceDecl *ClassRef = ReadDeclAs<ObjCInterfaceDecl>(Record, Idx);
+  SourceLocation SLoc = ReadSourceLocation(Record, Idx);
+  CD->setClass(Reader.getContext(), ClassRef, SLoc);
 }
 
 void ASTDeclReader::VisitObjCForwardProtocolDecl(ObjCForwardProtocolDecl *FPD) {
@@ -598,12 +602,12 @@ void ASTDeclReader::VisitObjCForwardProtocolDecl(ObjCForwardProtocolDecl *FPD) {
   for (unsigned I = 0; I != NumProtoRefs; ++I)
     ProtoLocs.push_back(ReadSourceLocation(Record, Idx));
   FPD->setProtocolList(ProtoRefs.data(), NumProtoRefs, ProtoLocs.data(),
-                       *Reader.getContext());
+                       Reader.getContext());
 }
 
 void ASTDeclReader::VisitObjCCategoryDecl(ObjCCategoryDecl *CD) {
   VisitObjCContainerDecl(CD);
-  CD->setClassInterface(ReadDeclAs<ObjCInterfaceDecl>(Record, Idx));
+  CD->ClassInterface = ReadDeclAs<ObjCInterfaceDecl>(Record, Idx);
   unsigned NumProtoRefs = Record[Idx++];
   SmallVector<ObjCProtocolDecl *, 16> ProtoRefs;
   ProtoRefs.reserve(NumProtoRefs);
@@ -614,10 +618,9 @@ void ASTDeclReader::VisitObjCCategoryDecl(ObjCCategoryDecl *CD) {
   for (unsigned I = 0; I != NumProtoRefs; ++I)
     ProtoLocs.push_back(ReadSourceLocation(Record, Idx));
   CD->setProtocolList(ProtoRefs.data(), NumProtoRefs, ProtoLocs.data(),
-                      *Reader.getContext());
-  CD->setNextClassCategory(ReadDeclAs<ObjCCategoryDecl>(Record, Idx));
+                      Reader.getContext());
+  CD->NextClassCategory = ReadDeclAs<ObjCCategoryDecl>(Record, Idx);
   CD->setHasSynthBitfield(Record[Idx++]);
-  CD->setAtLoc(ReadSourceLocation(Record, Idx));
   CD->setCategoryNameLoc(ReadSourceLocation(Record, Idx));
 }
 
@@ -684,7 +687,7 @@ void ASTDeclReader::VisitFieldDecl(FieldDecl *FD) {
     FD->setInClassInitializer(Reader.ReadExpr(F));
   if (!FD->getDeclName()) {
     if (FieldDecl *Tmpl = ReadDeclAs<FieldDecl>(Record, Idx))
-      Reader.getContext()->setInstantiatedFromUnnamedFieldDecl(FD, Tmpl);
+      Reader.getContext().setInstantiatedFromUnnamedFieldDecl(FD, Tmpl);
   }
 }
 
@@ -693,7 +696,7 @@ void ASTDeclReader::VisitIndirectFieldDecl(IndirectFieldDecl *FD) {
 
   FD->ChainingSize = Record[Idx++];
   assert(FD->ChainingSize >= 2 && "Anonymous chaining must be >= 2");
-  FD->Chaining = new (*Reader.getContext())NamedDecl*[FD->ChainingSize];
+  FD->Chaining = new (Reader.getContext())NamedDecl*[FD->ChainingSize];
 
   for (unsigned I = 0; I != FD->ChainingSize; ++I)
     FD->Chaining[I] = ReadDeclAs<NamedDecl>(Record, Idx);
@@ -717,7 +720,7 @@ void ASTDeclReader::VisitVarDecl(VarDecl *VD) {
     VarDecl *Tmpl = ReadDeclAs<VarDecl>(Record, Idx);
     TemplateSpecializationKind TSK = (TemplateSpecializationKind)Record[Idx++];
     SourceLocation POI = ReadSourceLocation(Record, Idx);
-    Reader.getContext()->setInstantiatedFromStaticDataMember(VD, Tmpl, TSK,POI);
+    Reader.getContext().setInstantiatedFromStaticDataMember(VD, Tmpl, TSK,POI);
   }
 }
 
@@ -759,7 +762,7 @@ void ASTDeclReader::VisitBlockDecl(BlockDecl *BD) {
   Params.reserve(NumParams);
   for (unsigned I = 0; I != NumParams; ++I)
     Params.push_back(ReadDeclAs<ParmVarDecl>(Record, Idx));
-  BD->setParams(Params.data(), NumParams);
+  BD->setParams(Params);
 
   bool capturesCXXThis = Record[Idx++];
   unsigned numCaptures = Record[Idx++];
@@ -774,7 +777,7 @@ void ASTDeclReader::VisitBlockDecl(BlockDecl *BD) {
 
     captures.push_back(BlockDecl::Capture(decl, byRef, nested, copyExpr));
   }
-  BD->setCaptures(*Reader.getContext(), captures.begin(),
+  BD->setCaptures(Reader.getContext(), captures.begin(),
                   captures.end(), capturesCXXThis);
 }
 
@@ -821,7 +824,7 @@ void ASTDeclReader::VisitUsingDecl(UsingDecl *D) {
   D->FirstUsingShadow = ReadDeclAs<UsingShadowDecl>(Record, Idx);
   D->setTypeName(Record[Idx++]);
   if (NamedDecl *Pattern = ReadDeclAs<NamedDecl>(Record, Idx))
-    Reader.getContext()->setInstantiatedFromUsingDecl(D, Pattern);
+    Reader.getContext().setInstantiatedFromUsingDecl(D, Pattern);
 }
 
 void ASTDeclReader::VisitUsingShadowDecl(UsingShadowDecl *D) {
@@ -830,7 +833,7 @@ void ASTDeclReader::VisitUsingShadowDecl(UsingShadowDecl *D) {
   D->UsingOrNextShadow = ReadDeclAs<NamedDecl>(Record, Idx);
   UsingShadowDecl *Pattern = ReadDeclAs<UsingShadowDecl>(Record, Idx);
   if (Pattern)
-    Reader.getContext()->setInstantiatedFromUsingShadowDecl(D, Pattern);
+    Reader.getContext().setInstantiatedFromUsingShadowDecl(D, Pattern);
 }
 
 void ASTDeclReader::VisitUsingDirectiveDecl(UsingDirectiveDecl *D) {
@@ -861,7 +864,9 @@ void ASTDeclReader::ReadCXXDefinitionData(
                                    const RecordData &Record, unsigned &Idx) {
   Data.UserDeclaredConstructor = Record[Idx++];
   Data.UserDeclaredCopyConstructor = Record[Idx++];
+  Data.UserDeclaredMoveConstructor = Record[Idx++];
   Data.UserDeclaredCopyAssignment = Record[Idx++];
+  Data.UserDeclaredMoveAssignment = Record[Idx++];
   Data.UserDeclaredDestructor = Record[Idx++];
   Data.Aggregate = Record[Idx++];
   Data.PlainOldData = Record[Idx++];
@@ -886,8 +891,12 @@ void ASTDeclReader::ReadCXXDefinitionData(
   Data.UserProvidedDefaultConstructor = Record[Idx++];
   Data.DeclaredDefaultConstructor = Record[Idx++];
   Data.DeclaredCopyConstructor = Record[Idx++];
+  Data.DeclaredMoveConstructor = Record[Idx++];
   Data.DeclaredCopyAssignment = Record[Idx++];
+  Data.DeclaredMoveAssignment = Record[Idx++];
   Data.DeclaredDestructor = Record[Idx++];
+  Data.FailedImplicitMoveConstructor = Record[Idx++];
+  Data.FailedImplicitMoveAssignment = Record[Idx++];
 
   Data.NumBases = Record[Idx++];
   if (Data.NumBases)
@@ -906,7 +915,7 @@ void ASTDeclReader::InitializeCXXDefinitionData(CXXRecordDecl *D,
                                                 CXXRecordDecl *DefinitionDecl,
                                                 const RecordData &Record,
                                                 unsigned &Idx) {
-  ASTContext &C = *Reader.getContext();
+  ASTContext &C = Reader.getContext();
 
   if (D == DefinitionDecl) {
     D->DefinitionData = new (C) struct CXXRecordDecl::DefinitionData(D);
@@ -942,14 +951,14 @@ void ASTDeclReader::VisitCXXRecordDecl(CXXRecordDecl *D) {
   CXXRecordDecl *DefinitionDecl = ReadDeclAs<CXXRecordDecl>(Record, Idx);
   InitializeCXXDefinitionData(D, DefinitionDecl, Record, Idx);
 
-  ASTContext &C = *Reader.getContext();
+  ASTContext &C = Reader.getContext();
 
   enum CXXRecKind {
     CXXRecNotTemplate = 0, CXXRecTemplate, CXXRecMemberSpecialization
   };
   switch ((CXXRecKind)Record[Idx++]) {
   default:
-    assert(false && "Out of sync with ASTDeclWriter::VisitCXXRecordDecl?");
+    llvm_unreachable("Out of sync with ASTDeclWriter::VisitCXXRecordDecl?");
   case CXXRecNotTemplate:
     break;
   case CXXRecTemplate:
@@ -981,7 +990,7 @@ void ASTDeclReader::VisitCXXMethodDecl(CXXMethodDecl *D) {
     // Avoid invariant checking of CXXMethodDecl::addOverriddenMethod,
     // MD may be initializing.
     if (CXXMethodDecl *MD = ReadDeclAs<CXXMethodDecl>(Record, Idx))
-      Reader.getContext()->addOverriddenMethod(D, MD);
+      Reader.getContext().addOverriddenMethod(D, MD);
   }
 }
 
@@ -1066,7 +1075,7 @@ void ASTDeclReader::VisitRedeclarableTemplateDecl(RedeclarableTemplateDecl *D) {
     if (PreviousDeclID != FirstDeclID)
       Reader.PendingPreviousDecls.push_back(std::make_pair(D, PreviousDeclID));
   } else {
-    D->CommonOrPrev = D->newCommon(*Reader.getContext());
+    D->CommonOrPrev = D->newCommon(Reader.getContext());
     if (RedeclarableTemplateDecl *RTD
           = ReadDeclAs<RedeclarableTemplateDecl>(Record, Idx)) {
       assert(RTD->getKind() == D->getKind() &&
@@ -1125,7 +1134,7 @@ void ASTDeclReader::VisitClassTemplateDecl(ClassTemplateDecl *D) {
       
       ClassTemplateDecl::Common *CommonPtr = D->getCommonPtr();
       CommonPtr->LazySpecializations
-        = new (*Reader.getContext()) DeclID [SpecIDs.size()];
+        = new (Reader.getContext()) DeclID [SpecIDs.size()];
       memcpy(CommonPtr->LazySpecializations, SpecIDs.data(), 
              SpecIDs.size() * sizeof(DeclID));
     }
@@ -1138,7 +1147,7 @@ void ASTDeclReader::VisitClassTemplateSpecializationDecl(
                                            ClassTemplateSpecializationDecl *D) {
   VisitCXXRecordDecl(D);
   
-  ASTContext &C = *Reader.getContext();
+  ASTContext &C = Reader.getContext();
   if (Decl *InstD = ReadDecl(Record, Idx)) {
     if (ClassTemplateDecl *CTD = dyn_cast<ClassTemplateDecl>(InstD)) {
       D->SpecializedTemplate = CTD;
@@ -1190,7 +1199,7 @@ void ASTDeclReader::VisitClassTemplatePartialSpecializationDecl(
                                     ClassTemplatePartialSpecializationDecl *D) {
   VisitClassTemplateSpecializationDecl(D);
 
-  ASTContext &C = *Reader.getContext();
+  ASTContext &C = Reader.getContext();
   D->TemplateParams = Reader.ReadTemplateParameterList(F, Record, Idx);
 
   unsigned NumArgs = Record[Idx++];
@@ -1300,8 +1309,8 @@ void ASTDeclReader::VisitRedeclarable(Redeclarable<T> *D) {
   RedeclKind Kind = (RedeclKind)Record[Idx++];
   switch (Kind) {
   default:
-    assert(0 && "Out of sync with ASTDeclWriter::VisitRedeclarable or messed up"
-                " reading");
+    llvm_unreachable("Out of sync with ASTDeclWriter::VisitRedeclarable or"
+                     " messed up reading");
   case NoRedeclaration:
     break;
   case PointsToPrevious: {
@@ -1356,7 +1365,7 @@ void ASTReader::ReadAttributes(Module &F, AttrVec &Attrs,
   for (unsigned i = 0, e = Record[Idx++]; i != e; ++i) {
     Attr *New = 0;
     attr::Kind Kind = (attr::Kind)Record[Idx++];
-    SourceLocation Loc = ReadSourceLocation(F, Record, Idx);
+    SourceRange Range = ReadSourceRange(F, Record, Idx);
 
 #include "clang/Serialization/AttrPCHRead.inc"
 
@@ -1388,14 +1397,20 @@ inline void ASTReader::LoadedDecl(unsigned Index, Decl *D) {
 /// code generation, e.g., inline function definitions, Objective-C
 /// declarations with metadata, etc.
 static bool isConsumerInterestedIn(Decl *D) {
-  if (isa<FileScopeAsmDecl>(D))
+  // An ObjCMethodDecl is never considered as "interesting" because its
+  // implementation container always is.
+
+  if (isa<FileScopeAsmDecl>(D) || 
+      isa<ObjCProtocolDecl>(D) || 
+      isa<ObjCImplDecl>(D))
     return true;
   if (VarDecl *Var = dyn_cast<VarDecl>(D))
     return Var->isFileVarDecl() &&
            Var->isThisDeclarationADefinition() == VarDecl::Definition;
   if (FunctionDecl *Func = dyn_cast<FunctionDecl>(D))
     return Func->doesThisDeclarationHaveABody();
-  return isa<ObjCProtocolDecl>(D) || isa<ObjCImplementationDecl>(D);
+  
+  return false;
 }
 
 /// \brief Get the correct cursor and offset for loading a declaration.
@@ -1468,215 +1483,216 @@ Decl *ASTReader::ReadDeclRecord(DeclID ID) {
   switch ((DeclCode)DeclsCursor.ReadRecord(Code, Record)) {
   case DECL_CONTEXT_LEXICAL:
   case DECL_CONTEXT_VISIBLE:
-    assert(false && "Record cannot be de-serialized with ReadDeclRecord");
-    break;
+    llvm_unreachable("Record cannot be de-serialized with ReadDeclRecord");
   case DECL_TYPEDEF:
-    D = TypedefDecl::Create(*Context, 0, SourceLocation(), SourceLocation(),
+    D = TypedefDecl::Create(Context, 0, SourceLocation(), SourceLocation(),
                             0, 0);
     break;
   case DECL_TYPEALIAS:
-    D = TypeAliasDecl::Create(*Context, 0, SourceLocation(), SourceLocation(),
+    D = TypeAliasDecl::Create(Context, 0, SourceLocation(), SourceLocation(),
                               0, 0);
     break;
   case DECL_ENUM:
-    D = EnumDecl::Create(*Context, Decl::EmptyShell());
+    D = EnumDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_RECORD:
-    D = RecordDecl::Create(*Context, Decl::EmptyShell());
+    D = RecordDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_ENUM_CONSTANT:
-    D = EnumConstantDecl::Create(*Context, 0, SourceLocation(), 0, QualType(),
+    D = EnumConstantDecl::Create(Context, 0, SourceLocation(), 0, QualType(),
                                  0, llvm::APSInt());
     break;
   case DECL_FUNCTION:
-    D = FunctionDecl::Create(*Context, 0, SourceLocation(), SourceLocation(),
+    D = FunctionDecl::Create(Context, 0, SourceLocation(), SourceLocation(),
                              DeclarationName(), QualType(), 0);
     break;
   case DECL_LINKAGE_SPEC:
-    D = LinkageSpecDecl::Create(*Context, 0, SourceLocation(), SourceLocation(),
+    D = LinkageSpecDecl::Create(Context, 0, SourceLocation(), SourceLocation(),
                                 (LinkageSpecDecl::LanguageIDs)0,
                                 SourceLocation());
     break;
   case DECL_LABEL:
-    D = LabelDecl::Create(*Context, 0, SourceLocation(), 0);
+    D = LabelDecl::Create(Context, 0, SourceLocation(), 0);
     break;
   case DECL_NAMESPACE:
-    D = NamespaceDecl::Create(*Context, 0, SourceLocation(),
+    D = NamespaceDecl::Create(Context, 0, SourceLocation(),
                               SourceLocation(), 0);
     break;
   case DECL_NAMESPACE_ALIAS:
-    D = NamespaceAliasDecl::Create(*Context, 0, SourceLocation(),
+    D = NamespaceAliasDecl::Create(Context, 0, SourceLocation(),
                                    SourceLocation(), 0, 
                                    NestedNameSpecifierLoc(),
                                    SourceLocation(), 0);
     break;
   case DECL_USING:
-    D = UsingDecl::Create(*Context, 0, SourceLocation(),
+    D = UsingDecl::Create(Context, 0, SourceLocation(),
                           NestedNameSpecifierLoc(), DeclarationNameInfo(), 
                           false);
     break;
   case DECL_USING_SHADOW:
-    D = UsingShadowDecl::Create(*Context, 0, SourceLocation(), 0, 0);
+    D = UsingShadowDecl::Create(Context, 0, SourceLocation(), 0, 0);
     break;
   case DECL_USING_DIRECTIVE:
-    D = UsingDirectiveDecl::Create(*Context, 0, SourceLocation(),
+    D = UsingDirectiveDecl::Create(Context, 0, SourceLocation(),
                                    SourceLocation(), NestedNameSpecifierLoc(),
                                    SourceLocation(), 0, 0);
     break;
   case DECL_UNRESOLVED_USING_VALUE:
-    D = UnresolvedUsingValueDecl::Create(*Context, 0, SourceLocation(),
+    D = UnresolvedUsingValueDecl::Create(Context, 0, SourceLocation(),
                                          NestedNameSpecifierLoc(), 
                                          DeclarationNameInfo());
     break;
   case DECL_UNRESOLVED_USING_TYPENAME:
-    D = UnresolvedUsingTypenameDecl::Create(*Context, 0, SourceLocation(),
+    D = UnresolvedUsingTypenameDecl::Create(Context, 0, SourceLocation(),
                                             SourceLocation(), 
                                             NestedNameSpecifierLoc(),
                                             SourceLocation(),
                                             DeclarationName());
     break;
   case DECL_CXX_RECORD:
-    D = CXXRecordDecl::Create(*Context, Decl::EmptyShell());
+    D = CXXRecordDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_CXX_METHOD:
-    D = CXXMethodDecl::Create(*Context, 0, SourceLocation(),
+    D = CXXMethodDecl::Create(Context, 0, SourceLocation(),
                               DeclarationNameInfo(), QualType(), 0,
                               false, SC_None, false, false, SourceLocation());
     break;
   case DECL_CXX_CONSTRUCTOR:
-    D = CXXConstructorDecl::Create(*Context, Decl::EmptyShell());
+    D = CXXConstructorDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_CXX_DESTRUCTOR:
-    D = CXXDestructorDecl::Create(*Context, Decl::EmptyShell());
+    D = CXXDestructorDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_CXX_CONVERSION:
-    D = CXXConversionDecl::Create(*Context, Decl::EmptyShell());
+    D = CXXConversionDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_ACCESS_SPEC:
-    D = AccessSpecDecl::Create(*Context, Decl::EmptyShell());
+    D = AccessSpecDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_FRIEND:
-    D = FriendDecl::Create(*Context, Decl::EmptyShell());
+    D = FriendDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_FRIEND_TEMPLATE:
-    D = FriendTemplateDecl::Create(*Context, Decl::EmptyShell());
+    D = FriendTemplateDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_CLASS_TEMPLATE:
-    D = ClassTemplateDecl::Create(*Context, Decl::EmptyShell());
+    D = ClassTemplateDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_CLASS_TEMPLATE_SPECIALIZATION:
-    D = ClassTemplateSpecializationDecl::Create(*Context, Decl::EmptyShell());
+    D = ClassTemplateSpecializationDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_CLASS_TEMPLATE_PARTIAL_SPECIALIZATION:
-    D = ClassTemplatePartialSpecializationDecl::Create(*Context,
+    D = ClassTemplatePartialSpecializationDecl::Create(Context,
                                                        Decl::EmptyShell());
     break;
   case DECL_CLASS_SCOPE_FUNCTION_SPECIALIZATION:
-    D = ClassScopeFunctionSpecializationDecl::Create(*Context,
+    D = ClassScopeFunctionSpecializationDecl::Create(Context,
                                                      Decl::EmptyShell());
     break;
   case DECL_FUNCTION_TEMPLATE:
-      D = FunctionTemplateDecl::Create(*Context, Decl::EmptyShell());
+      D = FunctionTemplateDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_TEMPLATE_TYPE_PARM:
-    D = TemplateTypeParmDecl::Create(*Context, Decl::EmptyShell());
+    D = TemplateTypeParmDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_NON_TYPE_TEMPLATE_PARM:
-    D = NonTypeTemplateParmDecl::Create(*Context, 0, SourceLocation(),
+    D = NonTypeTemplateParmDecl::Create(Context, 0, SourceLocation(),
                                         SourceLocation(), 0, 0, 0, QualType(),
                                         false, 0);
     break;
   case DECL_EXPANDED_NON_TYPE_TEMPLATE_PARM_PACK:
-    D = NonTypeTemplateParmDecl::Create(*Context, 0, SourceLocation(),
+    D = NonTypeTemplateParmDecl::Create(Context, 0, SourceLocation(),
                                         SourceLocation(), 0, 0, 0, QualType(),
                                         0, 0, Record[Idx++], 0);
     break;
   case DECL_TEMPLATE_TEMPLATE_PARM:
-    D = TemplateTemplateParmDecl::Create(*Context, 0, SourceLocation(), 0, 0,
+    D = TemplateTemplateParmDecl::Create(Context, 0, SourceLocation(), 0, 0,
                                          false, 0, 0);
     break;
   case DECL_TYPE_ALIAS_TEMPLATE:
-    D = TypeAliasTemplateDecl::Create(*Context, Decl::EmptyShell());
+    D = TypeAliasTemplateDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_STATIC_ASSERT:
-    D = StaticAssertDecl::Create(*Context, 0, SourceLocation(), 0, 0,
+    D = StaticAssertDecl::Create(Context, 0, SourceLocation(), 0, 0,
                                  SourceLocation());
     break;
 
   case DECL_OBJC_METHOD:
-    D = ObjCMethodDecl::Create(*Context, SourceLocation(), SourceLocation(),
+    D = ObjCMethodDecl::Create(Context, SourceLocation(), SourceLocation(),
                                Selector(), QualType(), 0, 0);
     break;
   case DECL_OBJC_INTERFACE:
-    D = ObjCInterfaceDecl::Create(*Context, 0, SourceLocation(), 0);
+    D = ObjCInterfaceDecl::Create(Context, 0, SourceLocation(), 0);
     break;
   case DECL_OBJC_IVAR:
-    D = ObjCIvarDecl::Create(*Context, 0, SourceLocation(), SourceLocation(),
+    D = ObjCIvarDecl::Create(Context, 0, SourceLocation(), SourceLocation(),
                              0, QualType(), 0, ObjCIvarDecl::None);
     break;
   case DECL_OBJC_PROTOCOL:
-    D = ObjCProtocolDecl::Create(*Context, 0, SourceLocation(), 0);
+    D = ObjCProtocolDecl::Create(Context, 0, 0, SourceLocation(),
+                                 SourceLocation());
     break;
   case DECL_OBJC_AT_DEFS_FIELD:
-    D = ObjCAtDefsFieldDecl::Create(*Context, 0, SourceLocation(),
+    D = ObjCAtDefsFieldDecl::Create(Context, 0, SourceLocation(),
                                     SourceLocation(), 0, QualType(), 0);
     break;
   case DECL_OBJC_CLASS:
-    D = ObjCClassDecl::Create(*Context, 0, SourceLocation());
+    D = ObjCClassDecl::Create(Context, 0, SourceLocation());
     break;
   case DECL_OBJC_FORWARD_PROTOCOL:
-    D = ObjCForwardProtocolDecl::Create(*Context, 0, SourceLocation());
+    D = ObjCForwardProtocolDecl::Create(Context, 0, SourceLocation());
     break;
   case DECL_OBJC_CATEGORY:
-    D = ObjCCategoryDecl::Create(*Context, 0, SourceLocation(), 
-                                 SourceLocation(), SourceLocation(), 0);
+    D = ObjCCategoryDecl::Create(Context, Decl::EmptyShell());
     break;
   case DECL_OBJC_CATEGORY_IMPL:
-    D = ObjCCategoryImplDecl::Create(*Context, 0, SourceLocation(), 0, 0);
+    D = ObjCCategoryImplDecl::Create(Context, 0, 0, 0, SourceLocation(),
+                                     SourceLocation());
     break;
   case DECL_OBJC_IMPLEMENTATION:
-    D = ObjCImplementationDecl::Create(*Context, 0, SourceLocation(), 0, 0);
+    D = ObjCImplementationDecl::Create(Context, 0, 0, 0, SourceLocation(),
+                                       SourceLocation());
     break;
   case DECL_OBJC_COMPATIBLE_ALIAS:
-    D = ObjCCompatibleAliasDecl::Create(*Context, 0, SourceLocation(), 0, 0);
+    D = ObjCCompatibleAliasDecl::Create(Context, 0, SourceLocation(), 0, 0);
     break;
   case DECL_OBJC_PROPERTY:
-    D = ObjCPropertyDecl::Create(*Context, 0, SourceLocation(), 0, SourceLocation(),
+    D = ObjCPropertyDecl::Create(Context, 0, SourceLocation(), 0, SourceLocation(),
                                  0);
     break;
   case DECL_OBJC_PROPERTY_IMPL:
-    D = ObjCPropertyImplDecl::Create(*Context, 0, SourceLocation(),
+    D = ObjCPropertyImplDecl::Create(Context, 0, SourceLocation(),
                                      SourceLocation(), 0,
                                      ObjCPropertyImplDecl::Dynamic, 0,
                                      SourceLocation());
     break;
   case DECL_FIELD:
-    D = FieldDecl::Create(*Context, 0, SourceLocation(), SourceLocation(), 0,
+    D = FieldDecl::Create(Context, 0, SourceLocation(), SourceLocation(), 0,
                           QualType(), 0, 0, false, false);
     break;
   case DECL_INDIRECTFIELD:
-    D = IndirectFieldDecl::Create(*Context, 0, SourceLocation(), 0, QualType(),
+    D = IndirectFieldDecl::Create(Context, 0, SourceLocation(), 0, QualType(),
                                   0, 0);
     break;
   case DECL_VAR:
-    D = VarDecl::Create(*Context, 0, SourceLocation(), SourceLocation(), 0,
+    D = VarDecl::Create(Context, 0, SourceLocation(), SourceLocation(), 0,
                         QualType(), 0, SC_None, SC_None);
     break;
 
   case DECL_IMPLICIT_PARAM:
-    D = ImplicitParamDecl::Create(*Context, 0, SourceLocation(), 0, QualType());
+    D = ImplicitParamDecl::Create(Context, 0, SourceLocation(), 0, QualType());
     break;
 
   case DECL_PARM_VAR:
-    D = ParmVarDecl::Create(*Context, 0, SourceLocation(), SourceLocation(), 0,
+    D = ParmVarDecl::Create(Context, 0, SourceLocation(), SourceLocation(), 0,
                             QualType(), 0, SC_None, SC_None, 0);
     break;
   case DECL_FILE_SCOPE_ASM:
-    D = FileScopeAsmDecl::Create(*Context, 0, 0, SourceLocation(),
+    D = FileScopeAsmDecl::Create(Context, 0, 0, SourceLocation(),
                                  SourceLocation());
     break;
   case DECL_BLOCK:
-    D = BlockDecl::Create(*Context, 0, SourceLocation());
+    D = BlockDecl::Create(Context, 0, SourceLocation());
     break;
   case DECL_CXX_BASE_SPECIFIERS:
     Error("attempt to read a C++ base-specifier record as a declaration");
@@ -1721,13 +1737,16 @@ Decl *ASTReader::ReadDeclRecord(DeclID ID) {
   // Load any relevant update records.
   loadDeclUpdateRecords(ID, D);
   
+  if (ObjCChainedCategoriesInterfaces.count(ID))
+    loadObjCChainedCategories(ID, cast<ObjCInterfaceDecl>(D));
+  
   // If we have deserialized a declaration that has a definition the
   // AST consumer might need to know about, queue it.
   // We don't pass it to the consumer immediately because we may be in recursive
   // loading, and some declarations may still be initializing.
   if (isConsumerInterestedIn(D))
-    InterestingDecls.push_back(D);
-
+      InterestingDecls.push_back(D);
+  
   return D;
 }
 
@@ -1758,6 +1777,131 @@ void ASTReader::loadDeclUpdateRecords(serialization::DeclID ID, Decl *D) {
   }
 }
 
+namespace {
+  /// \brief Given an ObjC interface, goes through the modules and links to the
+  /// interface all the categories for it.
+  class ObjCChainedCategoriesVisitor {
+    ASTReader &Reader;
+    serialization::GlobalDeclID InterfaceID;
+    ObjCInterfaceDecl *Interface;
+    ObjCCategoryDecl *GlobHeadCat, *GlobTailCat;
+    llvm::DenseMap<DeclarationName, ObjCCategoryDecl *> NameCategoryMap;
+
+  public:
+    ObjCChainedCategoriesVisitor(ASTReader &Reader,
+                                 serialization::GlobalDeclID InterfaceID,
+                                 ObjCInterfaceDecl *Interface)
+      : Reader(Reader), InterfaceID(InterfaceID), Interface(Interface),
+        GlobHeadCat(0), GlobTailCat(0) { }
+
+    static bool visit(Module &M, void *UserData) {
+      return static_cast<ObjCChainedCategoriesVisitor *>(UserData)->visit(M);
+    }
+
+    bool visit(Module &M) {
+      if (Reader.isDeclIDFromModule(InterfaceID, M))
+        return true; // We reached the module where the interface originated
+                    // from. Stop traversing the imported modules.
+
+      Module::ChainedObjCCategoriesMap::iterator
+        I = M.ChainedObjCCategories.find(InterfaceID);
+      if (I == M.ChainedObjCCategories.end())
+        return false;
+
+      ObjCCategoryDecl *
+        HeadCat = Reader.GetLocalDeclAs<ObjCCategoryDecl>(M, I->second.first);
+      ObjCCategoryDecl *
+        TailCat = Reader.GetLocalDeclAs<ObjCCategoryDecl>(M, I->second.second);
+
+      addCategories(HeadCat, TailCat);
+      return false;
+    }
+
+    void addCategories(ObjCCategoryDecl *HeadCat,
+                       ObjCCategoryDecl *TailCat = 0) {
+      if (!HeadCat) {
+        assert(!TailCat);
+        return;
+      }
+
+      if (!TailCat) {
+        TailCat = HeadCat;
+        while (TailCat->getNextClassCategory())
+          TailCat = TailCat->getNextClassCategory();
+      }
+
+      if (!GlobHeadCat) {
+        GlobHeadCat = HeadCat;
+        GlobTailCat = TailCat;
+      } else {
+        ASTDeclReader::setNextObjCCategory(GlobTailCat, HeadCat);
+        GlobTailCat = TailCat;
+      }
+
+      llvm::DenseSet<DeclarationName> Checked;
+      for (ObjCCategoryDecl *Cat = HeadCat,
+                            *CatEnd = TailCat->getNextClassCategory();
+             Cat != CatEnd; Cat = Cat->getNextClassCategory()) {
+        if (Checked.count(Cat->getDeclName()))
+          continue;
+        Checked.insert(Cat->getDeclName());
+        checkForDuplicate(Cat);
+      }
+    }
+
+    /// \brief Warns for duplicate categories that come from different modules.
+    void checkForDuplicate(ObjCCategoryDecl *Cat) {
+      DeclarationName Name = Cat->getDeclName();
+      // Find the top category with the same name. We do not want to warn for
+      // duplicates along the established chain because there were already
+      // warnings for them when the module was created. We only want to warn for
+      // duplicates between non-dependent modules:
+      //
+      //   MT     //
+      //  /  \    //
+      // ML  MR   //
+      //
+      // We want to warn for duplicates between ML and MR,not between ML and MT.
+      //
+      // FIXME: We should not warn for duplicates in diamond:
+      //
+      //   MT     //
+      //  /  \    //
+      // ML  MR   //
+      //  \  /    //
+      //   MB     //
+      //
+      // If there are duplicates in ML/MR, there will be warning when creating
+      // MB *and* when importing MB. We should not warn when importing.
+      for (ObjCCategoryDecl *Next = Cat->getNextClassCategory(); Next;
+             Next = Next->getNextClassCategory()) {
+        if (Next->getDeclName() == Name)
+          Cat = Next;
+      }
+
+      ObjCCategoryDecl *&PrevCat = NameCategoryMap[Name];
+      if (!PrevCat)
+        PrevCat = Cat;
+
+      if (PrevCat != Cat) {
+        Reader.Diag(Cat->getLocation(), diag::warn_dup_category_def)
+          << Interface->getDeclName() << Name;
+        Reader.Diag(PrevCat->getLocation(), diag::note_previous_definition);
+      }
+    }
+
+    ObjCCategoryDecl *getHeadCategory() const { return GlobHeadCat; }
+  };
+}
+
+void ASTReader::loadObjCChainedCategories(serialization::GlobalDeclID ID,
+                                          ObjCInterfaceDecl *D) {
+  ObjCChainedCategoriesVisitor Visitor(*this, ID, D);
+  ModuleMgr.visit(ObjCChainedCategoriesVisitor::visit, &Visitor);
+  // Also add the categories that the interface already links to.
+  Visitor.addCategories(D->getCategoryList());
+  D->setCategoryList(Visitor.getHeadCategory());
+}
 
 void ASTDeclReader::UpdateDecl(Decl *D, Module &Module,
                                const RecordData &Record) {

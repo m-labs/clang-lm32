@@ -47,18 +47,6 @@ using namespace clang::driver;
 using namespace clang::driver::tools;
 using namespace clang;
 
-/// FindTargetProgramPath - Return path of the target specific version of
-/// ProgName.  If it doesn't exist, return path of ProgName itself.
-static std::string FindTargetProgramPath(const ToolChain &TheToolChain,
-                                         const std::string TripleString,
-                                         const char *ProgName) {
-  std::string Executable(TripleString + "-" + ProgName);
-  std::string Path(TheToolChain.GetProgramPath(Executable.c_str()));
-  if (Path != Executable)
-    return Path;
-  return TheToolChain.GetProgramPath(ProgName);
-}
-
 /// CheckPreprocessingOptions - Perform some validation of preprocessing
 /// arguments that is shared with gcc.
 static void CheckPreprocessingOptions(const Driver &D, const ArgList &Args) {
@@ -181,6 +169,38 @@ static void addProfileRT(const ToolChain &TC, const ArgList &Args,
   }
 
   CmdArgs.push_back(Args.MakeArgString(ProfileRT));
+}
+
+static void AddIncludeDirectoryList(const ArgList &Args,
+                                    ArgStringList &CmdArgs,
+                                    const char *ArgName,
+                                    const char *DirList) {
+  if (!DirList)
+    return; // Nothing to do.
+
+  StringRef Dirs(DirList);
+  if (Dirs.empty()) // Empty string should not add '.'.
+    return;
+
+  StringRef::size_type Delim;
+  while ((Delim = Dirs.find(llvm::sys::PathSeparator)) != StringRef::npos) {
+    if (Delim == 0) { // Leading colon.
+      CmdArgs.push_back(ArgName);
+      CmdArgs.push_back(".");
+    } else {
+      CmdArgs.push_back(ArgName);
+      CmdArgs.push_back(Args.MakeArgString(Dirs.substr(0, Delim)));
+    }
+    Dirs = Dirs.substr(Delim + 1);
+  }
+
+  if (Dirs.empty()) { // Trailing colon.
+    CmdArgs.push_back(ArgName);
+    CmdArgs.push_back(".");
+  } else { // Add the last path.
+    CmdArgs.push_back(ArgName);
+    CmdArgs.push_back(Args.MakeArgString(Dirs));
+  }
 }
 
 void Clang::AddPreprocessingOptions(const Driver &D,
@@ -375,6 +395,39 @@ void Clang::AddPreprocessingOptions(const Driver &D,
       CmdArgs.push_back(A->getValue(Args));
     }
   }
+  
+  // If a module path was provided, pass it along. Otherwise, use a temporary
+  // directory.
+  if (Arg *A = Args.getLastArg(options::OPT_fmodule_cache_path)) {
+    A->claim();
+    A->render(Args, CmdArgs);
+  } else {
+    llvm::SmallString<128> DefaultModuleCache;
+    llvm::sys::path::system_temp_directory(/*erasedOnReboot=*/false, 
+                                           DefaultModuleCache);
+    llvm::sys::path::append(DefaultModuleCache, "clang-module-cache");
+    CmdArgs.push_back("-fmodule-cache-path");
+    CmdArgs.push_back(Args.MakeArgString(DefaultModuleCache));
+  }
+  
+  Args.AddAllArgs(CmdArgs, options::OPT_fauto_module_import);
+
+  // Parse additional include paths from environment variables.
+  // CPATH - included following the user specified includes (but prior to
+  // builtin and standard includes).
+  AddIncludeDirectoryList(Args, CmdArgs, "-I", ::getenv("CPATH"));
+  // C_INCLUDE_PATH - system includes enabled when compiling C.
+  AddIncludeDirectoryList(Args, CmdArgs, "-c-isystem",
+                          ::getenv("C_INCLUDE_PATH"));
+  // CPLUS_INCLUDE_PATH - system includes enabled when compiling C++.
+  AddIncludeDirectoryList(Args, CmdArgs, "-cxx-isystem",
+                          ::getenv("CPLUS_INCLUDE_PATH"));
+  // OBJC_INCLUDE_PATH - system includes enabled when compiling ObjC.
+  AddIncludeDirectoryList(Args, CmdArgs, "-objc-isystem",
+                          ::getenv("OBJC_INCLUDE_PATH"));
+  // OBJCPLUS_INCLUDE_PATH - system includes enabled when compiling ObjC++.
+  AddIncludeDirectoryList(Args, CmdArgs, "-objcxx-isystem",
+                          ::getenv("OBJCPLUS_INCLUDE_PATH"));
 }
 
 /// getARMTargetCPU - Get the (LLVM) name of the ARM cpu we are targeting.
@@ -677,34 +730,78 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
     CmdArgs.push_back("-arm-darwin-use-movt=0");
 #endif
   }
+
+  // Setting -mno-global-merge disables the codegen global merge pass. Setting 
+  // -mglobal-merge has no effect as the pass is enabled by default.
+  if (Arg *A = Args.getLastArg(options::OPT_mglobal_merge,
+                               options::OPT_mno_global_merge)) {
+    if (A->getOption().matches(options::OPT_mno_global_merge))
+      CmdArgs.push_back("-mno-global-merge");
+  }
+}
+
+// Get default architecture.
+static const char* getMipsArchFromCPU(StringRef CPUName) {
+  if (CPUName == "mips32r1" || CPUName == "4ke")
+    return "mips";
+
+  assert((CPUName == "mips64r1" || CPUName == "mips64r2") &&
+         "Unexpected cpu name.");
+
+  return "mips64";
+}
+
+// Get default target cpu.
+static const char* getMipsCPUFromArch(StringRef ArchName, const Driver &D) {
+  if (ArchName == "mips" || ArchName == "mipsel")
+    return "mips32r1";
+  else if (ArchName == "mips64" || ArchName == "mips64el")
+    return "mips64r1";
+  else
+    D.Diag(diag::err_drv_invalid_arch_name) << ArchName;
+
+  return 0;
+}
+
+// Get default ABI.
+static const char* getMipsABIFromArch(StringRef ArchName) {
+    if (ArchName == "mips" || ArchName == "mipsel")
+      return "o32";
+    
+    assert((ArchName == "mips64" || ArchName == "mips64el") &&
+           "Unexpected arch name.");
+    return "n64";
 }
 
 void Clang::AddMIPSTargetArgs(const ArgList &Args,
                              ArgStringList &CmdArgs) const {
   const Driver &D = getToolChain().getDriver();
 
+  StringRef ArchName;
+  const char *CPUName;
+
+  // Set target cpu and architecture.
+  if (Arg *A = Args.getLastArg(options::OPT_mcpu_EQ)) {
+    CPUName = A->getValue(Args);
+    ArchName = getMipsArchFromCPU(CPUName);
+  }
+  else {
+    ArchName = Args.MakeArgString(getToolChain().getArchName());
+    CPUName = getMipsCPUFromArch(ArchName, D);
+  }
+
+  CmdArgs.push_back("-target-cpu");
+  CmdArgs.push_back(CPUName);
+ 
   // Select the ABI to use.
   const char *ABIName = 0;
-  if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ)) {
+  if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ))
     ABIName = A->getValue(Args);
-  } else {
-    ABIName = "o32";
-  }
+  else 
+    ABIName = getMipsABIFromArch(ArchName);
 
   CmdArgs.push_back("-target-abi");
   CmdArgs.push_back(ABIName);
-
-  if (const Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
-    StringRef MArch = A->getValue(Args);
-    CmdArgs.push_back("-target-cpu");
-
-    if ((MArch == "r2000") || (MArch == "r3000"))
-      CmdArgs.push_back("mips1");
-    else if (MArch == "r6000")
-      CmdArgs.push_back("mips2");
-    else
-      CmdArgs.push_back(Args.MakeArgString(MArch));
-  }
 
   // Select the float ABI as determined by -msoft-float, -mhard-float, and
   StringRef FloatABI;
@@ -1327,6 +1424,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
+  case llvm::Triple::mips64:
+  case llvm::Triple::mips64el:
     AddMIPSTargetArgs(Args, CmdArgs);
     break;
 
@@ -1710,6 +1809,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
          Args.hasArg(options::OPT_fobjc_nonfragile_abi) &&
          !Args.hasArg(options::OPT_fno_blocks))) {
     CmdArgs.push_back("-fblocks");
+
+    if (!Args.hasArg(options::OPT_fgnu_runtime) && 
+        !getToolChain().hasBlocksRuntime())
+      CmdArgs.push_back("-fblocks-runtime-optional");
   }
 
   // -faccess-control is default.
@@ -1757,6 +1860,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    getToolChain().getTriple().getOS() == llvm::Triple::Win32))
     CmdArgs.push_back("-fms-extensions");
 
+  // -fms-compatibility=0 is default.
+  if (Args.hasFlag(options::OPT_fms_compatibility, options::OPT_fno_ms_compatibility,
+                   getToolChain().getTriple().getOS() == llvm::Triple::Win32))
+    CmdArgs.push_back("-fms-compatibility");
+
   // -fmsc-version=1300 is default.
   if (Args.hasFlag(options::OPT_fms_extensions, options::OPT_fno_ms_extensions,
                    getToolChain().getTriple().getOS() == llvm::Triple::Win32) ||
@@ -1774,10 +1882,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    options::OPT_fno_borland_extensions, false))
     CmdArgs.push_back("-fborland-extensions");
 
-  // -fno-delayed-template-parsing is default.
+  // -fno-delayed-template-parsing is default, except for Windows where MSVC STL
+  // needs it.
   if (Args.hasFlag(options::OPT_fdelayed_template_parsing,
                    options::OPT_fno_delayed_template_parsing,
-                   false))
+                   getToolChain().getTriple().getOS() == llvm::Triple::Win32))
     CmdArgs.push_back("-fdelayed-template-parsing");
 
   // -fgnu-keywords default varies depending on language; only pass if
@@ -1794,96 +1903,88 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // -fobjc-nonfragile-abi=0 is default.
   ObjCRuntime objCRuntime;
   unsigned objcABIVersion = 0;
-  if (types::isObjC(InputType)) {
-    bool NeXTRuntimeIsDefault
-      = (IsRewriter || getToolChain().getTriple().isOSDarwin());
-    if (Args.hasFlag(options::OPT_fnext_runtime, options::OPT_fgnu_runtime,
-                     NeXTRuntimeIsDefault)) {
-      objCRuntime.setKind(ObjCRuntime::NeXT);
-    } else {
-      CmdArgs.push_back("-fgnu-runtime");
-      objCRuntime.setKind(ObjCRuntime::GNU);
-    }
-    getToolChain().configureObjCRuntime(objCRuntime);
-    if (objCRuntime.HasARC)
-      CmdArgs.push_back("-fobjc-runtime-has-arc");
-    if (objCRuntime.HasWeak)
-      CmdArgs.push_back("-fobjc-runtime-has-weak");
-    if (objCRuntime.HasTerminate)
-      CmdArgs.push_back("-fobjc-runtime-has-terminate");
+  bool NeXTRuntimeIsDefault
+    = (IsRewriter || getToolChain().getTriple().isOSDarwin());
+  if (Args.hasFlag(options::OPT_fnext_runtime, options::OPT_fgnu_runtime,
+                   NeXTRuntimeIsDefault)) {
+    objCRuntime.setKind(ObjCRuntime::NeXT);
+  } else {
+    CmdArgs.push_back("-fgnu-runtime");
+    objCRuntime.setKind(ObjCRuntime::GNU);
+  }
+  getToolChain().configureObjCRuntime(objCRuntime);
+  if (objCRuntime.HasARC)
+    CmdArgs.push_back("-fobjc-runtime-has-arc");
+  if (objCRuntime.HasWeak)
+    CmdArgs.push_back("-fobjc-runtime-has-weak");
+  if (objCRuntime.HasTerminate)
+    CmdArgs.push_back("-fobjc-runtime-has-terminate");
 
-    // Compute the Objective-C ABI "version" to use. Version numbers are
-    // slightly confusing for historical reasons:
-    //   1 - Traditional "fragile" ABI
-    //   2 - Non-fragile ABI, version 1
-    //   3 - Non-fragile ABI, version 2
-    objcABIVersion = 1;
-    // If -fobjc-abi-version= is present, use that to set the version.
-    if (Arg *A = Args.getLastArg(options::OPT_fobjc_abi_version_EQ)) {
-      if (StringRef(A->getValue(Args)) == "1")
-        objcABIVersion = 1;
-      else if (StringRef(A->getValue(Args)) == "2")
-        objcABIVersion = 2;
-      else if (StringRef(A->getValue(Args)) == "3")
-        objcABIVersion = 3;
-      else
-        D.Diag(diag::err_drv_clang_unsupported) << A->getAsString(Args);
-    } else {
-      // Otherwise, determine if we are using the non-fragile ABI.
-      if (Args.hasFlag(options::OPT_fobjc_nonfragile_abi,
-                       options::OPT_fno_objc_nonfragile_abi,
-                       getToolChain().IsObjCNonFragileABIDefault())) {
-        // Determine the non-fragile ABI version to use.
+  // Compute the Objective-C ABI "version" to use. Version numbers are
+  // slightly confusing for historical reasons:
+  //   1 - Traditional "fragile" ABI
+  //   2 - Non-fragile ABI, version 1
+  //   3 - Non-fragile ABI, version 2
+  objcABIVersion = 1;
+  // If -fobjc-abi-version= is present, use that to set the version.
+  if (Arg *A = Args.getLastArg(options::OPT_fobjc_abi_version_EQ)) {
+    if (StringRef(A->getValue(Args)) == "1")
+      objcABIVersion = 1;
+    else if (StringRef(A->getValue(Args)) == "2")
+      objcABIVersion = 2;
+    else if (StringRef(A->getValue(Args)) == "3")
+      objcABIVersion = 3;
+    else
+      D.Diag(diag::err_drv_clang_unsupported) << A->getAsString(Args);
+  } else {
+    // Otherwise, determine if we are using the non-fragile ABI.
+    if (Args.hasFlag(options::OPT_fobjc_nonfragile_abi,
+                     options::OPT_fno_objc_nonfragile_abi,
+                     getToolChain().IsObjCNonFragileABIDefault())) {
+      // Determine the non-fragile ABI version to use.
 #ifdef DISABLE_DEFAULT_NONFRAGILEABI_TWO
-        unsigned NonFragileABIVersion = 1;
+      unsigned NonFragileABIVersion = 1;
 #else
-        unsigned NonFragileABIVersion = 2;
+      unsigned NonFragileABIVersion = 2;
 #endif
 
-        if (Arg *A = Args.getLastArg(
-              options::OPT_fobjc_nonfragile_abi_version_EQ)) {
-          if (StringRef(A->getValue(Args)) == "1")
-            NonFragileABIVersion = 1;
-          else if (StringRef(A->getValue(Args)) == "2")
-            NonFragileABIVersion = 2;
-          else
-            D.Diag(diag::err_drv_clang_unsupported)
-              << A->getAsString(Args);
-        }
-
-        objcABIVersion = 1 + NonFragileABIVersion;
-      } else {
-        objcABIVersion = 1;
-      }
-    }
-
-    if (objcABIVersion == 2 || objcABIVersion == 3) {
-      CmdArgs.push_back("-fobjc-nonfragile-abi");
-
-      // -fobjc-dispatch-method is only relevant with the nonfragile-abi, and
-      // legacy is the default.
-      if (!Args.hasFlag(options::OPT_fobjc_legacy_dispatch,
-                        options::OPT_fno_objc_legacy_dispatch,
-                        getToolChain().IsObjCLegacyDispatchDefault())) {
-        if (getToolChain().UseObjCMixedDispatch())
-          CmdArgs.push_back("-fobjc-dispatch-method=mixed");
+      if (Arg *A = Args.getLastArg(
+            options::OPT_fobjc_nonfragile_abi_version_EQ)) {
+        if (StringRef(A->getValue(Args)) == "1")
+          NonFragileABIVersion = 1;
+        else if (StringRef(A->getValue(Args)) == "2")
+          NonFragileABIVersion = 2;
         else
-          CmdArgs.push_back("-fobjc-dispatch-method=non-legacy");
+          D.Diag(diag::err_drv_clang_unsupported)
+            << A->getAsString(Args);
       }
-    }
 
-    // FIXME: Don't expose -fobjc-default-synthesize-properties as a top-level
-    // driver flag yet.  This feature is still under active development
-    // and shouldn't be exposed as a user visible feature (which may change).
-    // Clang still supports this as a -cc1 option for development and testing.
-#if 0
-    // -fobjc-default-synthesize-properties=0 is default.
-    if (Args.hasFlag(options::OPT_fobjc_default_synthesize_properties,
-                     options::OPT_fno_objc_default_synthesize_properties,
-                     getToolChain().IsObjCDefaultSynthPropertiesDefault())) {
-      CmdArgs.push_back("-fobjc-default-synthesize-properties");
+      objcABIVersion = 1 + NonFragileABIVersion;
+    } else {
+      objcABIVersion = 1;
     }
-#endif
+  }
+
+  if (objcABIVersion == 1) {
+    CmdArgs.push_back("-fobjc-fragile-abi");
+  } else {
+    // -fobjc-dispatch-method is only relevant with the nonfragile-abi, and
+    // legacy is the default.
+    if (!Args.hasFlag(options::OPT_fobjc_legacy_dispatch,
+                      options::OPT_fno_objc_legacy_dispatch,
+                      getToolChain().IsObjCLegacyDispatchDefault())) {
+      if (getToolChain().UseObjCMixedDispatch())
+        CmdArgs.push_back("-fobjc-dispatch-method=mixed");
+      else
+        CmdArgs.push_back("-fobjc-dispatch-method=non-legacy");
+    }
+  }
+
+  // -fobjc-default-synthesize-properties=0 is default.
+  if (Args.hasFlag(options::OPT_fobjc_default_synthesize_properties,
+                   options::OPT_fno_objc_default_synthesize_properties,
+                   getToolChain().IsObjCDefaultSynthPropertiesDefault())) {
+    CmdArgs.push_back("-fobjc-default-synthesize-properties");
   }
 
   // Allow -fno-objc-arr to trump -fobjc-arr/-fobjc-arc.
@@ -2202,7 +2303,8 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Add the "effective" target triple.
   CmdArgs.push_back("-triple");
-  std::string TripleStr = getToolChain().ComputeEffectiveClangTriple(Args);
+  std::string TripleStr = 
+    getToolChain().ComputeEffectiveClangTriple(Args, Input.getType());
   CmdArgs.push_back(Args.MakeArgString(TripleStr));
 
   // Set the output mode, we currently only expect to be used as a real
@@ -2397,7 +2499,7 @@ void gcc::Link::RenderExtraToolArgs(const JobAction &JA,
 const char *darwin::CC1::getCC1Name(types::ID Type) const {
   switch (Type) {
   default:
-    assert(0 && "Unexpected type for Darwin CC1 tool.");
+    llvm_unreachable("Unexpected type for Darwin CC1 tool.");
   case types::TY_Asm:
   case types::TY_C: case types::TY_CHeader:
   case types::TY_PP_C: case types::TY_PP_CHeader:
@@ -2452,103 +2554,121 @@ void darwin::CC1::RemoveCC1UnsupportedArgs(ArgStringList &CmdArgs) const {
        it != ie;) {
 
     StringRef Option = *it;
+    bool RemoveOption = false;
 
-    // We only remove warning options.
-    if (!Option.startswith("-W")) {
-      ++it;
+    // Remove -faltivec
+    if (Option.equals("-faltivec")) {
+      it = CmdArgs.erase(it);
+      ie = CmdArgs.end();
       continue;
     }
 
-    if (Option.startswith("-Wno-"))
-      Option = Option.substr(5);
-    else
-      Option = Option.substr(2);
-
-    bool RemoveOption = llvm::StringSwitch<bool>(Option)
-      .Case("address-of-temporary", true)
-      .Case("ambiguous-member-template", true)
-      .Case("analyzer-incompatible-plugin", true)
-      .Case("array-bounds", true)
-      .Case("array-bounds-pointer-arithmetic", true)
-      .Case("bind-to-temporary-copy", true)
-      .Case("bitwise-op-parentheses", true)
-      .Case("bool-conversions", true)
-      .Case("builtin-macro-redefined", true)
-      .Case("c++-hex-floats", true)
-      .Case("c++0x-compat", true)
-      .Case("c++0x-extensions", true)
-      .Case("c++0x-narrowing", true)
-      .Case("c++0x-static-nonintegral-init", true)
-      .Case("conditional-uninitialized", true)
-      .Case("constant-conversion", true)
-      .Case("CFString-literal", true)
-      .Case("constant-logical-operand", true)
-      .Case("custom-atomic-properties", true)
-      .Case("default-arg-special-member", true)
-      .Case("delegating-ctor-cycles", true)
-      .Case("delete-non-virtual-dtor", true)
-      .Case("deprecated-implementations", true)
-      .Case("deprecated-writable-strings", true)
-      .Case("distributed-object-modifiers", true)
-      .Case("duplicate-method-arg", true)
-      .Case("dynamic-class-memaccess", true)
-      .Case("enum-compare", true)
-      .Case("exit-time-destructors", true)
-      .Case("gnu", true)
-      .Case("gnu-designator", true)
-      .Case("header-hygiene", true)
-      .Case("idiomatic-parentheses", true)
-      .Case("ignored-qualifiers", true)
-      .Case("implicit-atomic-properties", true)
-      .Case("incompatible-pointer-types", true)
-      .Case("incomplete-implementation", true)
-      .Case("initializer-overrides", true)
-      .Case("invalid-noreturn", true)
-      .Case("invalid-token-paste", true)
-      .Case("literal-conversion", true)
-      .Case("literal-range", true)
-      .Case("local-type-template-args", true)
-      .Case("logical-op-parentheses", true)
-      .Case("method-signatures", true)
-      .Case("microsoft", true)
-      .Case("mismatched-tags", true)
-      .Case("missing-method-return-type", true)
-      .Case("non-pod-varargs", true)
-      .Case("nonfragile-abi2", true)
-      .Case("null-arithmetic", true)
-      .Case("null-dereference", true)
-      .Case("out-of-line-declaration", true)
-      .Case("overriding-method-mismatch", true)
-      .Case("readonly-setter-attrs", true)
-      .Case("return-stack-address", true)
-      .Case("self-assign", true)
-      .Case("semicolon-before-method-body", true)
-      .Case("sentinel", true)
-      .Case("shift-overflow", true)
-      .Case("shift-sign-overflow", true)
-      .Case("sign-conversion", true)
-      .Case("sizeof-array-argument", true)
-      .Case("sizeof-pointer-memaccess", true)
-      .Case("string-compare", true)
-      .Case("super-class-method-mismatch", true)
-      .Case("tautological-compare", true)
-      .Case("typedef-redefinition", true)
-      .Case("typename-missing", true)
-      .Case("undefined-reinterpret-cast", true)
-      .Case("unknown-warning-option", true)
-      .Case("unnamed-type-template-args", true)
-      .Case("unneeded-internal-declaration", true)
-      .Case("unneeded-member-function", true)
-      .Case("unused-comparison", true)
-      .Case("unused-exception-parameter", true)
-      .Case("unused-member-function", true)
-      .Case("unused-result", true)
-      .Case("vector-conversions", true)
-      .Case("vla", true)
-      .Case("used-but-marked-unused", true)
-      .Case("weak-vtables", true)
-      .Default(false);
-
+    // Handle machine specific options.
+    if (Option.startswith("-m")) {
+      RemoveOption = llvm::StringSwitch<bool>(Option)
+        .Case("-mthumb", true)
+        .Case("-mno-thumb", true)
+        .Case("-mno-fused-madd", true)
+        .Case("-mlong-branch", true)
+        .Case("-mlongcall", true)
+        .Case("-mcpu=G4", true)
+        .Case("-mcpu=G5", true)
+        .Default(false);
+    }
+    
+    // Handle warning options.
+    if (Option.startswith("-W")) {
+      // Remove -W/-Wno- to reduce the number of cases.
+      if (Option.startswith("-Wno-"))
+        Option = Option.substr(5);
+      else
+        Option = Option.substr(2);
+      
+      RemoveOption = llvm::StringSwitch<bool>(Option)
+        .Case("address-of-temporary", true)
+        .Case("ambiguous-member-template", true)
+        .Case("analyzer-incompatible-plugin", true)
+        .Case("array-bounds", true)
+        .Case("array-bounds-pointer-arithmetic", true)
+        .Case("bind-to-temporary-copy", true)
+        .Case("bitwise-op-parentheses", true)
+        .Case("bool-conversions", true)
+        .Case("builtin-macro-redefined", true)
+        .Case("c++-hex-floats", true)
+        .Case("c++0x-compat", true)
+        .Case("c++0x-extensions", true)
+        .Case("c++0x-narrowing", true)
+        .Case("c++0x-static-nonintegral-init", true)
+        .Case("conditional-uninitialized", true)
+        .Case("constant-conversion", true)
+        .Case("CFString-literal", true)
+        .Case("constant-logical-operand", true)
+        .Case("custom-atomic-properties", true)
+        .Case("default-arg-special-member", true)
+        .Case("delegating-ctor-cycles", true)
+        .Case("delete-non-virtual-dtor", true)
+        .Case("deprecated-implementations", true)
+        .Case("deprecated-writable-strings", true)
+        .Case("distributed-object-modifiers", true)
+        .Case("duplicate-method-arg", true)
+        .Case("dynamic-class-memaccess", true)
+        .Case("enum-compare", true)
+        .Case("exit-time-destructors", true)
+        .Case("gnu", true)
+        .Case("gnu-designator", true)
+        .Case("header-hygiene", true)
+        .Case("idiomatic-parentheses", true)
+        .Case("ignored-qualifiers", true)
+        .Case("implicit-atomic-properties", true)
+        .Case("incompatible-pointer-types", true)
+        .Case("incomplete-implementation", true)
+        .Case("initializer-overrides", true)
+        .Case("invalid-noreturn", true)
+        .Case("invalid-token-paste", true)
+        .Case("literal-conversion", true)
+        .Case("literal-range", true)
+        .Case("local-type-template-args", true)
+        .Case("logical-op-parentheses", true)
+        .Case("method-signatures", true)
+        .Case("microsoft", true)
+        .Case("mismatched-tags", true)
+        .Case("missing-method-return-type", true)
+        .Case("non-pod-varargs", true)
+        .Case("nonfragile-abi2", true)
+        .Case("null-arithmetic", true)
+        .Case("null-dereference", true)
+        .Case("out-of-line-declaration", true)
+        .Case("overriding-method-mismatch", true)
+        .Case("readonly-setter-attrs", true)
+        .Case("return-stack-address", true)
+        .Case("self-assign", true)
+        .Case("semicolon-before-method-body", true)
+        .Case("sentinel", true)
+        .Case("shift-overflow", true)
+        .Case("shift-sign-overflow", true)
+        .Case("sign-conversion", true)
+        .Case("sizeof-array-argument", true)
+        .Case("sizeof-pointer-memaccess", true)
+        .Case("string-compare", true)
+        .Case("super-class-method-mismatch", true)
+        .Case("tautological-compare", true)
+        .Case("typedef-redefinition", true)
+        .Case("typename-missing", true)
+        .Case("undefined-reinterpret-cast", true)
+        .Case("unknown-warning-option", true)
+        .Case("unnamed-type-template-args", true)
+        .Case("unneeded-internal-declaration", true)
+        .Case("unneeded-member-function", true)
+        .Case("unused-comparison", true)
+        .Case("unused-exception-parameter", true)
+        .Case("unused-member-function", true)
+        .Case("unused-result", true)
+        .Case("vector-conversions", true)
+        .Case("vla", true)
+        .Case("used-but-marked-unused", true)
+        .Case("weak-vtables", true)
+        .Default(false);
+    } // if (Option.startswith("-W"))
     if (RemoveOption) {
       it = CmdArgs.erase(it);
       ie = CmdArgs.end();
@@ -2867,6 +2987,8 @@ void darwin::Preprocess::ConstructJob(Compilation &C, const JobAction &JA,
 
   Args.AddAllArgs(CmdArgs, options::OPT_d_Group);
 
+  RemoveCC1UnsupportedArgs(CmdArgs);
+
   const char *CC1Name = getCC1Name(Inputs[0].getType());
   const char *Exec =
     Args.MakeArgString(getToolChain().GetProgramPath(CC1Name));
@@ -2957,7 +3079,7 @@ void darwin::Compile::ConstructJob(Compilation &C, const JobAction &JA,
     // NOTE: gcc uses a temp .s file for this, but there doesn't seem
     // to be a good reason.
     const char *TmpPath = C.getArgs().MakeArgString(
-      D.GetTemporaryPath("s"));
+      D.GetTemporaryPath("cc", "s"));
     C.addTempFile(TmpPath);
     CmdArgs.push_back(TmpPath);
 
@@ -3099,7 +3221,7 @@ void darwin::Link::AddLinkArgs(Compilation &C,
   // dsymutil step.
   if (Version[0] >= 116 && D.IsUsingLTO(Args)) {
     const char *TmpPath = C.getArgs().MakeArgString(
-      D.GetTemporaryPath(types::getTypeTempSuffix(types::TY_Object)));
+      D.GetTemporaryPath("cc", types::getTypeTempSuffix(types::TY_Object)));
     C.addTempFile(TmpPath);
     CmdArgs.push_back("-object_path_lto");
     CmdArgs.push_back(TmpPath);
@@ -3954,9 +4076,7 @@ void netbsd::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(II.getFilename());
   }
 
-  const char *Exec = Args.MakeArgString(FindTargetProgramPath(getToolChain(),
-                                                      ToolTriple.getTriple(),
-                                                      "as"));
+  const char *Exec = Args.MakeArgString((getToolChain().GetProgramPath("as")));
   C.addCommand(new Command(JA, *this, Exec, CmdArgs));
 }
 
@@ -4072,9 +4192,7 @@ void netbsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
 
   addProfileRT(getToolChain(), Args, CmdArgs, getToolChain().getTriple());
 
-  const char *Exec = Args.MakeArgString(FindTargetProgramPath(getToolChain(),
-                                                      ToolTriple.getTriple(),
-                                                      "ld"));
+  const char *Exec = Args.MakeArgString(getToolChain().GetProgramPath("ld"));
   C.addCommand(new Command(JA, *this, Exec, CmdArgs));
 }
 

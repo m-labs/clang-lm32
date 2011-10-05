@@ -39,7 +39,6 @@ static FrontendAction *CreateFrontendBaseAction(CompilerInstance &CI) {
   case ASTDumpXML:             return new ASTDumpXMLAction();
   case ASTPrint:               return new ASTPrintAction();
   case ASTView:                return new ASTViewAction();
-  case CreateModule:           return 0;
   case DumpRawTokens:          return new DumpRawTokensAction();
   case DumpTokens:             return new DumpTokensAction();
   case EmitAssembly:           return new EmitAssemblyAction();
@@ -50,7 +49,8 @@ static FrontendAction *CreateFrontendBaseAction(CompilerInstance &CI) {
   case EmitCodeGenOnly:        return new EmitCodeGenOnlyAction();
   case EmitObj:                return new EmitObjAction();
   case FixIt:                  return new FixItAction();
-  case GeneratePCH:            return new GeneratePCHAction();
+  case GenerateModule:         return new GeneratePCHAction(true);
+  case GeneratePCH:            return new GeneratePCHAction(false);
   case GeneratePTH:            return new GeneratePTHAction();
   case InitOnly:               return new InitOnlyAction();
   case ParseSyntaxOnly:        return new SyntaxOnlyAction();

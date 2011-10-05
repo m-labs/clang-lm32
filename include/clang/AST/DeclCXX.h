@@ -468,6 +468,14 @@ class CXXRecordDecl : public RecordDecl {
     /// \brief Whether we have already declared a destructor within the class.
     bool DeclaredDestructor : 1;
 
+    /// \brief Whether an implicit move constructor was attempted to be declared
+    /// but would have been deleted.
+    bool FailedImplicitMoveConstructor : 1;
+
+    /// \brief Whether an implicit move assignment operator was attempted to be
+    /// declared but would have been deleted.
+    bool FailedImplicitMoveAssignment : 1;
+
     /// NumBases - The number of base class specifiers in Bases.
     unsigned NumBases;
     
@@ -780,6 +788,33 @@ public:
     return data().DeclaredMoveConstructor;
   }
 
+  /// \brief Determine whether implicit move constructor generation for this
+  /// class has failed before.
+  bool hasFailedImplicitMoveConstructor() const {
+    return data().FailedImplicitMoveConstructor;
+  }
+
+  /// \brief Set whether implicit move constructor generation for this class
+  /// has failed before.
+  void setFailedImplicitMoveConstructor(bool Failed = true) {
+    data().FailedImplicitMoveConstructor = Failed;
+  }
+
+  /// \brief Determine whether this class should get an implicit move
+  /// constructor or if any existing special member function inhibits this.
+  ///
+  /// Covers all bullets of C++0x [class.copy]p9 except the last, that the
+  /// constructor wouldn't be deleted, which is only looked up from a cached
+  /// result.
+  bool needsImplicitMoveConstructor() const {
+    return !hasFailedImplicitMoveConstructor() &&
+           !hasDeclaredMoveConstructor() &&
+           !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveAssignment() &&
+           !hasUserDeclaredDestructor();
+  }
+
   /// hasUserDeclaredCopyAssignment - Whether this class has a
   /// user-declared copy assignment operator. When false, a copy
   /// assigment operator will be implicitly declared.
@@ -805,6 +840,33 @@ public:
   /// declared move assignment operator.
   bool hasDeclaredMoveAssignment() const {
     return data().DeclaredMoveAssignment;
+  }
+
+  /// \brief Determine whether implicit move assignment generation for this
+  /// class has failed before.
+  bool hasFailedImplicitMoveAssignment() const {
+    return data().FailedImplicitMoveAssignment;
+  }
+
+  /// \brief Set whether implicit move assignment generation for this class
+  /// has failed before.
+  void setFailedImplicitMoveAssignment(bool Failed = true) {
+    data().FailedImplicitMoveAssignment = Failed;
+  }
+
+  /// \brief Determine whether this class should get an implicit move
+  /// assignment operator or if any existing special member function inhibits
+  /// this.
+  ///
+  /// Covers all bullets of C++0x [class.copy]p20 except the last, that the
+  /// constructor wouldn't be deleted.
+  bool needsImplicitMoveAssignment() const {
+    return !hasFailedImplicitMoveAssignment() &&
+           !hasDeclaredMoveAssignment() &&
+           !hasUserDeclaredCopyConstructor() &&
+           !hasUserDeclaredCopyAssignment() &&
+           !hasUserDeclaredMoveConstructor() &&
+           !hasUserDeclaredDestructor();
   }
 
   /// hasUserDeclaredDestructor - Whether this class has a
@@ -940,6 +1002,25 @@ public:
   //    is trivially copiable.
   bool isTrivial() const {
     return isTriviallyCopyable() && hasTrivialDefaultConstructor();
+  }
+
+  // isLiteral - Whether this class is a literal type.
+  //
+  // C++0x [basic.types]p10
+  //   A class type that has all the following properties:
+  //     -- a trivial destructor
+  //     -- every constructor call and full-expression in the
+  //        brace-or-equal-intializers for non-static data members (if any) is
+  //        a constant expression.
+  //     -- it is an aggregate type or has at least one constexpr constructor or
+  //        constructor template that is not a copy or move constructor, and
+  //     -- all non-static data members and base classes of literal types
+  //
+  // We resolve DR1361 by ignoring the second bullet.
+  bool isLiteral() const {
+    return hasTrivialDestructor() &&
+           (isAggregate() || hasConstexprNonCopyMoveConstructor()) &&
+           !hasNonLiteralTypeFieldsOrBases();
   }
 
   /// \brief If this record is an instantiation of a member class,

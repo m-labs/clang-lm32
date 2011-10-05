@@ -158,6 +158,11 @@ public:
 //===----------------------------------------------------------------------===//
 
   /// \brief Run checkers for pre-visiting Stmts.
+  ///
+  /// The notification is performed for every explored CFGElement, which does
+  /// not include the control flow statements such as IfStmt.
+  ///
+  /// \sa runCheckersForBranchCondition, runCheckersForPostStmt
   void runCheckersForPreStmt(ExplodedNodeSet &Dst,
                              const ExplodedNodeSet &Src,
                              const Stmt *S,
@@ -166,6 +171,11 @@ public:
   }
 
   /// \brief Run checkers for post-visiting Stmts.
+  ///
+  /// The notification is performed for every explored CFGElement, which does
+  /// not include the control flow statements such as IfStmt.
+  ///
+  /// \sa runCheckersForBranchCondition, runCheckersForPreStmt
   void runCheckersForPostStmt(ExplodedNodeSet &Dst,
                               const ExplodedNodeSet &Src,
                               const Stmt *S,
@@ -225,10 +235,18 @@ public:
                                      BranchNodeBuilder &B, ExprEngine &Eng);
 
   /// \brief Run checkers for live symbols.
+  ///
+  /// Allows modifying SymbolReaper object. For example, checkers can explicitly
+  /// register symbols of interest as live. These symbols will not be marked
+  /// dead and removed.
   void runCheckersForLiveSymbols(const ProgramState *state,
                                  SymbolReaper &SymReaper);
 
   /// \brief Run checkers for dead symbols.
+  ///
+  /// Notifies checkers when symbols become dead. For example, this allows
+  /// checkers to aggressively clean up/reduce the checker state and produce
+  /// precise diagnostics.
   void runCheckersForDeadSymbols(ExplodedNodeSet &Dst,
                                  const ExplodedNodeSet &Src,
                                  SymbolReaper &SymReaper, const Stmt *S,
@@ -238,11 +256,19 @@ public:
   bool wantsRegionChangeUpdate(const ProgramState *state);
 
   /// \brief Run checkers for region changes.
+  ///
+  /// This corresponds to the check::RegionChanges callback.
+  /// \param state The current program state.
+  /// \param invalidated A set of all symbols potentially touched by the change.
+  /// \param ExplicitRegions The regions explicitly requested for invalidation.
+  ///   For example, in the case of a function call, these would be arguments.
+  /// \param Regions The transitive closure of accessible regions,
+  ///   i.e. all regions that may have been touched by this change.
   const ProgramState *
   runCheckersForRegionChanges(const ProgramState *state,
                             const StoreManager::InvalidatedSymbols *invalidated,
-                              const MemRegion * const *Begin,
-                              const MemRegion * const *End);
+                              ArrayRef<const MemRegion *> ExplicitRegions,
+                              ArrayRef<const MemRegion *> Regions);
 
   /// \brief Run checkers for handling assumptions on symbolic values.
   const ProgramState *runCheckersForEvalAssume(const ProgramState *state,
@@ -258,6 +284,17 @@ public:
   void runCheckersOnEndOfTranslationUnit(const TranslationUnitDecl *TU,
                                          AnalysisManager &mgr,
                                          BugReporter &BR);
+
+  /// \brief Run checkers for debug-printing a ProgramState.
+  ///
+  /// Unlike most other callbacks, any checker can simply implement the virtual
+  /// method CheckerBase::printState if it has custom data to print.
+  /// \param Out The output stream
+  /// \param State The state being printed
+  /// \param NL The preferred representation of a newline.
+  /// \param Sep The preferred separator between different kinds of data.
+  void runCheckersForPrintState(raw_ostream &Out, const ProgramState *State,
+                                const char *NL, const char *Sep);
 
 //===----------------------------------------------------------------------===//
 // Internal registration functions for AST traversing.
@@ -305,8 +342,8 @@ public:
   
   typedef CheckerFn<const ProgramState * (const ProgramState *,
                                 const StoreManager::InvalidatedSymbols *symbols,
-                                     const MemRegion * const *begin,
-                                     const MemRegion * const *end)>
+                                    ArrayRef<const MemRegion *> ExplicitRegions,
+                                          ArrayRef<const MemRegion *> Regions)>
       CheckRegionChangesFunc;
   
   typedef CheckerFn<bool (const ProgramState *)> WantsRegionChangeUpdateFunc;

@@ -32,6 +32,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/OwningPtr.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
@@ -48,8 +49,8 @@ using namespace clang;
 Driver::Driver(StringRef ClangExecutable,
                StringRef DefaultHostTriple,
                StringRef DefaultImageName,
-               bool IsProduction, bool CXXIsProduction,
-               Diagnostic &Diags)
+               bool IsProduction,
+               DiagnosticsEngine &Diags)
   : Opts(createDriverOptTable()), Diags(Diags),
     ClangExecutable(ClangExecutable), UseStdLib(true),
     DefaultHostTriple(DefaultHostTriple), DefaultImageName(DefaultImageName),
@@ -72,9 +73,6 @@ Driver::Driver(StringRef ClangExecutable,
     CCCClangArchs.insert(llvm::Triple::x86);
     CCCClangArchs.insert(llvm::Triple::x86_64);
     CCCClangArchs.insert(llvm::Triple::arm);
-
-    if (!CXXIsProduction)
-      CCCUseClangCXX = false;
   }
 
   Name = llvm::sys::path::stem(ClangExecutable);
@@ -241,8 +239,16 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   llvm::PrettyStackTraceString CrashInfo("Compilation construction");
 
   // FIXME: Handle environment options which affect driver behavior, somewhere
-  // (client?). GCC_EXEC_PREFIX, COMPILER_PATH, LIBRARY_PATH, LPATH,
-  // CC_PRINT_OPTIONS.
+  // (client?). GCC_EXEC_PREFIX, LIBRARY_PATH, LPATH, CC_PRINT_OPTIONS.
+
+  if (char *env = ::getenv("COMPILER_PATH")) {
+    StringRef CompilerPath = env;
+    while (!CompilerPath.empty()) {
+      std::pair<StringRef, StringRef> Split = CompilerPath.split(':');      
+      PrefixDirs.push_back(Split.first);
+      CompilerPath = Split.second;
+    }
+  }
 
   // FIXME: What are we going to do with -V and -b?
 
@@ -393,6 +399,23 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
       ie = Inputs.end();
     } else {
       ++it;
+    }
+  }
+
+  // Don't attempt to generate preprocessed files if multiple -arch options are
+  // used.
+  int Archs = 0;
+  for (ArgList::const_iterator it = C.getArgs().begin(), ie = C.getArgs().end();
+       it != ie; ++it) {
+    Arg *A = *it;
+    if (A->getOption().matches(options::OPT_arch)) {
+      Archs++;
+      if (Archs > 1) {
+        Diag(clang::diag::note_drv_command_failed_diag_msg)
+          << "Error generating preprocessed source(s) - cannot generate "
+          "preprocessed source with multiple -arch options.";
+        return;
+      }
     }
   }
 
@@ -585,7 +608,7 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
       llvm::outs() << *it;
     }
     llvm::outs() << "\n";
-    llvm::outs() << "libraries: =";
+    llvm::outs() << "libraries: =" << ResourceDir;
 
     std::string sysroot;
     if (Arg *A = C.getArgs().getLastArg(options::OPT__sysroot_EQ))
@@ -593,8 +616,7 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
 
     for (ToolChain::path_list::const_iterator it = TC.getFilePaths().begin(),
            ie = TC.getFilePaths().end(); it != ie; ++it) {
-      if (it != TC.getFilePaths().begin())
-        llvm::outs() << ':';
+      llvm::outs() << ':';
       const char *path = it->c_str();
       if (path[0] == '=')
         llvm::outs() << sysroot << path + 1;
@@ -1052,7 +1074,7 @@ Action *Driver::ConstructPhaseAction(const ArgList &Args, phases::ID Phase,
   llvm::PrettyStackTraceString CrashInfo("Constructing phase actions");
   // Build the appropriate action.
   switch (Phase) {
-  case phases::Link: assert(0 && "link action invalid here.");
+  case phases::Link: llvm_unreachable("link action invalid here.");
   case phases::Preprocess: {
     types::ID OutputTy;
     // -{M, MM} alter the output type.
@@ -1088,8 +1110,7 @@ Action *Driver::ConstructPhaseAction(const ArgList &Args, phases::ID Phase,
     return new AssembleJobAction(Input, types::TY_Object);
   }
 
-  assert(0 && "invalid phase in ConstructPhaseAction");
-  return 0;
+  llvm_unreachable("invalid phase in ConstructPhaseAction");
 }
 
 bool Driver::IsUsingLTO(const ArgList &Args) const {
@@ -1165,7 +1186,8 @@ void Driver::BuildJobs(Compilation &C) const {
     Arg *A = *it;
 
     // FIXME: It would be nice to be able to send the argument to the
-    // Diagnostic, so that extra values, position, and so on could be printed.
+    // DiagnosticsEngine, so that extra values, position, and so on could be
+    // printed.
     if (!A->isClaimed()) {
       if (A->getOption().hasNoArgumentUnused())
         continue;
@@ -1354,8 +1376,10 @@ const char *Driver::GetNamedOutputPath(Compilation &C,
   // Output to a temporary file?
   if ((!AtTopLevel && !C.getArgs().hasArg(options::OPT_save_temps)) ||
       CCGenDiagnostics) {
+    StringRef Name = llvm::sys::path::filename(BaseInput);
+    std::pair<StringRef, StringRef> Split = Name.split('.');
     std::string TmpName =
-      GetTemporaryPath(types::getTypeTempSuffix(JA.getType()));
+      GetTemporaryPath(Split.first, types::getTypeTempSuffix(JA.getType()));
     return C.addTempFile(C.getArgs().MakeArgString(TmpName.c_str()));
   }
 
@@ -1388,9 +1412,11 @@ const char *Driver::GetNamedOutputPath(Compilation &C,
   // If we're saving temps and the temp filename conflicts with the input
   // filename, then avoid overwriting input file.
   if (!AtTopLevel && C.getArgs().hasArg(options::OPT_save_temps) &&
-    NamedOutput == BaseName) {
+      NamedOutput == BaseName) {
+    StringRef Name = llvm::sys::path::filename(BaseInput);
+    std::pair<StringRef, StringRef> Split = Name.split('.');
     std::string TmpName =
-      GetTemporaryPath(types::getTypeTempSuffix(JA.getType()));
+      GetTemporaryPath(Split.first, types::getTypeTempSuffix(JA.getType()));
     return C.addTempFile(C.getArgs().MakeArgString(TmpName.c_str()));
   }
 
@@ -1424,6 +1450,12 @@ std::string Driver::GetFilePath(const char *Name, const ToolChain &TC) const {
       return P.str();
   }
 
+  llvm::sys::Path P(ResourceDir);
+  P.appendComponent(Name);
+  bool Exists;
+  if (!llvm::sys::fs::exists(P.str(), Exists) && Exists)
+    return P.str();
+
   const ToolChain::path_list &List = TC.getFilePaths();
   for (ToolChain::path_list::const_iterator
          it = List.begin(), ie = List.end(); it != ie; ++it) {
@@ -1442,40 +1474,53 @@ std::string Driver::GetFilePath(const char *Name, const ToolChain &TC) const {
   return Name;
 }
 
+static bool isPathExecutable(llvm::sys::Path &P, bool WantFile) {
+    bool Exists;
+    return (WantFile ? !llvm::sys::fs::exists(P.str(), Exists) && Exists
+                 : P.canExecute());
+}
+
 std::string Driver::GetProgramPath(const char *Name, const ToolChain &TC,
                                    bool WantFile) const {
+  std::string TargetSpecificExecutable(DefaultHostTriple + "-" + Name);
   // Respect a limited subset of the '-Bprefix' functionality in GCC by
   // attempting to use this prefix when lokup up program paths.
   for (Driver::prefix_list::const_iterator it = PrefixDirs.begin(),
        ie = PrefixDirs.end(); it != ie; ++it) {
     llvm::sys::Path P(*it);
+    P.appendComponent(TargetSpecificExecutable);
+    if (isPathExecutable(P, WantFile)) return P.str();
+    P.eraseComponent();
     P.appendComponent(Name);
-    bool Exists;
-    if (WantFile ? !llvm::sys::fs::exists(P.str(), Exists) && Exists
-                 : P.canExecute())
-      return P.str();
+    if (isPathExecutable(P, WantFile)) return P.str();
   }
 
   const ToolChain::path_list &List = TC.getProgramPaths();
   for (ToolChain::path_list::const_iterator
          it = List.begin(), ie = List.end(); it != ie; ++it) {
     llvm::sys::Path P(*it);
+    P.appendComponent(TargetSpecificExecutable);
+    if (isPathExecutable(P, WantFile)) return P.str();
+    P.eraseComponent();
     P.appendComponent(Name);
-    bool Exists;
-    if (WantFile ? !llvm::sys::fs::exists(P.str(), Exists) && Exists
-                 : P.canExecute())
-      return P.str();
+    if (isPathExecutable(P, WantFile)) return P.str();
   }
 
   // If all else failed, search the path.
-  llvm::sys::Path P(llvm::sys::Program::FindProgramByName(Name));
+  llvm::sys::Path
+      P(llvm::sys::Program::FindProgramByName(TargetSpecificExecutable));
+  if (!P.empty())
+    return P.str();
+
+  P = llvm::sys::Path(llvm::sys::Program::FindProgramByName(Name));
   if (!P.empty())
     return P.str();
 
   return Name;
 }
 
-std::string Driver::GetTemporaryPath(const char *Suffix) const {
+std::string Driver::GetTemporaryPath(StringRef Prefix, const char *Suffix) 
+  const {
   // FIXME: This is lame; sys::Path should provide this function (in particular,
   // it should know how to find the temporary files dir).
   std::string Error;
@@ -1487,7 +1532,7 @@ std::string Driver::GetTemporaryPath(const char *Suffix) const {
   if (!TmpDir)
     TmpDir = "/tmp";
   llvm::sys::Path P(TmpDir);
-  P.appendComponent("cc");
+  P.appendComponent(Prefix);
   if (P.makeUnique(false, &Error)) {
     Diag(clang::diag::err_drv_unable_to_make_temp) << Error;
     return "";

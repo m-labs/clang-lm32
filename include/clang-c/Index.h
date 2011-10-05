@@ -263,7 +263,7 @@ CINDEX_LINKAGE CXFile clang_getFile(CXTranslationUnit tu,
  * \brief Identifies a specific source location within a translation
  * unit.
  *
- * Use clang_getInstantiationLocation() or clang_getSpellingLocation()
+ * Use clang_getExpansionLocation() or clang_getSpellingLocation()
  * to map a source location to a particular file, line, and column.
  */
 typedef struct {
@@ -336,11 +336,16 @@ CINDEX_LINKAGE unsigned clang_equalRanges(CXSourceRange range1,
                                           CXSourceRange range2);
 
 /**
+ * \brief Returns non-zero if \arg range is null.
+ */
+int clang_Range_isNull(CXSourceRange range);
+
+/**
  * \brief Retrieve the file, line, column, and offset represented by
  * the given source location.
  *
- * If the location refers into a macro instantiation, retrieves the
- * location of the macro instantiation.
+ * If the location refers into a macro expansion, retrieves the
+ * location of the macro expansion.
  *
  * \param location the location within a source file that will be decomposed
  * into its parts.
@@ -356,6 +361,63 @@ CINDEX_LINKAGE unsigned clang_equalRanges(CXSourceRange range1,
  *
  * \param offset [out] if non-NULL, will be set to the offset into the
  * buffer to which the given source location points.
+ */
+CINDEX_LINKAGE void clang_getExpansionLocation(CXSourceLocation location,
+                                               CXFile *file,
+                                               unsigned *line,
+                                               unsigned *column,
+                                               unsigned *offset);
+
+/**
+ * \brief Retrieve the file, line, column, and offset represented by
+ * the given source location, as specified in a # line directive.
+ *
+ * Example: given the following source code in a file somefile.c
+ *
+ * #123 "dummy.c" 1
+ *
+ * static int func(void)
+ * {
+ *     return 0;
+ * }
+ *
+ * the location information returned by this function would be
+ *
+ * File: dummy.c Line: 124 Column: 12
+ *
+ * whereas clang_getExpansionLocation would have returned
+ *
+ * File: somefile.c Line: 3 Column: 12
+ *
+ * \param location the location within a source file that will be decomposed
+ * into its parts.
+ *
+ * \param filename [out] if non-NULL, will be set to the filename of the
+ * source location. Note that filenames returned will be for "virtual" files,
+ * which don't necessarily exist on the machine running clang - e.g. when
+ * parsing preprocessed output obtained from a different environment. If
+ * a non-NULL value is passed in, remember to dispose of the returned value
+ * using \c clang_disposeString() once you've finished with it. For an invalid
+ * source location, an empty string is returned.
+ *
+ * \param line [out] if non-NULL, will be set to the line number of the
+ * source location. For an invalid source location, zero is returned.
+ *
+ * \param column [out] if non-NULL, will be set to the column number of the
+ * source location. For an invalid source location, zero is returned.
+ */
+CINDEX_LINKAGE void clang_getPresumedLocation(CXSourceLocation location,
+                                              CXString *filename,
+                                              unsigned *line,
+                                              unsigned *column);
+
+/**
+ * \brief Legacy API to retrieve the file, line, column, and offset represented
+ * by the given source location.
+ *
+ * This interface has been replaced by the newer interface
+ * \see clang_getExpansionLocation(). See that interface's documentation for
+ * details.
  */
 CINDEX_LINKAGE void clang_getInstantiationLocation(CXSourceLocation location,
                                                    CXFile *file,
@@ -824,18 +886,18 @@ enum CXTranslationUnit_Flags {
    */
   CXTranslationUnit_CacheCompletionResults = 0x08,
   /**
-   * \brief Enable precompiled preambles in C++.
+   * \brief DEPRECATED: Enable precompiled preambles in C++.
    *
    * Note: this is a *temporary* option that is available only while
-   * we are testing C++ precompiled preamble support.
+   * we are testing C++ precompiled preamble support. It is deprecated.
    */
   CXTranslationUnit_CXXPrecompiledPreamble = 0x10,
 
   /**
-   * \brief Enabled chained precompiled preambles in C++.
+   * \brief DEPRECATED: Enabled chained precompiled preambles in C++.
    *
    * Note: this is a *temporary* option that is available only while
-   * we are testing C++ precompiled preamble support.
+   * we are testing C++ precompiled preamble support. It is deprecated.
    */
   CXTranslationUnit_CXXChainedPCH = 0x20,
   
@@ -1247,8 +1309,11 @@ enum CXCursorKind {
   CXCursor_ObjCSynthesizeDecl            = 37,
   /** \brief An Objective-C @dynamic definition. */
   CXCursor_ObjCDynamicDecl               = 38,
+  /** \brief An access specifier. */
+  CXCursor_CXXAccessSpecifier            = 39,
+
   CXCursor_FirstDecl                     = CXCursor_UnexposedDecl,
-  CXCursor_LastDecl                      = CXCursor_ObjCDynamicDecl,
+  CXCursor_LastDecl                      = CXCursor_CXXAccessSpecifier,
 
   /* References */
   CXCursor_FirstRef                      = 40, /* Decl references */
@@ -1387,7 +1452,207 @@ enum CXCursorKind {
   /** \brief An expression that represents a block literal. */
   CXCursor_BlockExpr                     = 105,
 
-  CXCursor_LastExpr                      = 105,
+  /** \brief An integer literal.
+   */
+  CXCursor_IntegerLiteral                = 106,
+
+  /** \brief A floating point number literal.
+   */
+  CXCursor_FloatingLiteral               = 107,
+
+  /** \brief An imaginary number literal.
+   */
+  CXCursor_ImaginaryLiteral              = 108,
+
+  /** \brief A string literal.
+   */
+  CXCursor_StringLiteral                 = 109,
+
+  /** \brief A character literal.
+   */
+  CXCursor_CharacterLiteral              = 110,
+
+  /** \brief A parenthesized expression, e.g. "(1)".
+   *
+   * This AST node is only formed if full location information is requested.
+   */
+  CXCursor_ParenExpr                     = 111,
+
+  /** \brief This represents the unary-expression's (except sizeof and
+   * alignof).
+   */
+  CXCursor_UnaryOperator                 = 112,
+
+  /** \brief [C99 6.5.2.1] Array Subscripting.
+   */
+  CXCursor_ArraySubscriptExpr            = 113,
+
+  /** \brief A builtin binary operation expression such as "x + y" or
+   * "x <= y".
+   */
+  CXCursor_BinaryOperator                = 114,
+
+  /** \brief Compound assignment such as "+=".
+   */
+  CXCursor_CompoundAssignOperator        = 115,
+
+  /** \brief The ?: ternary operator.
+   */
+  CXCursor_ConditionalOperator           = 116,
+
+  /** \brief An explicit cast in C (C99 6.5.4) or a C-style cast in C++
+   * (C++ [expr.cast]), which uses the syntax (Type)expr.
+   *
+   * For example: (int)f.
+   */
+  CXCursor_CStyleCastExpr                = 117,
+
+  /** \brief [C99 6.5.2.5]
+   */
+  CXCursor_CompoundLiteralExpr           = 118,
+
+  /** \brief Describes an C or C++ initializer list.
+   */
+  CXCursor_InitListExpr                  = 119,
+
+  /** \brief The GNU address of label extension, representing &&label.
+   */
+  CXCursor_AddrLabelExpr                 = 120,
+
+  /** \brief This is the GNU Statement Expression extension: ({int X=4; X;})
+   */
+  CXCursor_StmtExpr                      = 121,
+
+  /** \brief Represents a C1X generic selection.
+   */
+  CXCursor_GenericSelectionExpr          = 122,
+
+  /** \brief Implements the GNU __null extension, which is a name for a null
+   * pointer constant that has integral type (e.g., int or long) and is the same
+   * size and alignment as a pointer.
+   *
+   * The __null extension is typically only used by system headers, which define
+   * NULL as __null in C++ rather than using 0 (which is an integer that may not
+   * match the size of a pointer).
+   */
+  CXCursor_GNUNullExpr                   = 123,
+
+  /** \brief C++'s static_cast<> expression.
+   */
+  CXCursor_CXXStaticCastExpr             = 124,
+
+  /** \brief C++'s dynamic_cast<> expression.
+   */
+  CXCursor_CXXDynamicCastExpr            = 125,
+
+  /** \brief C++'s reinterpret_cast<> expression.
+   */
+  CXCursor_CXXReinterpretCastExpr        = 126,
+
+  /** \brief C++'s const_cast<> expression.
+   */
+  CXCursor_CXXConstCastExpr              = 127,
+
+  /** \brief Represents an explicit C++ type conversion that uses "functional"
+   * notion (C++ [expr.type.conv]).
+   *
+   * Example:
+   * \code
+   *   x = int(0.5);
+   * \endcode
+   */
+  CXCursor_CXXFunctionalCastExpr         = 128,
+
+  /** \brief A C++ typeid expression (C++ [expr.typeid]).
+   */
+  CXCursor_CXXTypeidExpr                 = 129,
+
+  /** \brief [C++ 2.13.5] C++ Boolean Literal.
+   */
+  CXCursor_CXXBoolLiteralExpr            = 130,
+
+  /** \brief [C++0x 2.14.7] C++ Pointer Literal.
+   */
+  CXCursor_CXXNullPtrLiteralExpr         = 131,
+
+  /** \brief Represents the "this" expression in C++
+   */
+  CXCursor_CXXThisExpr                   = 132,
+
+  /** \brief [C++ 15] C++ Throw Expression.
+   *
+   * This handles 'throw' and 'throw' assignment-expression. When
+   * assignment-expression isn't present, Op will be null.
+   */
+  CXCursor_CXXThrowExpr                  = 133,
+
+  /** \brief A new expression for memory allocation and constructor calls, e.g:
+   * "new CXXNewExpr(foo)".
+   */
+  CXCursor_CXXNewExpr                    = 134,
+
+  /** \brief A delete expression for memory deallocation and destructor calls,
+   * e.g. "delete[] pArray".
+   */
+  CXCursor_CXXDeleteExpr                 = 135,
+
+  /** \brief A unary expression.
+   */
+  CXCursor_UnaryExpr                     = 136,
+
+  /** \brief ObjCStringLiteral, used for Objective-C string literals i.e. "foo".
+   */
+  CXCursor_ObjCStringLiteral             = 137,
+
+  /** \brief ObjCEncodeExpr, used for in Objective-C.
+   */
+  CXCursor_ObjCEncodeExpr                = 138,
+
+  /** \brief ObjCSelectorExpr used for in Objective-C.
+   */
+  CXCursor_ObjCSelectorExpr              = 139,
+
+  /** \brief Objective-C's protocol expression.
+   */
+  CXCursor_ObjCProtocolExpr              = 140,
+
+  /** \brief An Objective-C "bridged" cast expression, which casts between
+   * Objective-C pointers and C pointers, transferring ownership in the process.
+   *
+   * \code
+   *   NSString *str = (__bridge_transfer NSString *)CFCreateString();
+   * \endcode
+   */
+  CXCursor_ObjCBridgedCastExpr           = 141,
+
+  /** \brief Represents a C++0x pack expansion that produces a sequence of
+   * expressions.
+   *
+   * A pack expansion expression contains a pattern (which itself is an
+   * expression) followed by an ellipsis. For example:
+   *
+   * \code
+   * template<typename F, typename ...Types>
+   * void forward(F f, Types &&...args) {
+   *  f(static_cast<Types&&>(args)...);
+   * }
+   * \endcode
+   */
+  CXCursor_PackExpansionExpr             = 142,
+
+  /** \brief Represents an expression that computes the length of a parameter
+   * pack.
+   *
+   * \code
+   * template<typename ...Types>
+   * struct count {
+   *   static const unsigned value = sizeof...(Types);
+   * };
+   * \endcode
+   */
+  CXCursor_SizeOfPackExpr                = 143,
+
+  CXCursor_LastExpr                      = CXCursor_SizeOfPackExpr,
 
   /* Statements */
   CXCursor_FirstStmt                     = 200,
@@ -1414,8 +1679,130 @@ enum CXCursorKind {
    *
    */
   CXCursor_LabelStmt                     = 201,
-  
-  CXCursor_LastStmt                      = CXCursor_LabelStmt,
+
+  /** \brief A group of statements like { stmt stmt }.
+   *
+   * This cursor kind is used to describe compound statements, e.g. function
+   * bodies.
+   */
+  CXCursor_CompoundStmt                  = 202,
+
+  /** \brief A case statment.
+   */
+  CXCursor_CaseStmt                      = 203,
+
+  /** \brief A default statement.
+   */
+  CXCursor_DefaultStmt                   = 204,
+
+  /** \brief An if statement
+   */
+  CXCursor_IfStmt                        = 205,
+
+  /** \brief A switch statement.
+   */
+  CXCursor_SwitchStmt                    = 206,
+
+  /** \brief A while statement.
+   */
+  CXCursor_WhileStmt                     = 207,
+
+  /** \brief A do statement.
+   */
+  CXCursor_DoStmt                        = 208,
+
+  /** \brief A for statement.
+   */
+  CXCursor_ForStmt                       = 209,
+
+  /** \brief A goto statement.
+   */
+  CXCursor_GotoStmt                      = 210,
+
+  /** \brief An indirect goto statement.
+   */
+  CXCursor_IndirectGotoStmt              = 211,
+
+  /** \brief A continue statement.
+   */
+  CXCursor_ContinueStmt                  = 212,
+
+  /** \brief A break statement.
+   */
+  CXCursor_BreakStmt                     = 213,
+
+  /** \brief A return statement.
+   */
+  CXCursor_ReturnStmt                    = 214,
+
+  /** \brief A GNU inline assembly statement extension.
+   */
+  CXCursor_AsmStmt                       = 215,
+
+  /** \brief Objective-C's overall @try-@catc-@finall statement.
+   */
+  CXCursor_ObjCAtTryStmt                 = 216,
+
+  /** \brief Objective-C's @catch statement.
+   */
+  CXCursor_ObjCAtCatchStmt               = 217,
+
+  /** \brief Objective-C's @finally statement.
+   */
+  CXCursor_ObjCAtFinallyStmt             = 218,
+
+  /** \brief Objective-C's @throw statement.
+   */
+  CXCursor_ObjCAtThrowStmt               = 219,
+
+  /** \brief Objective-C's @synchronized statement.
+   */
+  CXCursor_ObjCAtSynchronizedStmt        = 220,
+
+  /** \brief Objective-C's autorelease pool statement.
+   */
+  CXCursor_ObjCAutoreleasePoolStmt       = 221,
+
+  /** \brief Objective-C's collection statement.
+   */
+  CXCursor_ObjCForCollectionStmt         = 222,
+
+  /** \brief C++'s catch statement.
+   */
+  CXCursor_CXXCatchStmt                  = 223,
+
+  /** \brief C++'s try statement.
+   */
+  CXCursor_CXXTryStmt                    = 224,
+
+  /** \brief C++'s for (* : *) statement.
+   */
+  CXCursor_CXXForRangeStmt               = 225,
+
+  /** \brief Windows Structured Exception Handling's try statement.
+   */
+  CXCursor_SEHTryStmt                    = 226,
+
+  /** \brief Windows Structured Exception Handling's except statement.
+   */
+  CXCursor_SEHExceptStmt                 = 227,
+
+  /** \brief Windows Structured Exception Handling's finally statement.
+   */
+  CXCursor_SEHFinallyStmt                = 228,
+
+  /** \brief The null satement ";": C99 6.8.3p3.
+   *
+   * This cursor kind is used to describe the null statement.
+   */
+  CXCursor_NullStmt                      = 230,
+
+  /** \brief Adaptor class for mixing declarations with statements and
+   * expressions.
+   */
+  CXCursor_DeclStmt                      = 231,
+
+  CXCursor_LastStmt                      = CXCursor_DeclStmt,
 
   /**
    * \brief Cursor that represents the translation unit itself.
@@ -1436,7 +1823,9 @@ enum CXCursorKind {
   CXCursor_IBActionAttr                  = 401,
   CXCursor_IBOutletAttr                  = 402,
   CXCursor_IBOutletCollectionAttr        = 403,
-  CXCursor_LastAttr                      = CXCursor_IBOutletCollectionAttr,
+  CXCursor_CXXFinalAttr                  = 404,
+  CXCursor_CXXOverrideAttr               = 405,
+  CXCursor_LastAttr                      = CXCursor_CXXOverrideAttr,
      
   /* Preprocessing */
   CXCursor_PreprocessingDirective        = 500,
@@ -1494,6 +1883,11 @@ CINDEX_LINKAGE CXCursor clang_getTranslationUnitCursor(CXTranslationUnit);
  * \brief Determine whether two cursors are equivalent.
  */
 CINDEX_LINKAGE unsigned clang_equalCursors(CXCursor, CXCursor);
+
+/**
+ * \brief Returns non-zero if \arg cursor is null.
+ */
+int clang_Cursor_isNull(CXCursor);
 
 /**
  * \brief Compute a hash value for the given cursor.
@@ -1609,6 +2003,11 @@ CINDEX_LINKAGE enum CXLanguageKind {
  * \brief Determine the "language" of the entity referred to by a given cursor.
  */
 CINDEX_LINKAGE enum CXLanguageKind clang_getCursorLanguage(CXCursor cursor);
+
+/**
+ * \brief Returns the translation unit that a cursor originated from.
+ */
+CINDEX_LINKAGE CXTranslationUnit clang_Cursor_getTranslationUnit(CXCursor);
 
 
 /**
@@ -1896,7 +2295,8 @@ enum CXTypeKind {
   CXType_ObjCInterface = 108,
   CXType_ObjCObjectPointer = 109,
   CXType_FunctionNoProto = 110,
-  CXType_FunctionProto = 111
+  CXType_FunctionProto = 111,
+  CXType_ConstantArray = 112
 };
 
 /**
@@ -1988,6 +2388,20 @@ CINDEX_LINKAGE CXType clang_getCursorResultType(CXCursor C);
 CINDEX_LINKAGE unsigned clang_isPODType(CXType T);
 
 /**
+ * \brief Return the element type of an array type.
+ *
+ * If a non-array type is passed in, an invalid type is returned.
+ */
+CINDEX_LINKAGE CXType clang_getArrayElementType(CXType T);
+
+/**
+ * \brief Return the the array size of a constant array.
+ *
+ * If a non-array type is passed in, -1 is returned.
+ */
+CINDEX_LINKAGE long long clang_getArraySize(CXType T);
+
+/**
  * \brief Returns 1 if the base class specified by the cursor with kind
  *   CX_CXXBaseSpecifier is virtual.
  */
@@ -2006,7 +2420,8 @@ enum CX_CXXAccessSpecifier {
 
 /**
  * \brief Returns the access control level for the C++ base specifier
- *  represented by a cursor with kind CX_CXXBaseSpecifier.
+ * represented by a cursor with kind CXCursor_CXXBaseSpecifier or
+ * CXCursor_AccessSpecifier.
  */
 CINDEX_LINKAGE enum CX_CXXAccessSpecifier clang_getCXXAccessSpecifier(CXCursor);
 

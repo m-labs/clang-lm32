@@ -36,7 +36,7 @@ namespace clang {
       : Writer(Writer), Record(Record) { }
     
     void
-    AddExplicitTemplateArgumentList(const ExplicitTemplateArgumentList &Args);
+    AddExplicitTemplateArgumentList(const ASTTemplateArgumentListInfo &Args);
 
     void VisitStmt(Stmt *S);
 #define STMT(Type, Base) \
@@ -46,7 +46,7 @@ namespace clang {
 }
 
 void ASTStmtWriter::
-AddExplicitTemplateArgumentList(const ExplicitTemplateArgumentList &Args) {
+AddExplicitTemplateArgumentList(const ASTTemplateArgumentListInfo &Args) {
   Writer.AddSourceLocation(Args.LAngleLoc, Record);
   Writer.AddSourceLocation(Args.RAngleLoc, Record);
   for (unsigned i=0; i != Args.NumTemplateArgs; ++i)
@@ -59,7 +59,7 @@ void ASTStmtWriter::VisitStmt(Stmt *S) {
 void ASTStmtWriter::VisitNullStmt(NullStmt *S) {
   VisitStmt(S);
   Writer.AddSourceLocation(S->getSemiLoc(), Record);
-  Writer.AddSourceLocation(S->LeadingEmptyMacro, Record);
+  Record.push_back(S->HasLeadingEmptyMacro);
   Code = serialization::STMT_NULL;
 }
 
@@ -265,6 +265,7 @@ void ASTStmtWriter::VisitDeclRefExpr(DeclRefExpr *E) {
   Record.push_back(E->hasQualifier());
   Record.push_back(E->getDecl() != E->getFoundDecl());
   Record.push_back(E->hasExplicitTemplateArgs());
+  Record.push_back(E->hadMultipleCandidates());
 
   if (E->hasExplicitTemplateArgs()) {
     unsigned NumTemplateArgs = E->getNumTemplateArgs();
@@ -457,7 +458,9 @@ void ASTStmtWriter::VisitMemberExpr(MemberExpr *E) {
     for (unsigned i=0; i != NumTemplateArgs; ++i)
       Writer.AddTemplateArgumentLoc(E->getTemplateArgs()[i], Record);
   }
-  
+
+  Record.push_back(E->hadMultipleCandidates());
+
   DeclAccessPair FoundDecl = E->getFoundDecl();
   Writer.AddDeclRef(FoundDecl.getDecl(), Record);
   Record.push_back(FoundDecl.getAccess());
@@ -806,6 +809,8 @@ void ASTStmtWriter::VisitObjCPropertyRefExpr(ObjCPropertyRefExpr *E) {
 void ASTStmtWriter::VisitObjCMessageExpr(ObjCMessageExpr *E) {
   VisitExpr(E);
   Record.push_back(E->getNumArgs());
+  Record.push_back(E->getNumStoredSelLocs());
+  Record.push_back(E->SelLocsKind);
   Record.push_back(E->isDelegateInitCall());
   Record.push_back((unsigned)E->getReceiverKind()); // FIXME: stable encoding
   switch (E->getReceiverKind()) {
@@ -834,11 +839,15 @@ void ASTStmtWriter::VisitObjCMessageExpr(ObjCMessageExpr *E) {
     
   Writer.AddSourceLocation(E->getLeftLoc(), Record);
   Writer.AddSourceLocation(E->getRightLoc(), Record);
-  Writer.AddSourceLocation(E->getSelectorLoc(), Record);
 
   for (CallExpr::arg_iterator Arg = E->arg_begin(), ArgEnd = E->arg_end();
        Arg != ArgEnd; ++Arg)
     Writer.AddStmt(*Arg);
+
+  SourceLocation *Locs = E->getStoredSelLocs();
+  for (unsigned i = 0, e = E->getNumStoredSelLocs(); i != e; ++i)
+    Writer.AddSourceLocation(Locs[i], Record);
+
   Code = serialization::EXPR_OBJC_MESSAGE_EXPR;
 }
 
@@ -952,6 +961,7 @@ void ASTStmtWriter::VisitCXXConstructExpr(CXXConstructExpr *E) {
   Writer.AddDeclRef(E->getConstructor(), Record);
   Writer.AddSourceLocation(E->getLocation(), Record);
   Record.push_back(E->isElidable());
+  Record.push_back(E->hadMultipleCandidates());
   Record.push_back(E->requiresZeroInitialization());
   Record.push_back(E->getConstructionKind()); // FIXME: stable encoding
   Writer.AddSourceRange(E->getParenRange(), Record);
@@ -1071,6 +1081,7 @@ void ASTStmtWriter::VisitCXXNewExpr(CXXNewExpr *E) {
   Record.push_back(E->hasInitializer());
   Record.push_back(E->doesUsualArrayDeleteWantSize());
   Record.push_back(E->isArray());
+  Record.push_back(E->hadMultipleCandidates());
   Record.push_back(E->getNumPlacementArgs());
   Record.push_back(E->getNumConstructorArgs());
   Writer.AddDeclRef(E->getOperatorNew(), Record);
@@ -1142,7 +1153,7 @@ ASTStmtWriter::VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr *E){
 
   Record.push_back(E->hasExplicitTemplateArgs());
   if (E->hasExplicitTemplateArgs()) {
-    const ExplicitTemplateArgumentList &Args = E->getExplicitTemplateArgs();
+    const ASTTemplateArgumentListInfo &Args = E->getExplicitTemplateArgs();
     Record.push_back(Args.NumTemplateArgs);
     AddExplicitTemplateArgumentList(Args);
   }
@@ -1168,7 +1179,7 @@ ASTStmtWriter::VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr *E) {
   // emitted first.
   Record.push_back(E->hasExplicitTemplateArgs());
   if (E->hasExplicitTemplateArgs()) {
-    const ExplicitTemplateArgumentList &Args = E->getExplicitTemplateArgs();
+    const ASTTemplateArgumentListInfo &Args = E->getExplicitTemplateArgs();
     Record.push_back(Args.NumTemplateArgs);
     AddExplicitTemplateArgumentList(Args);
   }
@@ -1197,7 +1208,7 @@ void ASTStmtWriter::VisitOverloadExpr(OverloadExpr *E) {
   // Don't emit anything here, hasExplicitTemplateArgs() must be emitted first.
   Record.push_back(E->hasExplicitTemplateArgs());
   if (E->hasExplicitTemplateArgs()) {
-    const ExplicitTemplateArgumentList &Args = E->getExplicitTemplateArgs();
+    const ASTTemplateArgumentListInfo &Args = E->getExplicitTemplateArgs();
     Record.push_back(Args.NumTemplateArgs);
     AddExplicitTemplateArgumentList(Args);
   }
@@ -1440,7 +1451,7 @@ void ASTWriter::WriteSubStmt(Stmt *S) {
     SourceManager &SrcMgr
       = DeclIDs.begin()->first->getASTContext().getSourceManager();
     S->dump(SrcMgr);
-    assert(0 && "Unhandled sub statement writing AST file");
+    llvm_unreachable("Unhandled sub statement writing AST file");
   }
 #endif
 

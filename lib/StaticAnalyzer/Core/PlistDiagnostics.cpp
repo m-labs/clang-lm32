@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/StaticAnalyzer/Core/PathDiagnosticClients.h"
+#include "clang/StaticAnalyzer/Core/PathDiagnosticConsumers.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/PathDiagnostic.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/FileManager.h"
@@ -60,21 +60,21 @@ struct CompareDiagnostics {
 }
 
 namespace {
-  class PlistDiagnostics : public PathDiagnosticClient {
+  class PlistDiagnostics : public PathDiagnosticConsumer {
     std::vector<const PathDiagnostic*> BatchedDiags;
     const std::string OutputFile;
     const LangOptions &LangOpts;
-    llvm::OwningPtr<PathDiagnosticClient> SubPD;
+    llvm::OwningPtr<PathDiagnosticConsumer> SubPD;
     bool flushed;
   public:
     PlistDiagnostics(const std::string& prefix, const LangOptions &LangOpts,
-                     PathDiagnosticClient *subPD);
+                     PathDiagnosticConsumer *subPD);
 
     ~PlistDiagnostics() { FlushDiagnostics(NULL); }
 
     void FlushDiagnostics(SmallVectorImpl<std::string> *FilesMade);
     
-    void HandlePathDiagnostic(const PathDiagnostic* D);
+    void HandlePathDiagnosticImpl(const PathDiagnostic* D);
     
     virtual StringRef getName() const {
       return "PlistDiagnostics";
@@ -89,18 +89,18 @@ namespace {
 
 PlistDiagnostics::PlistDiagnostics(const std::string& output,
                                    const LangOptions &LO,
-                                   PathDiagnosticClient *subPD)
+                                   PathDiagnosticConsumer *subPD)
   : OutputFile(output), LangOpts(LO), SubPD(subPD), flushed(false) {}
 
-PathDiagnosticClient*
-ento::createPlistDiagnosticClient(const std::string& s, const Preprocessor &PP,
-                                  PathDiagnosticClient *subPD) {
+PathDiagnosticConsumer*
+ento::createPlistDiagnosticConsumer(const std::string& s, const Preprocessor &PP,
+                                  PathDiagnosticConsumer *subPD) {
   return new PlistDiagnostics(s, PP.getLangOptions(), subPD);
 }
 
-PathDiagnosticClient::PathGenerationScheme
+PathDiagnosticConsumer::PathGenerationScheme
 PlistDiagnostics::getGenerationScheme() const {
-  if (const PathDiagnosticClient *PD = SubPD.get())
+  if (const PathDiagnosticConsumer *PD = SubPD.get())
     return PD->getGenerationScheme();
 
   return Extensive;
@@ -321,7 +321,7 @@ static void ReportDiag(raw_ostream &o, const PathDiagnosticPiece& P,
   }
 }
 
-void PlistDiagnostics::HandlePathDiagnostic(const PathDiagnostic* D) {
+void PlistDiagnostics::HandlePathDiagnosticImpl(const PathDiagnostic* D) {
   if (!D)
     return;
 

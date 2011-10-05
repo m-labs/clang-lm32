@@ -1803,7 +1803,7 @@ ASTNodeImporter::ImportDeclarationNameLoc(const DeclarationNameInfo &From,
     To.setNamedTypeInfo(Importer.Import(FromTInfo));
     return;
   }
-    assert(0 && "Unknown name kind.");
+    llvm_unreachable("Unknown name kind.");
   }
 }
 
@@ -2178,7 +2178,7 @@ Decl *ASTNodeImporter::VisitEnumDecl(EnumDecl *D) {
   // We may already have an enum of the same name; try to find and match it.
   if (!DC->isFunctionOrMethod() && SearchName) {
     SmallVector<NamedDecl *, 4> ConflictingDecls;
-    for (DeclContext::lookup_result Lookup = DC->lookup(Name);
+    for (DeclContext::lookup_result Lookup = DC->lookup(SearchName);
          Lookup.first != Lookup.second; 
          ++Lookup.first) {
       if (!(*Lookup.first)->isInIdentifierNamespace(IDNS))
@@ -2264,7 +2264,7 @@ Decl *ASTNodeImporter::VisitRecordDecl(RecordDecl *D) {
   RecordDecl *AdoptDecl = 0;
   if (!DC->isFunctionOrMethod() && SearchName) {
     SmallVector<NamedDecl *, 4> ConflictingDecls;
-    for (DeclContext::lookup_result Lookup = DC->lookup(Name);
+    for (DeclContext::lookup_result Lookup = DC->lookup(SearchName);
          Lookup.first != Lookup.second; 
          ++Lookup.first) {
       if (!(*Lookup.first)->isInIdentifierNamespace(IDNS))
@@ -2521,7 +2521,7 @@ Decl *ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
     Parameters[I]->setOwningFunction(ToFunction);
     ToFunction->addDecl(Parameters[I]);
   }
-  ToFunction->setParams(Parameters.data(), Parameters.size());
+  ToFunction->setParams(Parameters);
 
   // FIXME: Other bits to merge?
 
@@ -2954,9 +2954,9 @@ Decl *ASTNodeImporter::VisitObjCMethodDecl(ObjCMethodDecl *D) {
     ToParams[I]->setOwningFunction(ToMethod);
     ToMethod->addDecl(ToParams[I]);
   }
-  ToMethod->setMethodParams(Importer.getToContext(), 
-                            ToParams.data(), ToParams.size(),
-                            ToParams.size());
+  SmallVector<SourceLocation, 12> SelLocs;
+  D->getSelectorLocs(SelLocs);
+  ToMethod->setMethodParams(Importer.getToContext(), ToParams, SelLocs); 
 
   ToMethod->setLexicalDeclContext(LexicalDC);
   Importer.Imported(D, ToMethod);
@@ -2983,17 +2983,14 @@ Decl *ASTNodeImporter::VisitObjCCategoryDecl(ObjCCategoryDecl *D) {
   ObjCCategoryDecl *ToCategory = MergeWithCategory;
   if (!ToCategory) {
     ToCategory = ObjCCategoryDecl::Create(Importer.getToContext(), DC,
-                                          Importer.Import(D->getAtLoc()),
+                                          Importer.Import(D->getAtStartLoc()),
                                           Loc, 
                                        Importer.Import(D->getCategoryNameLoc()), 
-                                          Name.getAsIdentifierInfo());
+                                          Name.getAsIdentifierInfo(),
+                                          ToInterface);
     ToCategory->setLexicalDeclContext(LexicalDC);
     LexicalDC->addDecl(ToCategory);
     Importer.Imported(D, ToCategory);
-    
-    // Link this category into its class's category list.
-    ToCategory->setClassInterface(ToInterface);
-    ToCategory->insertNextClassCategory();
     
     // Import protocols
     SmallVector<ObjCProtocolDecl *, 4> Protocols;
@@ -3059,8 +3056,9 @@ Decl *ASTNodeImporter::VisitObjCProtocolDecl(ObjCProtocolDecl *D) {
   ObjCProtocolDecl *ToProto = MergeWithProtocol;
   if (!ToProto || ToProto->isForwardDecl()) {
     if (!ToProto) {
-      ToProto = ObjCProtocolDecl::Create(Importer.getToContext(), DC, Loc,
-                                         Name.getAsIdentifierInfo());
+      ToProto = ObjCProtocolDecl::Create(Importer.getToContext(), DC,
+                                         Name.getAsIdentifierInfo(), Loc,
+                                         Importer.Import(D->getAtStartLoc()));
       ToProto->setForwardDecl(D->isForwardDecl());
       ToProto->setLexicalDeclContext(LexicalDC);
       LexicalDC->addDecl(ToProto);
@@ -3119,10 +3117,9 @@ Decl *ASTNodeImporter::VisitObjCInterfaceDecl(ObjCInterfaceDecl *D) {
   ObjCInterfaceDecl *ToIface = MergeWithIface;
   if (!ToIface || ToIface->isForwardDecl()) {
     if (!ToIface) {
-      ToIface = ObjCInterfaceDecl::Create(Importer.getToContext(),
-                                          DC, Loc,
-                                          Name.getAsIdentifierInfo(),
-                                          Importer.Import(D->getClassLoc()),
+      ToIface = ObjCInterfaceDecl::Create(Importer.getToContext(), DC,
+                                          Importer.Import(D->getAtStartLoc()),
+                                          Name.getAsIdentifierInfo(), Loc,
                                           D->isForwardDecl(),
                                           D->isImplicitInterfaceDecl());
       ToIface->setForwardDecl(D->isForwardDecl());
@@ -3232,9 +3229,10 @@ Decl *ASTNodeImporter::VisitObjCCategoryImplDecl(ObjCCategoryImplDecl *D) {
       return 0;
     
     ToImpl = ObjCCategoryImplDecl::Create(Importer.getToContext(), DC,
-                                          Importer.Import(D->getLocation()),
                                           Importer.Import(D->getIdentifier()),
-                                          Category->getClassInterface());
+                                          Category->getClassInterface(),
+                                          Importer.Import(D->getLocation()),
+                                          Importer.Import(D->getAtStartLoc()));
     
     DeclContext *LexicalDC = DC;
     if (D->getDeclContext() != D->getLexicalDeclContext()) {
@@ -3276,8 +3274,9 @@ Decl *ASTNodeImporter::VisitObjCImplementationDecl(ObjCImplementationDecl *D) {
     // now.
     Impl = ObjCImplementationDecl::Create(Importer.getToContext(),
                                   Importer.ImportContext(D->getDeclContext()),
+                                          Iface, Super,
                                           Importer.Import(D->getLocation()),
-                                          Iface, Super);
+                                          Importer.Import(D->getAtStartLoc()));
     
     if (D->getDeclContext() != D->getLexicalDeclContext()) {
       DeclContext *LexicalDC
@@ -3529,25 +3528,14 @@ Decl *ASTNodeImporter::VisitObjCClassDecl(ObjCClassDecl *D) {
   
   // Import the location of this declaration.
   SourceLocation Loc = Importer.Import(D->getLocation());
-
-  SmallVector<ObjCInterfaceDecl *, 4> Interfaces;
-  SmallVector<SourceLocation, 4> Locations;
-  for (ObjCClassDecl::iterator From = D->begin(), FromEnd = D->end();
-       From != FromEnd; ++From) {
-    ObjCInterfaceDecl *ToIface
-      = cast_or_null<ObjCInterfaceDecl>(Importer.Import(From->getInterface()));
-    if (!ToIface)
-      continue;
-    
-    Interfaces.push_back(ToIface);
-    Locations.push_back(Importer.Import(From->getLocation()));
-  }
-  
+  ObjCClassDecl::ObjCClassRef *From = D->getForwardDecl();
+  ObjCInterfaceDecl *ToIface
+    = cast_or_null<ObjCInterfaceDecl>(Importer.Import(From->getInterface()));
   ObjCClassDecl *ToClass = ObjCClassDecl::Create(Importer.getToContext(), DC,
-                                                 Loc, 
-                                                 Interfaces.data(),
-                                                 Locations.data(),
-                                                 Interfaces.size());
+                                        Loc,
+                                        ToIface,
+                                        Importer.Import(From->getLocation()));
+    
   ToClass->setLexicalDeclContext(LexicalDC);
   LexicalDC->addDecl(ToClass);
   Importer.Imported(D, ToClass);
@@ -3849,14 +3837,17 @@ Expr *ASTNodeImporter::VisitDeclRefExpr(DeclRefExpr *E) {
   QualType T = Importer.Import(E->getType());
   if (T.isNull())
     return 0;
-  
-  return DeclRefExpr::Create(Importer.getToContext(), 
-                             Importer.Import(E->getQualifierLoc()),
-                             ToD,
-                             Importer.Import(E->getLocation()),
-                             T, E->getValueKind(),
-                             FoundD,
-                             /*FIXME:TemplateArgs=*/0);
+
+  DeclRefExpr *DRE = DeclRefExpr::Create(Importer.getToContext(), 
+                                         Importer.Import(E->getQualifierLoc()),
+                                         ToD,
+                                         Importer.Import(E->getLocation()),
+                                         T, E->getValueKind(),
+                                         FoundD,
+                                         /*FIXME:TemplateArgs=*/0);
+  if (E->hadMultipleCandidates())
+    DRE->setHadMultipleCandidates(true);
+  return DRE;
 }
 
 Expr *ASTNodeImporter::VisitIntegerLiteral(IntegerLiteral *E) {
@@ -4313,7 +4304,7 @@ SourceLocation ASTImporter::Import(SourceLocation FromLoc) {
   std::pair<FileID, unsigned> Decomposed = FromSM.getDecomposedLoc(FromLoc);
   SourceManager &ToSM = ToContext.getSourceManager();
   return ToSM.getLocForStartOfFile(Import(Decomposed.first))
-             .getFileLocWithOffset(Decomposed.second);
+             .getLocWithOffset(Decomposed.second);
 }
 
 SourceRange ASTImporter::Import(SourceRange FromRange) {

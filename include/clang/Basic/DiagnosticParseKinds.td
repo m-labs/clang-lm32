@@ -28,10 +28,6 @@ def ext_extra_struct_semi : Extension<
 def ext_extra_ivar_semi : Extension<
   "extra ';' inside instance variable list">;
 
-def auto_storage_class : ExtWarn<
-  "'auto' storage class specifier is redundant and will be "
-  "removed in future releases">;
-
 def ext_duplicate_declspec : Extension<"duplicate '%0' declaration specifier">;
 def ext_plain_complex : ExtWarn<
   "plain '_Complex' requires a type specifier; assuming '_Complex double'">;
@@ -68,11 +64,14 @@ def ext_ms_enum_fixed_underlying_type : Extension<
   InGroup<Microsoft>;
 
 def ext_c1x_generic_selection : Extension<
-  "generic selections are a C1X-specific feature">;
+  "generic selections are a C1X-specific feature">, InGroup<C1X>;
 def err_duplicate_default_assoc : Error<
   "duplicate default generic association">;
 def note_previous_default_assoc : Note<
   "previous default generic association is here">;
+
+def ext_c1x_alignas : Extension<
+  "_Alignas is a C1X-specific feature">, InGroup<C1X>;
 
 def ext_gnu_indirect_goto : Extension<
   "use of GNU indirect-goto extension">, InGroup<GNU>;
@@ -198,6 +197,16 @@ def err_generalized_initializer_lists : Error<
 def ext_generalized_initializer_lists : ExtWarn<
   "generalized initializer lists are a C++0x extension unsupported in Clang">,
   InGroup<CXX0x>;
+def ext_auto_type_specifier : ExtWarn<
+  "'auto' type specifier is a C++0x extension">, InGroup<CXX0x>;
+def warn_auto_storage_class : Warning<
+  "'auto' storage class specifier is redundant and incompatible with C++0x">,
+  InGroup<CXX0xCompat>;
+def ext_auto_storage_class : ExtWarn<
+  "'auto' storage class specifier is not permitted in C++0x, and will not "
+  "be supported in future releases">;
+def ext_for_range : ExtWarn<
+  "range-based for loop is a C++0x extension">, InGroup<CXX0x>;
 def err_argument_required_after_attribute : Error<
   "argument required after attribute">;
 def err_missing_param : Error<"expected parameter declarator">;
@@ -219,6 +228,9 @@ def err_typename_invalid_storageclass : Error<
   "type name does not allow storage class to be specified">;
 def err_typename_invalid_functionspec : Error<
   "type name does not allow function specifier to be specified">;
+def err_typename_identifiers_only : Error<
+  "typename is allowed for identifiers only">;
+  
 def err_invalid_decl_spec_combination : Error<
   "cannot combine with previous '%0' declaration specifier">;
 def err_invalid_vector_decl_spec_combination : Error<
@@ -250,7 +262,7 @@ def err_unexected_colon_in_nested_name_spec : Error<
 def err_bool_redeclaration : Error<
   "redeclaration of C++ built-in type 'bool'">;
 def ext_c1x_static_assert : Extension<
-  "_Static_assert is a C1X-specific feature">;
+  "_Static_assert is a C1X-specific feature">, InGroup<C1X>;
 
 /// Objective-C parser diagnostics
 def err_expected_minus_or_plus : Error<
@@ -568,6 +580,14 @@ def err_seh___except_filter : Error<
 
 def err_seh___finally_block : Error<
   "%0 only allowed in __finally block">;
-
+  
 } // end of Parse Issue category.
+
+let CategoryName = "Modules Issue" in {
+def err_module_expected_ident : Error<
+  "expected a module name after '__import_module__'">;
+def err_module_expected_semi : Error<
+  "expected a semicolon name after module name">;
+}
+
 } // end of Parser diagnostics

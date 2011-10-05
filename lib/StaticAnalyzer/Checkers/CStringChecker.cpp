@@ -47,8 +47,8 @@ public:
   const ProgramState *
     checkRegionChanges(const ProgramState *state,
                        const StoreManager::InvalidatedSymbols *,
-                       const MemRegion * const *Begin,
-                       const MemRegion * const *End) const;
+                       ArrayRef<const MemRegion *> ExplicitRegions,
+                       ArrayRef<const MemRegion *> Regions) const;
 
   typedef void (CStringChecker::*FnCheck)(CheckerContext &,
                                           const CallExpr *) const;
@@ -638,7 +638,7 @@ SVal CStringChecker::getCStringLengthForRegion(CheckerContext &C,
   }
   
   // Otherwise, get a new symbol and update the state.
-  unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+  unsigned Count = C.getCurrentBlockCount();
   SValBuilder &svalBuilder = C.getSValBuilder();
   QualType sizeTy = svalBuilder.getContext().getSizeType();
   SVal strLength = svalBuilder.getMetadataSymbolVal(CStringChecker::getTag(),
@@ -785,8 +785,8 @@ const ProgramState *CStringChecker::InvalidateBuffer(CheckerContext &C,
     }
 
     // Invalidate this region.
-    unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
-    return state->invalidateRegion(R, E, Count, NULL);
+    unsigned Count = C.getCurrentBlockCount();
+    return state->invalidateRegions(R, E, Count);
   }
 
   // If we have a non-region value by chance, just remove the binding.
@@ -913,7 +913,7 @@ void CStringChecker::evalCopyCommon(CheckerContext &C,
       } else {
         // If we don't know how much we copied, we can at least
         // conjure a return value for later.
-        unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+        unsigned Count = C.getCurrentBlockCount();
         SVal result =
           C.getSValBuilder().getConjuredSymbolVal(NULL, CE, Count);
         state = state->BindExpr(CE, result);
@@ -1028,7 +1028,7 @@ void CStringChecker::evalMemcmp(CheckerContext &C, const CallExpr *CE) const {
       state = CheckBufferAccess(C, state, Size, Left, Right);
       if (state) {
         // The return value is the comparison result, which we don't know.
-        unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+        unsigned Count = C.getCurrentBlockCount();
         SVal CmpV = svalBuilder.getConjuredSymbolVal(NULL, CE, Count);
         state = state->BindExpr(CE, CmpV);
         C.addTransition(state);
@@ -1134,7 +1134,7 @@ void CStringChecker::evalstrLengthCommon(CheckerContext &C, const CallExpr *CE,
       // no guarantee the full string length will actually be returned.
       // All we know is the return value is the min of the string length
       // and the limit. This is better than nothing.
-      unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+      unsigned Count = C.getCurrentBlockCount();
       result = C.getSValBuilder().getConjuredSymbolVal(NULL, CE, Count);
       NonLoc *resultNL = cast<NonLoc>(&result);
 
@@ -1162,7 +1162,7 @@ void CStringChecker::evalstrLengthCommon(CheckerContext &C, const CallExpr *CE,
     // If we don't know the length of the string, conjure a return
     // value, so it can be used in constraints, at least.
     if (result.isUnknown()) {
-      unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+      unsigned Count = C.getCurrentBlockCount();
       result = C.getSValBuilder().getConjuredSymbolVal(NULL, CE, Count);
     }
   }
@@ -1506,7 +1506,7 @@ void CStringChecker::evalStrcpyCommon(CheckerContext &C, const CallExpr *CE,
   // If this is a stpcpy-style copy, but we were unable to check for a buffer
   // overflow, we still need a result. Conjure a return value.
   if (returnEnd && Result.isUnknown()) {
-    unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+    unsigned Count = C.getCurrentBlockCount();
     Result = svalBuilder.getConjuredSymbolVal(NULL, CE, Count);
   }
 
@@ -1650,7 +1650,7 @@ void CStringChecker::evalStrcmpCommon(CheckerContext &C, const CallExpr *CE,
 
   if (!canComputeResult) {
     // Conjure a symbolic value. It's the best we can do.
-    unsigned Count = C.getNodeBuilder().getCurrentBlockCount();
+    unsigned Count = C.getCurrentBlockCount();
     SVal resultVal = svalBuilder.getConjuredSymbolVal(NULL, CE, Count);
     state = state->BindExpr(CE, resultVal);
   }
@@ -1757,8 +1757,8 @@ bool CStringChecker::wantsRegionChangeUpdate(const ProgramState *state) const {
 const ProgramState *
 CStringChecker::checkRegionChanges(const ProgramState *state,
                                    const StoreManager::InvalidatedSymbols *,
-                                   const MemRegion * const *Begin,
-                                   const MemRegion * const *End) const {
+                                   ArrayRef<const MemRegion *> ExplicitRegions,
+                                   ArrayRef<const MemRegion *> Regions) const {
   CStringLength::EntryMap Entries = state->get<CStringLength>();
   if (Entries.isEmpty())
     return state;
@@ -1767,8 +1767,9 @@ CStringChecker::checkRegionChanges(const ProgramState *state,
   llvm::SmallPtrSet<const MemRegion *, 32> SuperRegions;
 
   // First build sets for the changed regions and their super-regions.
-  for ( ; Begin != End; ++Begin) {
-    const MemRegion *MR = *Begin;
+  for (ArrayRef<const MemRegion *>::iterator
+       I = Regions.begin(), E = Regions.end(); I != E; ++I) {
+    const MemRegion *MR = *I;
     Invalidated.insert(MR);
 
     SuperRegions.insert(MR);

@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Serialization/ASTWriter.h"
-#include "clang/Serialization/ASTSerializationListener.h"
 #include "ASTCommon.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/IdentifierResolver.h"
@@ -92,7 +91,7 @@ namespace {
 }
 
 void ASTTypeWriter::VisitBuiltinType(const BuiltinType *T) {
-  assert(false && "Built-in types are never serialized");
+  llvm_unreachable("Built-in types are never serialized");
 }
 
 void ASTTypeWriter::VisitComplexType(const ComplexType *T) {
@@ -306,7 +305,7 @@ void
 ASTTypeWriter::VisitDependentSizedExtVectorType(
                                         const DependentSizedExtVectorType *T) {
   // FIXME: Serialize this type (C++ only)
-  assert(false && "Cannot serialize dependent sized extended vector types");
+  llvm_unreachable("Cannot serialize dependent sized extended vector types");
 }
 
 void
@@ -764,7 +763,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(STAT_CACHE);
   RECORD(EXT_VECTOR_DECLS);
   RECORD(VERSION_CONTROL_BRANCH_REVISION);
-  RECORD(MACRO_DEFINITION_OFFSETS);
+  RECORD(PPD_ENTITIES_OFFSETS);
   RECORD(IMPORTS);
   RECORD(REFERENCED_SELECTOR_POOL);
   RECORD(TU_UPDATE_LEXICAL);
@@ -950,7 +949,7 @@ void ASTWriter::WriteMetadata(ASTContext &Context, StringRef isysroot,
   using namespace llvm;
 
   // Metadata
-  const TargetInfo &Target = Context.Target;
+  const TargetInfo &Target = Context.getTargetInfo();
   BitCodeAbbrev *MetaAbbrev = new BitCodeAbbrev();
   MetaAbbrev->Add(BitCodeAbbrevOp(METADATA));
   MetaAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // AST major
@@ -1047,94 +1046,11 @@ void ASTWriter::WriteMetadata(ASTContext &Context, StringRef isysroot,
 /// \brief Write the LangOptions structure.
 void ASTWriter::WriteLanguageOptions(const LangOptions &LangOpts) {
   RecordData Record;
-  Record.push_back(LangOpts.Trigraphs);
-  Record.push_back(LangOpts.BCPLComment);  // BCPL-style '//' comments.
-  Record.push_back(LangOpts.DollarIdents);  // '$' allowed in identifiers.
-  Record.push_back(LangOpts.AsmPreprocessor);  // Preprocessor in asm mode.
-  Record.push_back(LangOpts.GNUMode);  // True in gnu99 mode false in c99 mode (etc)
-  Record.push_back(LangOpts.GNUKeywords);  // Allow GNU-extension keywords
-  Record.push_back(LangOpts.ImplicitInt);  // C89 implicit 'int'.
-  Record.push_back(LangOpts.Digraphs);  // C94, C99 and C++
-  Record.push_back(LangOpts.HexFloats);  // C99 Hexadecimal float constants.
-  Record.push_back(LangOpts.C99);  // C99 Support
-  Record.push_back(LangOpts.C1X);  // C1X Support
-  Record.push_back(LangOpts.Microsoft);  // Microsoft extensions.
-  // LangOpts.MSCVersion is ignored because all it does it set a macro, which is
-  // already saved elsewhere.
-  Record.push_back(LangOpts.CPlusPlus);  // C++ Support
-  Record.push_back(LangOpts.CPlusPlus0x);  // C++0x Support
-  Record.push_back(LangOpts.CXXOperatorNames);  // Treat C++ operator names as keywords.
-
-  Record.push_back(LangOpts.ObjC1);  // Objective-C 1 support enabled.
-  Record.push_back(LangOpts.ObjC2);  // Objective-C 2 support enabled.
-  Record.push_back(LangOpts.ObjCNonFragileABI);  // Objective-C
-                                                 // modern abi enabled.
-  Record.push_back(LangOpts.ObjCNonFragileABI2); // Objective-C enhanced
-                                                 // modern abi enabled.
-  Record.push_back(LangOpts.AppleKext);          // Apple's kernel extensions ABI
-  Record.push_back(LangOpts.ObjCDefaultSynthProperties); // Objective-C auto-synthesized
-                                                      // properties enabled.
-  Record.push_back(LangOpts.ObjCInferRelatedResultType);
-  Record.push_back(LangOpts.NoConstantCFStrings); // non cfstring generation enabled..
-
-  Record.push_back(LangOpts.PascalStrings);  // Allow Pascal strings
-  Record.push_back(LangOpts.WritableStrings);  // Allow writable strings
-  Record.push_back(LangOpts.LaxVectorConversions);
-  Record.push_back(LangOpts.AltiVec);
-  Record.push_back(LangOpts.Exceptions);  // Support exception handling.
-  Record.push_back(LangOpts.ObjCExceptions);
-  Record.push_back(LangOpts.CXXExceptions);
-  Record.push_back(LangOpts.SjLjExceptions);
-
-  Record.push_back(LangOpts.MSBitfields); // MS-compatible structure layout
-  Record.push_back(LangOpts.NeXTRuntime); // Use NeXT runtime.
-  Record.push_back(LangOpts.Freestanding); // Freestanding implementation
-  Record.push_back(LangOpts.NoBuiltin); // Do not use builtin functions (-fno-builtin)
-
-  // Whether static initializers are protected by locks.
-  Record.push_back(LangOpts.ThreadsafeStatics);
-  Record.push_back(LangOpts.POSIXThreads);
-  Record.push_back(LangOpts.Blocks); // block extension to C
-  Record.push_back(LangOpts.EmitAllDecls); // Emit all declarations, even if
-                                  // they are unused.
-  Record.push_back(LangOpts.MathErrno); // Math functions must respect errno
-                                  // (modulo the platform support).
-
-  Record.push_back(LangOpts.getSignedOverflowBehavior());
-  Record.push_back(LangOpts.HeinousExtensions);
-
-  Record.push_back(LangOpts.Optimize); // Whether __OPTIMIZE__ should be defined.
-  Record.push_back(LangOpts.OptimizeSize); // Whether __OPTIMIZE_SIZE__ should be
-                                  // defined.
-  Record.push_back(LangOpts.Static); // Should __STATIC__ be defined (as
-                                  // opposed to __DYNAMIC__).
-  Record.push_back(LangOpts.PICLevel); // The value for __PIC__, if non-zero.
-
-  Record.push_back(LangOpts.GNUInline); // Should GNU inline semantics be
-                                  // used (instead of C99 semantics).
-  Record.push_back(LangOpts.NoInline); // Should __NO_INLINE__ be defined.
-  Record.push_back(LangOpts.Deprecated); // Should __DEPRECATED be defined.
-  Record.push_back(LangOpts.AccessControl); // Whether C++ access control should
-                                            // be enabled.
-  Record.push_back(LangOpts.CharIsSigned); // Whether char is a signed or
-                                           // unsigned type
-  Record.push_back(LangOpts.ShortWChar);  // force wchar_t to be unsigned short
-  Record.push_back(LangOpts.ShortEnums);  // Should the enum type be equivalent
-                                          // to the smallest integer type with
-                                          // enough room.
-  Record.push_back(LangOpts.getGCMode());
-  Record.push_back(LangOpts.getVisibilityMode());
-  Record.push_back(LangOpts.getStackProtectorMode());
-  Record.push_back(LangOpts.InstantiationDepth);
-  Record.push_back(LangOpts.OpenCL);
-  Record.push_back(LangOpts.CUDA);
-  Record.push_back(LangOpts.CatchUndefined);
-  Record.push_back(LangOpts.DefaultFPContract);
-  Record.push_back(LangOpts.ElideConstructors);
-  Record.push_back(LangOpts.SpellChecking);
-  Record.push_back(LangOpts.MRTD);
-  Record.push_back(LangOpts.ObjCAutoRefCount);
-  Record.push_back(LangOpts.ObjCInferRelatedReturnType);
+#define LANGOPT(Name, Bits, Default, Description) \
+  Record.push_back(LangOpts.Name);
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Description) \
+  Record.push_back(static_cast<unsigned>(LangOpts.get##Name()));
+#include "clang/Basic/LangOptions.def"  
   Stream.EmitRecord(LANGUAGE_OPTIONS, Record);
 }
 
@@ -1668,7 +1584,11 @@ static int compareMacroDefinitions(const void *XPtr, const void *YPtr) {
 /// \brief Writes the block containing the serialized form of the
 /// preprocessor.
 ///
-void ASTWriter::WritePreprocessor(const Preprocessor &PP) {
+void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
+  PreprocessingRecord *PPRec = PP.getPreprocessingRecord();
+  if (PPRec)
+    WritePreprocessorDetail(*PPRec);
+
   RecordData Record;
 
   // If the preprocessor __COUNTER__ value has been bumped, remember it.
@@ -1689,7 +1609,6 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP) {
 
   // Loop over all the macro definitions that are live at the end of the file,
   // emitting each to the PP section.
-  PreprocessingRecord *PPRec = PP.getPreprocessingRecord();
 
   // Construct the list of macro definitions that need to be serialized.
   SmallVector<std::pair<const IdentifierInfo *, MacroInfo *>, 2> 
@@ -1698,8 +1617,10 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP) {
   for (Preprocessor::macro_iterator I = PP.macro_begin(Chain == 0), 
                                     E = PP.macro_end(Chain == 0);
        I != E; ++I) {
-    MacroDefinitionsSeen.insert(I->first);
-    MacrosToEmit.push_back(std::make_pair(I->first, I->second));
+    if (!IsModule || I->second->isExported()) {
+      MacroDefinitionsSeen.insert(I->first);
+      MacrosToEmit.push_back(std::make_pair(I->first, I->second));
+    }
   }
   
   // Sort the set of macro definitions that need to be serialized by the
@@ -1731,14 +1652,15 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP) {
     // chained PCH, by storing the offset into the original PCH rather than
     // writing the macro definition a second time.
     if (MI->isBuiltinMacro() ||
-        (Chain && Name->isFromAST() && MI->isFromAST()))
+        (Chain && Name->isFromAST() && MI->isFromAST() &&
+        !MI->hasChangedAfterLoad()))
       continue;
 
     AddIdentifierRef(Name, Record);
     MacroOffsets[Name] = Stream.GetCurrentBitNo();
     Record.push_back(MI->getDefinitionLoc().getRawEncoding());
     Record.push_back(MI->isUsed());
-
+    AddSourceLocation(MI->getExportLocation(), Record);
     unsigned Code;
     if (MI->isObjectLike()) {
       Code = PP_MACRO_OBJECT_LIKE;
@@ -1756,7 +1678,7 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP) {
     // If we have a detailed preprocessing record, record the macro definition
     // ID that corresponds to this macro.
     if (PPRec)
-      Record.push_back(getMacroDefinitionID(PPRec->findMacroDefinition(MI)));
+      Record.push_back(MacroDefinitions[PPRec->findMacroDefinition(MI)]);
 
     Stream.EmitRecord(Code, Record);
     Record.clear();
@@ -1785,15 +1707,14 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP) {
     ++NumMacros;
   }
   Stream.ExitBlock();
-
-  if (PPRec)
-    WritePreprocessorDetail(*PPRec);
 }
 
 void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
-  if (PPRec.begin(Chain) == PPRec.end(Chain))
+  if (PPRec.local_begin() == PPRec.local_end())
     return;
-  
+
+  SmallVector<PPEntityOffset, 64> PreprocessedEntityOffsets;
+
   // Enter the preprocessor block.
   Stream.EnterSubblock(PREPROCESSOR_DETAIL_BLOCK_ID, 3);
 
@@ -1806,9 +1727,6 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
   {
     BitCodeAbbrev *Abbrev = new BitCodeAbbrev();
     Abbrev->Add(BitCodeAbbrevOp(PPD_INCLUSION_DIRECTIVE));
-    Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // index
-    Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // start location
-    Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // end location
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // filename length
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // in quotes
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 2)); // kind
@@ -1821,65 +1739,36 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
     + NUM_PREDEF_PP_ENTITY_IDS;
   unsigned NextPreprocessorEntityID = FirstPreprocessorEntityID;
   RecordData Record;
-  uint64_t BitsInChain = Chain? Chain->TotalModulesSizeInBits : 0;
-  for (PreprocessingRecord::iterator E = PPRec.begin(Chain),
-                                  EEnd = PPRec.end(Chain);
+  for (PreprocessingRecord::iterator E = PPRec.local_begin(),
+                                  EEnd = PPRec.local_end();
        E != EEnd; 
        (void)++E, ++NumPreprocessingRecords, ++NextPreprocessorEntityID) {
     Record.clear();
 
-    if (MacroDefinition *MD = dyn_cast<MacroDefinition>(*E)) {
-      // Record this macro definition's location.
-      MacroID ID = getMacroDefinitionID(MD);
-      
-      // Don't write the macro definition if it is from another AST file.
-      if (ID < FirstMacroID)
-        continue;
-      
-      // Notify the serialization listener that we're serializing this entity.
-      if (SerializationListener)
-        SerializationListener->SerializedPreprocessedEntity(*E, 
-          BitsInChain + Stream.GetCurrentBitNo());
+    PreprocessedEntityOffsets.push_back(PPEntityOffset((*E)->getSourceRange(),
+                                                     Stream.GetCurrentBitNo()));
 
-      unsigned Position = ID - FirstMacroID;
-      if (Position != MacroDefinitionOffsets.size()) {
-        if (Position > MacroDefinitionOffsets.size())
-          MacroDefinitionOffsets.resize(Position + 1);
-        
-        MacroDefinitionOffsets[Position] = Stream.GetCurrentBitNo();
-      } else
-        MacroDefinitionOffsets.push_back(Stream.GetCurrentBitNo());
+    if (MacroDefinition *MD = dyn_cast<MacroDefinition>(*E)) {
+      // Record this macro definition's ID.
+      MacroDefinitions[MD] = NextPreprocessorEntityID;
       
-      Record.push_back(NextPreprocessorEntityID);
-      Record.push_back(ID);
-      AddSourceLocation(MD->getSourceRange().getBegin(), Record);
-      AddSourceLocation(MD->getSourceRange().getEnd(), Record);
       AddIdentifierRef(MD->getName(), Record);
-      AddSourceLocation(MD->getLocation(), Record);
       Stream.EmitRecord(PPD_MACRO_DEFINITION, Record);
       continue;
     }
 
-    // Notify the serialization listener that we're serializing this entity.
-    if (SerializationListener)
-      SerializationListener->SerializedPreprocessedEntity(*E, 
-        BitsInChain + Stream.GetCurrentBitNo());
-
     if (MacroExpansion *ME = dyn_cast<MacroExpansion>(*E)) {
-      Record.push_back(NextPreprocessorEntityID);
-      AddSourceLocation(ME->getSourceRange().getBegin(), Record);
-      AddSourceLocation(ME->getSourceRange().getEnd(), Record);
-      AddIdentifierRef(ME->getName(), Record);
-      Record.push_back(getMacroDefinitionID(ME->getDefinition()));
+      Record.push_back(ME->isBuiltinMacro());
+      if (ME->isBuiltinMacro())
+        AddIdentifierRef(ME->getName(), Record);
+      else
+        Record.push_back(MacroDefinitions[ME->getDefinition()]);
       Stream.EmitRecord(PPD_MACRO_EXPANSION, Record);
       continue;
     }
 
     if (InclusionDirective *ID = dyn_cast<InclusionDirective>(*E)) {
       Record.push_back(PPD_INCLUSION_DIRECTIVE);
-      Record.push_back(NextPreprocessorEntityID);
-      AddSourceLocation(ID->getSourceRange().getBegin(), Record);
-      AddSourceLocation(ID->getSourceRange().getEnd(), Record);
       Record.push_back(ID->getFileName().size());
       Record.push_back(ID->wasInQuotes());
       Record.push_back(static_cast<unsigned>(ID->getKind()));
@@ -1896,44 +1785,39 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
 
   // Write the offsets table for the preprocessing record.
   if (NumPreprocessingRecords > 0) {
+    assert(PreprocessedEntityOffsets.size() == NumPreprocessingRecords);
+
     // Write the offsets table for identifier IDs.
     using namespace llvm;
     BitCodeAbbrev *Abbrev = new BitCodeAbbrev();
-    Abbrev->Add(BitCodeAbbrevOp(MACRO_DEFINITION_OFFSETS));
-    Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // # of records
+    Abbrev->Add(BitCodeAbbrevOp(PPD_ENTITIES_OFFSETS));
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // first pp entity
-    Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // # of macro defs
-    Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // first macro def
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
-    unsigned MacroDefOffsetAbbrev = Stream.EmitAbbrev(Abbrev);
+    unsigned PPEOffsetAbbrev = Stream.EmitAbbrev(Abbrev);
 
     Record.clear();
-    Record.push_back(MACRO_DEFINITION_OFFSETS);
-    Record.push_back(NumPreprocessingRecords);
+    Record.push_back(PPD_ENTITIES_OFFSETS);
     Record.push_back(FirstPreprocessorEntityID - NUM_PREDEF_PP_ENTITY_IDS);
-    Record.push_back(MacroDefinitionOffsets.size());
-    Record.push_back(FirstMacroID - NUM_PREDEF_MACRO_IDS);
-    Stream.EmitRecordWithBlob(MacroDefOffsetAbbrev, Record,
-                              data(MacroDefinitionOffsets));
+    Stream.EmitRecordWithBlob(PPEOffsetAbbrev, Record,
+                              data(PreprocessedEntityOffsets));
   }
 }
 
-void ASTWriter::WritePragmaDiagnosticMappings(const Diagnostic &Diag) {
+void ASTWriter::WritePragmaDiagnosticMappings(const DiagnosticsEngine &Diag) {
   RecordData Record;
-  for (Diagnostic::DiagStatePointsTy::const_iterator
+  for (DiagnosticsEngine::DiagStatePointsTy::const_iterator
          I = Diag.DiagStatePoints.begin(), E = Diag.DiagStatePoints.end();
          I != E; ++I) {
-    const Diagnostic::DiagStatePoint &point = *I; 
+    const DiagnosticsEngine::DiagStatePoint &point = *I; 
     if (point.Loc.isInvalid())
       continue;
 
     Record.push_back(point.Loc.getRawEncoding());
-    for (Diagnostic::DiagState::iterator
+    for (DiagnosticsEngine::DiagState::const_iterator
            I = point.State->begin(), E = point.State->end(); I != E; ++I) {
-      unsigned diag = I->first, map = I->second;
-      if (map & 0x10) { // mapping from a diagnostic pragma.
-        Record.push_back(diag);
-        Record.push_back(map & 0x7);
+      if (I->second.isPragma()) {
+        Record.push_back(I->first);
+        Record.push_back(I->second.getMapping());
       }
     }
     Record.push_back(-1); // mark the end of the diag/map pairs for this
@@ -2203,12 +2087,12 @@ void ASTWriter::WriteSelectors(Sema &SemaRef) {
         bool changed = false;
         for (ObjCMethodList *M = &Data.Instance; !changed && M && M->Method;
              M = M->Next) {
-          if (M->Method->getPCHLevel() == 0)
+          if (!M->Method->isFromASTFile())
             changed = true;
         }
         for (ObjCMethodList *M = &Data.Factory; !changed && M && M->Method;
              M = M->Next) {
-          if (M->Method->getPCHLevel() == 0)
+          if (!M->Method->isFromASTFile())
             changed = true;
         }
         if (!changed)
@@ -2294,41 +2178,53 @@ namespace {
 class ASTIdentifierTableTrait {
   ASTWriter &Writer;
   Preprocessor &PP;
-
+  bool IsModule;
+  
   /// \brief Determines whether this is an "interesting" identifier
   /// that needs a full IdentifierInfo structure written into the hash
   /// table.
-  static bool isInterestingIdentifier(const IdentifierInfo *II) {
-    return II->isPoisoned() ||
-      II->isExtensionToken() ||
-      II->hasMacroDefinition() ||
-      II->getObjCOrBuiltinID() ||
-      II->getFETokenInfo<void>();
+  bool isInterestingIdentifier(IdentifierInfo *II, MacroInfo *&Macro) {
+    if (II->isPoisoned() ||
+        II->isExtensionToken() ||
+        II->getObjCOrBuiltinID() ||
+        II->getFETokenInfo<void>())
+      return true;
+
+    return hasMacroDefinition(II, Macro);
+  }
+  
+  bool hasMacroDefinition(IdentifierInfo *II, MacroInfo *&Macro) {
+    if (!II->hasMacroDefinition())
+      return false;
+    
+    if (Macro || (Macro = PP.getMacroInfo(II)))
+      return !Macro->isBuiltinMacro() && (!IsModule || Macro->isExported());
+    
+    return false;    
   }
 
 public:
-  typedef const IdentifierInfo* key_type;
+  typedef IdentifierInfo* key_type;
   typedef key_type  key_type_ref;
 
   typedef IdentID data_type;
   typedef data_type data_type_ref;
 
-  ASTIdentifierTableTrait(ASTWriter &Writer, Preprocessor &PP)
-    : Writer(Writer), PP(PP) { }
+  ASTIdentifierTableTrait(ASTWriter &Writer, Preprocessor &PP, bool IsModule)
+    : Writer(Writer), PP(PP), IsModule(IsModule) { }
 
   static unsigned ComputeHash(const IdentifierInfo* II) {
     return llvm::HashString(II->getName());
   }
 
   std::pair<unsigned,unsigned>
-    EmitKeyDataLength(raw_ostream& Out, const IdentifierInfo* II,
-                      IdentID ID) {
+    EmitKeyDataLength(raw_ostream& Out, IdentifierInfo* II, IdentID ID) {
     unsigned KeyLen = II->getLength() + 1;
     unsigned DataLen = 4; // 4 bytes for the persistent ID << 1
-    if (isInterestingIdentifier(II)) {
+    MacroInfo *Macro = 0;
+    if (isInterestingIdentifier(II, Macro)) {
       DataLen += 2; // 2 bytes for builtin ID, flags
-      if (II->hasMacroDefinition() &&
-          !PP.getMacroInfo(const_cast<IdentifierInfo *>(II))->isBuiltinMacro())
+      if (hasMacroDefinition(II, Macro))
         DataLen += 4;
       for (IdentifierResolver::iterator D = IdentifierResolver::begin(II),
                                      DEnd = IdentifierResolver::end();
@@ -2351,27 +2247,26 @@ public:
     Out.write(II->getNameStart(), KeyLen);
   }
 
-  void EmitData(raw_ostream& Out, const IdentifierInfo* II,
+  void EmitData(raw_ostream& Out, IdentifierInfo* II,
                 IdentID ID, unsigned) {
-    if (!isInterestingIdentifier(II)) {
+    MacroInfo *Macro = 0;
+    if (!isInterestingIdentifier(II, Macro)) {
       clang::io::Emit32(Out, ID << 1);
       return;
     }
 
     clang::io::Emit32(Out, (ID << 1) | 0x01);
     uint32_t Bits = 0;
-    bool hasMacroDefinition =
-      II->hasMacroDefinition() &&
-      !PP.getMacroInfo(const_cast<IdentifierInfo *>(II))->isBuiltinMacro();
+    bool HasMacroDefinition = hasMacroDefinition(II, Macro);
     Bits = (uint32_t)II->getObjCOrBuiltinID();
-    Bits = (Bits << 1) | unsigned(hasMacroDefinition);
+    Bits = (Bits << 1) | unsigned(HasMacroDefinition);
     Bits = (Bits << 1) | unsigned(II->isExtensionToken());
     Bits = (Bits << 1) | unsigned(II->isPoisoned());
     Bits = (Bits << 1) | unsigned(II->hasRevertedTokenIDToIdentifier());
     Bits = (Bits << 1) | unsigned(II->isCPlusPlusOperatorKeyword());
     clang::io::Emit16(Out, Bits);
 
-    if (hasMacroDefinition)
+    if (HasMacroDefinition)
       clang::io::Emit32(Out, Writer.getMacroOffset(II));
 
     // Emit the declaration IDs in reverse order, because the
@@ -2396,14 +2291,14 @@ public:
 /// The identifier table consists of a blob containing string data
 /// (the actual identifiers themselves) and a separate "offsets" index
 /// that maps identifier IDs to locations within the blob.
-void ASTWriter::WriteIdentifierTable(Preprocessor &PP) {
+void ASTWriter::WriteIdentifierTable(Preprocessor &PP, bool IsModule) {
   using namespace llvm;
 
   // Create and write out the blob that contains the identifier
   // strings.
   {
     OnDiskChainedHashTableGenerator<ASTIdentifierTableTrait> Generator;
-    ASTIdentifierTableTrait Trait(*this, PP);
+    ASTIdentifierTableTrait Trait(*this, PP, IsModule);
 
     // Look for any identifiers that were named while processing the
     // headers, but are otherwise not needed. We add these to the hash
@@ -2423,14 +2318,15 @@ void ASTWriter::WriteIdentifierTable(Preprocessor &PP) {
          ID != IDEnd; ++ID) {
       assert(ID->first && "NULL identifier in identifier table");
       if (!Chain || !ID->first->isFromAST())
-        Generator.insert(ID->first, ID->second, Trait);
+        Generator.insert(const_cast<IdentifierInfo *>(ID->first), ID->second, 
+                         Trait);
     }
 
     // Create the on-disk hash table in a buffer.
     llvm::SmallString<4096> IdentifierTable;
     uint32_t BucketOffset;
     {
-      ASTIdentifierTableTrait Trait(*this, PP);
+      ASTIdentifierTableTrait Trait(*this, PP, IsModule);
       llvm::raw_svector_ostream Out(IdentifierTable);
       // Make sure that no bucket is at offset 0
       clang::io::Emit32(Out, 0);
@@ -2625,13 +2521,37 @@ uint64_t ASTWriter::WriteDeclContextVisibleBlock(ASTContext &Context,
   ASTDeclContextNameLookupTrait Trait(*this);
 
   // Create the on-disk hash table representation.
+  DeclarationName ConversionName;
+  llvm::SmallVector<NamedDecl *, 4> ConversionDecls;
   for (StoredDeclsMap::iterator D = Map->begin(), DEnd = Map->end();
        D != DEnd; ++D) {
     DeclarationName Name = D->first;
     DeclContext::lookup_result Result = D->second.getLookupResult();
-    Generator.insert(Name, Result, Trait);
+    if (Result.first != Result.second) {
+      if (Name.getNameKind() == DeclarationName::CXXConversionFunctionName) {
+        // Hash all conversion function names to the same name. The actual
+        // type information in conversion function name is not used in the
+        // key (since such type information is not stable across different
+        // modules), so the intended effect is to coalesce all of the conversion
+        // functions under a single key.
+        if (!ConversionName)
+          ConversionName = Name;
+        ConversionDecls.append(Result.first, Result.second);
+        continue;
+      }
+      
+      Generator.insert(Name, Result, Trait);
+    }
   }
 
+  // Add the conversion functions
+  if (!ConversionDecls.empty()) {
+    Generator.insert(ConversionName, 
+                     DeclContext::lookup_result(ConversionDecls.begin(),
+                                                ConversionDecls.end()),
+                     Trait);
+  }
+  
   // Create the on-disk hash table in a buffer.
   llvm::SmallString<4096> LookupTable;
   uint32_t BucketOffset;
@@ -2674,7 +2594,8 @@ void ASTWriter::WriteDeclContextVisibleUpdate(const DeclContext *DC) {
     DeclContext::lookup_result Result = D->second.getLookupResult();
     // For any name that appears in this table, the results are complete, i.e.
     // they overwrite results from previous PCHs. Merging is always a mess.
-    Generator.insert(Name, Result, Trait);
+    if (Result.first != Result.second)
+      Generator.insert(Name, Result, Trait);
   }
 
   // Create the on-disk hash table in a buffer.
@@ -2724,7 +2645,7 @@ void ASTWriter::WriteAttributes(const AttrVec &Attrs, RecordDataImpl &Record) {
   for (AttrVec::const_iterator i = Attrs.begin(), e = Attrs.end(); i != e; ++i){
     const Attr * A = *i;
     Record.push_back(A->getKind()); // FIXME: stable encoding, target attrs
-    AddSourceLocation(A->getLocation(), Record);
+    AddSourceRange(A->getRange(), Record);
 
 #include "clang/Serialization/AttrPCHWrite.inc"
 
@@ -2772,12 +2693,11 @@ void ASTWriter::SetSelectorOffset(Selector Sel, uint32_t Offset) {
 }
 
 ASTWriter::ASTWriter(llvm::BitstreamWriter &Stream)
-  : Stream(Stream), Context(0), Chain(0), SerializationListener(0), 
+  : Stream(Stream), Context(0), Chain(0), WritingAST(false),
     FirstDeclID(NUM_PREDEF_DECL_IDS), NextDeclID(FirstDeclID),
     FirstTypeID(NUM_PREDEF_TYPE_IDS), NextTypeID(FirstTypeID),
     FirstIdentID(NUM_PREDEF_IDENT_IDS), NextIdentID(FirstIdentID), 
     FirstSelectorID(NUM_PREDEF_SELECTOR_IDS), NextSelectorID(FirstSelectorID),
-    FirstMacroID(NUM_PREDEF_MACRO_IDS), NextMacroID(FirstMacroID),
     CollectedStmts(&StmtsToEmit),
     NumStatements(0), NumMacros(0), NumLexicalDeclContexts(0),
     NumVisibleDeclContexts(0),
@@ -2794,7 +2714,9 @@ ASTWriter::ASTWriter(llvm::BitstreamWriter &Stream)
 
 void ASTWriter::WriteAST(Sema &SemaRef, MemorizeStatCalls *StatCalls,
                          const std::string &OutputFile,
-                         StringRef isysroot) {
+                         bool IsModule, StringRef isysroot) {
+  WritingAST = true;
+  
   // Emit the file header.
   Stream.Emit((unsigned)'C', 8);
   Stream.Emit((unsigned)'P', 8);
@@ -2804,8 +2726,10 @@ void ASTWriter::WriteAST(Sema &SemaRef, MemorizeStatCalls *StatCalls,
   WriteBlockInfoBlock();
 
   Context = &SemaRef.Context;
-  WriteASTCore(SemaRef, StatCalls, isysroot, OutputFile);
+  WriteASTCore(SemaRef, StatCalls, isysroot, OutputFile, IsModule);
   Context = 0;
+  
+  WritingAST = false;
 }
 
 template<typename Vector>
@@ -2819,7 +2743,7 @@ static void AddLazyVectorDecls(ASTWriter &Writer, Vector &Vec,
 
 void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
                              StringRef isysroot,
-                             const std::string &OutputFile) {
+                             const std::string &OutputFile, bool IsModule) {
   using namespace llvm;
 
   ASTContext &Context = SemaRef.Context;
@@ -2837,6 +2761,8 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
     DeclIDs[Context.Int128Decl] = PREDEF_DECL_INT_128_ID;
   if (Context.UInt128Decl)
     DeclIDs[Context.UInt128Decl] = PREDEF_DECL_UNSIGNED_INT_128_ID;
+  if (Context.ObjCInstanceTypeDecl)
+    DeclIDs[Context.ObjCInstanceTypeDecl] = PREDEF_DECL_OBJC_INSTANCETYPE_ID;
   
   if (!Chain) {
     // Make sure that we emit IdentifierInfos (and any attached
@@ -2893,7 +2819,7 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
          TD = SemaRef.LocallyScopedExternalDecls.begin(),
          TDEnd = SemaRef.LocallyScopedExternalDecls.end();
        TD != TDEnd; ++TD) {
-    if (TD->second->getPCHLevel() == 0)
+    if (!TD->second->isFromASTFile())
       AddDeclRef(TD->second, LocallyScopedExternalDecls);
   }
   
@@ -2988,7 +2914,6 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
         io::Emit32(Out, (*M)->SLocEntryBaseOffset);
         io::Emit32(Out, (*M)->BaseIdentifierID);
         io::Emit32(Out, (*M)->BasePreprocessedEntityID);
-        io::Emit32(Out, (*M)->BaseMacroDefinitionID);
         io::Emit32(Out, (*M)->BaseSelectorID);
         io::Emit32(Out, (*M)->BaseDeclID);
         io::Emit32(Out, (*M)->BaseTypeIndex);
@@ -3007,7 +2932,7 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
   for (DeclContext::decl_iterator I = TU->noload_decls_begin(),
                                   E = TU->noload_decls_end();
        I != E; ++I) {
-    if ((*I)->getPCHLevel() == 0)
+    if (!(*I)->isFromASTFile())
       NewGlobalDecls.push_back(std::make_pair((*I)->getKind(), GetDeclRef(*I)));
     else if ((*I)->isChangedSinceDeserialization())
       (void)GetDeclRef(*I); // Make sure it's written, but don't record it.
@@ -3037,9 +2962,14 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
     ASTWriter::UpdateRecord &Record = DeclUpdates[TU];
     if (Record.empty()) {
       Record.push_back(UPD_CXX_ADDED_ANONYMOUS_NAMESPACE);
-      AddDeclRef(NS, Record);
+      Record.push_back(reinterpret_cast<uint64_t>(NS));
     }
   }
+  
+  // Resolve any declaration pointers within the declaration updates block and
+  // chained Objective-C categories block to declaration IDs.
+  ResolveDeclUpdatesBlocks();
+  ResolveChainedObjCCategories();
   
   // Form the record of special types.
   RecordData SpecialTypes;
@@ -3071,11 +3001,11 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
   }
   Stream.ExitBlock();
 
-  WritePreprocessor(PP);
+  WritePreprocessor(PP, IsModule);
   WriteHeaderSearch(PP.getHeaderSearchInfo(), isysroot);
   WriteSelectors(SemaRef);
   WriteReferencedSelectorsPool(SemaRef);
-  WriteIdentifierTable(PP);
+  WriteIdentifierTable(PP, IsModule);
   WriteFPPragmaOptions(SemaRef.getFPOptions());
   WriteOpenCLExtensions(SemaRef);
 
@@ -3092,8 +3022,6 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
   for (FirstLatestDeclMap::iterator I = FirstLatestDecls.begin(), 
                                     E = FirstLatestDecls.end(); 
        I != E; ++I) {
-    assert(I->first->getPCHLevel() > I->second->getPCHLevel() &&
-           "Expected first & second to be in different PCHs");
     AddDeclRef(I->first, FirstLatestDeclIDs);
     AddDeclRef(I->second, FirstLatestDeclIDs);
   }
@@ -3164,6 +3092,7 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
 
   WriteDeclUpdatesBlocks();
   WriteDeclReplacementsBlock();
+  WriteChainedObjCCategories();
 
   // Some simple statistics
   Record.clear();
@@ -3173,6 +3102,36 @@ void ASTWriter::WriteASTCore(Sema &SemaRef, MemorizeStatCalls *StatCalls,
   Record.push_back(NumVisibleDeclContexts);
   Stream.EmitRecord(STATISTICS, Record);
   Stream.ExitBlock();
+}
+
+/// \brief Go through the declaration update blocks and resolve declaration
+/// pointers into declaration IDs.
+void ASTWriter::ResolveDeclUpdatesBlocks() {
+  for (DeclUpdateMap::iterator
+       I = DeclUpdates.begin(), E = DeclUpdates.end(); I != E; ++I) {
+    const Decl *D = I->first;
+    UpdateRecord &URec = I->second;
+    
+    if (DeclsToRewrite.count(D))
+      continue; // The decl will be written completely
+
+    unsigned Idx = 0, N = URec.size();
+    while (Idx < N) {
+      switch ((DeclUpdateKind)URec[Idx++]) {
+      case UPD_CXX_SET_DEFINITIONDATA:
+      case UPD_CXX_ADDED_IMPLICIT_MEMBER:
+      case UPD_CXX_ADDED_TEMPLATE_SPECIALIZATION:
+      case UPD_CXX_ADDED_ANONYMOUS_NAMESPACE:
+        URec[Idx] = GetDeclRef(reinterpret_cast<Decl *>(URec[Idx]));
+        ++Idx;
+        break;
+          
+      case UPD_CXX_INSTANTIATED_STATIC_DATA_MEMBER:
+        ++Idx;
+        break;
+      }
+    }
+  }
 }
 
 void ASTWriter::WriteDeclUpdatesBlocks() {
@@ -3212,6 +3171,37 @@ void ASTWriter::WriteDeclReplacementsBlock() {
   Stream.EmitRecord(DECL_REPLACEMENTS, Record);
 }
 
+void ASTWriter::ResolveChainedObjCCategories() {
+  for (SmallVector<ChainedObjCCategoriesData, 16>::iterator
+       I = LocalChainedObjCCategories.begin(),
+       E = LocalChainedObjCCategories.end(); I != E; ++I) {
+    ChainedObjCCategoriesData &Data = *I;
+    Data.InterfaceID = GetDeclRef(Data.Interface);
+    Data.TailCategoryID = GetDeclRef(Data.TailCategory);
+  }
+
+}
+
+void ASTWriter::WriteChainedObjCCategories() {
+  if (LocalChainedObjCCategories.empty())
+    return;
+
+  RecordData Record;
+  for (SmallVector<ChainedObjCCategoriesData, 16>::iterator
+         I = LocalChainedObjCCategories.begin(),
+         E = LocalChainedObjCCategories.end(); I != E; ++I) {
+    ChainedObjCCategoriesData &Data = *I;
+    serialization::DeclID
+        HeadCatID = getDeclID(Data.Interface->getCategoryList());
+    assert(HeadCatID != 0 && "Category not written ?");
+
+    Record.push_back(Data.InterfaceID);
+    Record.push_back(HeadCatID);
+    Record.push_back(Data.TailCategoryID);
+  }
+  Stream.EmitRecord(OBJC_CHAINED_CATEGORIES, Record);
+}
+
 void ASTWriter::AddSourceLocation(SourceLocation Loc, RecordDataImpl &Record) {
   Record.push_back(Loc.getRawEncoding());
 }
@@ -3247,16 +3237,6 @@ IdentID ASTWriter::getIdentifierRef(const IdentifierInfo *II) {
   IdentID &ID = IdentifierIDs[II];
   if (ID == 0)
     ID = NextIdentID++;
-  return ID;
-}
-
-MacroID ASTWriter::getMacroDefinitionID(MacroDefinition *MD) {
-  if (MD == 0)
-    return 0;
-
-  MacroID &ID = MacroDefinitions[MD];
-  if (ID == 0)
-    ID = NextMacroID++;
   return ID;
 }
 
@@ -3399,6 +3379,8 @@ void ASTWriter::AddDeclRef(const Decl *D, RecordDataImpl &Record) {
 }
 
 DeclID ASTWriter::GetDeclRef(const Decl *D) {
+  assert(WritingAST && "Cannot request a declaration ID before AST writing");
+  
   if (D == 0) {
     return 0;
   }
@@ -3814,7 +3796,9 @@ void ASTWriter::AddCXXDefinitionData(const CXXRecordDecl *D, RecordDataImpl &Rec
   struct CXXRecordDecl::DefinitionData &Data = *D->DefinitionData;
   Record.push_back(Data.UserDeclaredConstructor);
   Record.push_back(Data.UserDeclaredCopyConstructor);
+  Record.push_back(Data.UserDeclaredMoveConstructor);
   Record.push_back(Data.UserDeclaredCopyAssignment);
+  Record.push_back(Data.UserDeclaredMoveAssignment);
   Record.push_back(Data.UserDeclaredDestructor);
   Record.push_back(Data.Aggregate);
   Record.push_back(Data.PlainOldData);
@@ -3839,8 +3823,12 @@ void ASTWriter::AddCXXDefinitionData(const CXXRecordDecl *D, RecordDataImpl &Rec
   Record.push_back(Data.UserProvidedDefaultConstructor);
   Record.push_back(Data.DeclaredDefaultConstructor);
   Record.push_back(Data.DeclaredCopyConstructor);
+  Record.push_back(Data.DeclaredMoveConstructor);
   Record.push_back(Data.DeclaredCopyAssignment);
+  Record.push_back(Data.DeclaredMoveAssignment);
   Record.push_back(Data.DeclaredDestructor);
+  Record.push_back(Data.FailedImplicitMoveConstructor);
+  Record.push_back(Data.FailedImplicitMoveAssignment);
 
   Record.push_back(Data.NumBases);
   if (Data.NumBases > 0)
@@ -3866,7 +3854,6 @@ void ASTWriter::ReaderInitialized(ASTReader *Reader) {
          FirstTypeID == NextTypeID &&
          FirstIdentID == NextIdentID &&
          FirstSelectorID == NextSelectorID &&
-         FirstMacroID == NextMacroID &&
          "Setting chain after writing has started.");
 
   Chain = Reader;
@@ -3875,12 +3862,10 @@ void ASTWriter::ReaderInitialized(ASTReader *Reader) {
   FirstTypeID = NUM_PREDEF_TYPE_IDS + Chain->getTotalNumTypes();
   FirstIdentID = NUM_PREDEF_IDENT_IDS + Chain->getTotalNumIdentifiers();
   FirstSelectorID = NUM_PREDEF_SELECTOR_IDS + Chain->getTotalNumSelectors();
-  FirstMacroID = NUM_PREDEF_MACRO_IDS + Chain->getTotalNumMacroDefinitions();
   NextDeclID = FirstDeclID;
   NextTypeID = FirstTypeID;
   NextIdentID = FirstIdentID;
   NextSelectorID = FirstSelectorID;
-  NextMacroID = FirstMacroID;
 }
 
 void ASTWriter::IdentifierRead(IdentID ID, IdentifierInfo *II) {
@@ -3908,16 +3893,18 @@ void ASTWriter::SelectorRead(SelectorID ID, Selector S) {
   SelectorIDs[S] = ID;
 }
 
-void ASTWriter::MacroDefinitionRead(serialization::MacroID ID,
+void ASTWriter::MacroDefinitionRead(serialization::PreprocessedEntityID ID,
                                     MacroDefinition *MD) {
+  assert(MacroDefinitions.find(MD) == MacroDefinitions.end());
   MacroDefinitions[MD] = ID;
 }
 
 void ASTWriter::CompletedTagDefinition(const TagDecl *D) {
   assert(D->isDefinition());
+  assert(!WritingAST && "Already writing the AST!");
   if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(D)) {
     // We are interested when a PCH decl is modified.
-    if (RD->getPCHLevel() > 0) {
+    if (RD->isFromASTFile()) {
       // A forward reference was mutated into a definition. Rewrite it.
       // FIXME: This happens during template instantiation, should we
       // have created a new definition decl instead ?
@@ -3931,30 +3918,33 @@ void ASTWriter::CompletedTagDefinition(const TagDecl *D) {
         continue;
 
       // We are interested when a PCH decl is modified.
-      if (Redecl->getPCHLevel() > 0) {
+      if (Redecl->isFromASTFile()) {
         UpdateRecord &Record = DeclUpdates[Redecl];
         Record.push_back(UPD_CXX_SET_DEFINITIONDATA);
         assert(Redecl->DefinitionData);
         assert(Redecl->DefinitionData->Definition == D);
-        AddDeclRef(D, Record); // the DefinitionDecl
+        Record.push_back(reinterpret_cast<uint64_t>(D)); // the DefinitionDecl
       }
     }
   }
 }
 void ASTWriter::AddedVisibleDecl(const DeclContext *DC, const Decl *D) {
+  assert(!WritingAST && "Already writing the AST!");
+
   // TU and namespaces are handled elsewhere.
   if (isa<TranslationUnitDecl>(DC) || isa<NamespaceDecl>(DC))
     return;
 
-  if (!(D->getPCHLevel() == 0 && cast<Decl>(DC)->getPCHLevel() > 0))
+  if (!(!D->isFromASTFile() && cast<Decl>(DC)->isFromASTFile()))
     return; // Not a source decl added to a DeclContext from PCH.
 
   AddUpdatedDeclContext(DC);
 }
 
 void ASTWriter::AddedCXXImplicitMember(const CXXRecordDecl *RD, const Decl *D) {
+  assert(!WritingAST && "Already writing the AST!");
   assert(D->isImplicit());
-  if (!(D->getPCHLevel() == 0 && RD->getPCHLevel() > 0))
+  if (!(!D->isFromASTFile() && RD->isFromASTFile()))
     return; // Not a source member added to a class from PCH.
   if (!isa<CXXMethodDecl>(D))
     return; // We are interested in lazily declared implicit methods.
@@ -3963,35 +3953,38 @@ void ASTWriter::AddedCXXImplicitMember(const CXXRecordDecl *RD, const Decl *D) {
   assert(RD->isDefinition());
   UpdateRecord &Record = DeclUpdates[RD];
   Record.push_back(UPD_CXX_ADDED_IMPLICIT_MEMBER);
-  AddDeclRef(D, Record);
+  Record.push_back(reinterpret_cast<uint64_t>(D));
 }
 
 void ASTWriter::AddedCXXTemplateSpecialization(const ClassTemplateDecl *TD,
                                      const ClassTemplateSpecializationDecl *D) {
   // The specializations set is kept in the canonical template.
+  assert(!WritingAST && "Already writing the AST!");
   TD = TD->getCanonicalDecl();
-  if (!(D->getPCHLevel() == 0 && TD->getPCHLevel() > 0))
+  if (!(!D->isFromASTFile() && TD->isFromASTFile()))
     return; // Not a source specialization added to a template from PCH.
 
   UpdateRecord &Record = DeclUpdates[TD];
   Record.push_back(UPD_CXX_ADDED_TEMPLATE_SPECIALIZATION);
-  AddDeclRef(D, Record);
+  Record.push_back(reinterpret_cast<uint64_t>(D));
 }
 
 void ASTWriter::AddedCXXTemplateSpecialization(const FunctionTemplateDecl *TD,
                                                const FunctionDecl *D) {
   // The specializations set is kept in the canonical template.
+  assert(!WritingAST && "Already writing the AST!");
   TD = TD->getCanonicalDecl();
-  if (!(D->getPCHLevel() == 0 && TD->getPCHLevel() > 0))
+  if (!(!D->isFromASTFile() && TD->isFromASTFile()))
     return; // Not a source specialization added to a template from PCH.
 
   UpdateRecord &Record = DeclUpdates[TD];
   Record.push_back(UPD_CXX_ADDED_TEMPLATE_SPECIALIZATION);
-  AddDeclRef(D, Record);
+  Record.push_back(reinterpret_cast<uint64_t>(D));
 }
 
 void ASTWriter::CompletedImplicitDefinition(const FunctionDecl *D) {
-  if (D->getPCHLevel() == 0)
+  assert(!WritingAST && "Already writing the AST!");
+  if (!D->isFromASTFile())
     return; // Declaration not imported from PCH.
 
   // Implicit decl from a PCH was defined.
@@ -4000,7 +3993,8 @@ void ASTWriter::CompletedImplicitDefinition(const FunctionDecl *D) {
 }
 
 void ASTWriter::StaticDataMemberInstantiated(const VarDecl *D) {
-  if (D->getPCHLevel() == 0)
+  assert(!WritingAST && "Already writing the AST!");
+  if (!D->isFromASTFile())
     return;
 
   // Since the actual instantiation is delayed, this really means that we need
@@ -4011,4 +4005,16 @@ void ASTWriter::StaticDataMemberInstantiated(const VarDecl *D) {
       D->getMemberSpecializationInfo()->getPointOfInstantiation(), Record);
 }
 
-ASTSerializationListener::~ASTSerializationListener() { }
+void ASTWriter::AddedObjCCategoryToInterface(const ObjCCategoryDecl *CatD,
+                                             const ObjCInterfaceDecl *IFD) {
+  assert(!WritingAST && "Already writing the AST!");
+  if (!IFD->isFromASTFile())
+    return; // Declaration not imported from PCH.
+  if (CatD->getNextClassCategory() &&
+      !CatD->getNextClassCategory()->isFromASTFile())
+    return; // We already recorded that the tail of a category chain should be
+            // attached to an interface.
+
+  ChainedObjCCategoriesData Data =  { IFD, CatD, 0, 0 };
+  LocalChainedObjCCategories.push_back(Data);
+}

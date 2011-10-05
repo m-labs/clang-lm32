@@ -19,7 +19,6 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExplodedGraph.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/WorkList.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/BlockCounter.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/SubEngine.h"
 #include "llvm/ADT/OwningPtr.h"
 
 namespace clang {
@@ -317,6 +316,8 @@ public:
 
   BlockCounter getBlockCounter() const { return Eng.WList->getBlockCounter();}
 
+  /// This function generates a new ExplodedNode but not a new
+  /// branch(block edge).
   ExplodedNode *generateNode(const Stmt *Condition, const ProgramState *State);
 
   ExplodedNode *generateNode(const ProgramState *State, bool branch);

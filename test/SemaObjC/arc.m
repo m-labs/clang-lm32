@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -triple x86_64-apple-darwin11 -fobjc-nonfragile-abi -fobjc-runtime-has-weak -fsyntax-only -fobjc-arc -fblocks -verify %s
+// RUN: %clang_cc1 -triple x86_64-apple-darwin11 -fobjc-runtime-has-weak -fsyntax-only -fobjc-arc -fblocks -verify %s
 
 typedef unsigned long NSUInteger;
 
@@ -646,6 +646,8 @@ void test37(Test37 *c) {
   for (id y in c) { // expected-error {{collection expression type 'Test37' is a forward declaration}}
     (void) y;
   }
+
+  (void)sizeof(id*); // no error.
 }
 
 // rdar://problem/9887979
@@ -660,3 +662,9 @@ void test38() {
     ;
   }
 }
+
+// rdar://10186536
+@class NSColor;
+void _NSCalc(NSColor* color, NSColor* bezelColors[]) __attribute__((unavailable("not available in automatic reference counting mode")));
+
+void _NSCalcBeze(NSColor* color, NSColor* bezelColors[]); // expected-error {{must explicitly describe intended ownership of an object array parameter}}

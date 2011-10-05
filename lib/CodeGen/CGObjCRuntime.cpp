@@ -117,7 +117,7 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
   uint64_t TypeSizeInBits = CGF.CGM.getContext().toBits(RL.getSize());
   uint64_t FieldBitOffset = LookupFieldBitOffset(CGF.CGM, OID, 0, Ivar);
   uint64_t BitOffset = FieldBitOffset % CGF.CGM.getContext().getCharWidth();
-  uint64_t ContainingTypeAlign = CGF.CGM.getContext().Target.getCharAlign();
+  uint64_t ContainingTypeAlign = CGF.CGM.getContext().getTargetInfo().getCharAlign();
   uint64_t ContainingTypeSize = TypeSizeInBits - (FieldBitOffset - BitOffset);
   uint64_t BitFieldSize =
     Ivar->getBitWidth()->EvaluateAsInt(CGF.getContext()).getZExtValue();
@@ -221,7 +221,7 @@ void CGObjCRuntime::EmitTryCatchStmt(CodeGenFunction &CGF,
     CatchHandler &Handler = Handlers[I];
 
     CGF.EmitBlock(Handler.Block);
-    llvm::Value *RawExn = CGF.Builder.CreateLoad(CGF.getExceptionSlot());
+    llvm::Value *RawExn = CGF.getExceptionFromSlot();
 
     // Enter the catch.
     llvm::Value *Exn = RawExn;

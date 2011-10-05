@@ -236,13 +236,11 @@ public:
   // Binding values to regions.
   //===-------------------------------------------------------------------===//
 
-  StoreRef invalidateRegions(Store store,
-                             const MemRegion * const *Begin,
-                             const MemRegion * const *End,
+  StoreRef invalidateRegions(Store store, ArrayRef<const MemRegion *> Regions,
                              const Expr *E, unsigned Count,
                              InvalidatedSymbols &IS,
                              bool invalidateGlobals,
-                             InvalidatedRegions *Regions);
+                             InvalidatedRegions *Invalidated);
 
 public:   // Made public for helper classes.
 
@@ -721,21 +719,21 @@ void invalidateRegionsWorker::VisitBaseRegion(const MemRegion *baseR) {
 }
 
 StoreRef RegionStoreManager::invalidateRegions(Store store,
-                                               const MemRegion * const *I,
-                                               const MemRegion * const *E,
+                                            ArrayRef<const MemRegion *> Regions,
                                                const Expr *Ex, unsigned Count,
                                                InvalidatedSymbols &IS,
                                                bool invalidateGlobals,
-                                               InvalidatedRegions *Regions) {
+                                              InvalidatedRegions *Invalidated) {
   invalidateRegionsWorker W(*this, StateMgr,
                             RegionStoreManager::GetRegionBindings(store),
-                            Ex, Count, IS, Regions, invalidateGlobals);
+                            Ex, Count, IS, Invalidated, invalidateGlobals);
 
   // Scan the bindings and generate the clusters.
   W.GenerateClusters();
 
-  // Add I .. E to the worklist.
-  for ( ; I != E; ++I)
+  // Add the regions to the worklist.
+  for (ArrayRef<const MemRegion *>::iterator
+       I = Regions.begin(), E = Regions.end(); I != E; ++I)
     W.AddToWorkList(*I);
 
   W.RunWorkList();
@@ -755,8 +753,8 @@ StoreRef RegionStoreManager::invalidateRegions(Store store,
 
     // Even if there are no bindings in the global scope, we still need to
     // record that we touched it.
-    if (Regions)
-      Regions->push_back(GS);
+    if (Invalidated)
+      Invalidated->push_back(GS);
   }
 
   return StoreRef(B.getRootWithoutRetain(), *this);
@@ -893,8 +891,7 @@ SVal RegionStoreManager::Retrieve(Store store, Loc L, QualType T) {
   }
 
   if (isa<CodeTextRegion>(MR)) {
-    assert(0 && "Why load from a code text region?");
-    return UnknownVal();
+    llvm_unreachable("Why load from a code text region?");
   }
 
   // FIXME: Perhaps this method should just take a 'const MemRegion*' argument
@@ -1132,7 +1129,7 @@ RegionStoreManager::RetrieveDerivedDefaultValue(RegionBindings B,
     if (isa<nonloc::LazyCompoundVal>(val))
       return Optional<SVal>();
 
-    assert(0 && "Unknown default value");
+    llvm_unreachable("Unknown default value");
   }
 
   return Optional<SVal>();

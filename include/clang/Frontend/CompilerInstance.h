@@ -11,6 +11,7 @@
 #define LLVM_CLANG_FRONTEND_COMPILERINSTANCE_H_
 
 #include "clang/Frontend/CompilerInvocation.h"
+#include "clang/Lex/ModuleLoader.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/OwningPtr.h"
@@ -28,8 +29,8 @@ class ASTContext;
 class ASTConsumer;
 class ASTReader;
 class CodeCompleteConsumer;
-class Diagnostic;
-class DiagnosticClient;
+class DiagnosticsEngine;
+class DiagnosticConsumer;
 class ExternalASTSource;
 class FileManager;
 class FrontendAction;
@@ -56,12 +57,12 @@ class TargetInfo;
 /// in to the compiler instance for everything. When possible, utility functions
 /// come in two forms; a short form that reuses the CompilerInstance objects,
 /// and a long form that takes explicit instances of any required objects.
-class CompilerInstance {
+class CompilerInstance : public ModuleLoader {
   /// The options used in this compiler instance.
   llvm::IntrusiveRefCntPtr<CompilerInvocation> Invocation;
 
   /// The diagnostics engine instance.
-  llvm::IntrusiveRefCntPtr<Diagnostic> Diagnostics;
+  llvm::IntrusiveRefCntPtr<DiagnosticsEngine> Diagnostics;
 
   /// The target being compiled for.
   llvm::IntrusiveRefCntPtr<TargetInfo> Target;
@@ -251,15 +252,15 @@ public:
   bool hasDiagnostics() const { return Diagnostics != 0; }
 
   /// Get the current diagnostics engine.
-  Diagnostic &getDiagnostics() const {
+  DiagnosticsEngine &getDiagnostics() const {
     assert(Diagnostics && "Compiler instance has no diagnostics!");
     return *Diagnostics;
   }
 
   /// setDiagnostics - Replace the current diagnostics engine.
-  void setDiagnostics(Diagnostic *Value);
+  void setDiagnostics(DiagnosticsEngine *Value);
 
-  DiagnosticClient &getDiagnosticClient() const {
+  DiagnosticConsumer &getDiagnosticClient() const {
     assert(Diagnostics && Diagnostics->getClient() && 
            "Compiler instance has no diagnostic client!");
     return *Diagnostics->getClient();
@@ -454,38 +455,48 @@ public:
   /// allocating one if one is not provided.
   ///
   /// \param Client If non-NULL, a diagnostic client that will be
-  /// attached to (and, then, owned by) the Diagnostic inside this AST
+  /// attached to (and, then, owned by) the DiagnosticsEngine inside this AST
   /// unit.
+  ///
+  /// \param ShouldOwnClient If Client is non-NULL, specifies whether 
+  /// the diagnostic object should take ownership of the client.
+  ///
+  /// \param ShouldCloneClient If Client is non-NULL, specifies whether that
+  /// client should be cloned.
   void createDiagnostics(int Argc, const char* const *Argv,
-                         DiagnosticClient *Client = 0);
+                         DiagnosticConsumer *Client = 0,
+                         bool ShouldOwnClient = true,
+                         bool ShouldCloneClient = true);
 
-  /// Create a Diagnostic object with a the TextDiagnosticPrinter.
+  /// Create a DiagnosticsEngine object with a the TextDiagnosticPrinter.
   ///
   /// The \arg Argc and \arg Argv arguments are used only for logging purposes,
   /// when the diagnostic options indicate that the compiler should output
   /// logging information.
   ///
   /// If no diagnostic client is provided, this creates a
-  /// DiagnosticClient that is owned by the returned diagnostic
+  /// DiagnosticConsumer that is owned by the returned diagnostic
   /// object, if using directly the caller is responsible for
-  /// releasing the returned Diagnostic's client eventually.
+  /// releasing the returned DiagnosticsEngine's client eventually.
   ///
   /// \param Opts - The diagnostic options; note that the created text
   /// diagnostic object contains a reference to these options and its lifetime
   /// must extend past that of the diagnostic engine.
   ///
   /// \param Client If non-NULL, a diagnostic client that will be
-  /// attached to (and, then, owned by) the returned Diagnostic
+  /// attached to (and, then, owned by) the returned DiagnosticsEngine
   /// object.
   ///
   /// \param CodeGenOpts If non-NULL, the code gen options in use, which may be
   /// used by some diagnostics printers (for logging purposes only).
   ///
   /// \return The new object on success, or null on failure.
-  static llvm::IntrusiveRefCntPtr<Diagnostic> 
+  static llvm::IntrusiveRefCntPtr<DiagnosticsEngine> 
   createDiagnostics(const DiagnosticOptions &Opts, int Argc,
                     const char* const *Argv,
-                    DiagnosticClient *Client = 0,
+                    DiagnosticConsumer *Client = 0,
+                    bool ShouldOwnClient = true,
+                    bool ShouldCloneClient = true,
                     const CodeGenOptions *CodeGenOpts = 0);
 
   /// Create the file manager and replace any existing one with it.
@@ -497,20 +508,6 @@ public:
   /// Create the preprocessor, using the invocation, file, and source managers,
   /// and replace any existing one with it.
   void createPreprocessor();
-
-  /// Create a Preprocessor object.
-  ///
-  /// Note that this also creates a new HeaderSearch object which will be owned
-  /// by the resulting Preprocessor.
-  ///
-  /// \return The new object on success, or null on failure.
-  static Preprocessor *createPreprocessor(Diagnostic &, const LangOptions &,
-                                          const PreprocessorOptions &,
-                                          const HeaderSearchOptions &,
-                                          const DependencyOutputOptions &,
-                                          const TargetInfo &,
-                                          const FrontendOptions &,
-                                          SourceManager &, FileManager &);
 
   /// Create the AST context.
   void createASTContext();
@@ -548,7 +545,7 @@ public:
                                raw_ostream &OS);
 
   /// \brief Create the Sema object to be used for parsing.
-  void createSema(bool CompleteTranslationUnit,
+  void createSema(TranslationUnitKind TUKind,
                   CodeCompleteConsumer *CompletionConsumer);
   
   /// Create the frontend timer and replace any existing one with it.
@@ -620,12 +617,16 @@ public:
   ///
   /// \return True on success.
   static bool InitializeSourceManager(StringRef InputFile,
-                                      Diagnostic &Diags,
+                                      DiagnosticsEngine &Diags,
                                       FileManager &FileMgr,
                                       SourceManager &SourceMgr,
                                       const FrontendOptions &Opts);
 
   /// }
+  
+  virtual ModuleKey loadModule(SourceLocation ImportLoc, 
+                               IdentifierInfo &ModuleName,
+                               SourceLocation ModuleNameLoc);
 };
 
 } // end namespace clang

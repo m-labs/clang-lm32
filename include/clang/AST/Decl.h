@@ -20,6 +20,7 @@
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/Basic/Linkage.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Optional.h"
 
 namespace clang {
@@ -32,6 +33,7 @@ class StringLiteral;
 class NestedNameSpecifier;
 class TemplateParameterList;
 class TemplateArgumentList;
+struct ASTTemplateArgumentListInfo;
 class MemberSpecializationInfo;
 class FunctionTemplateSpecializationInfo;
 class DependentFunctionTemplateSpecializationInfo;
@@ -180,6 +182,16 @@ public:
   /// \brief Determine whether this declaration has linkage.
   bool hasLinkage() const;
 
+  /// \brief Whether this declaration was marked as being private to the
+  /// module in which it was defined.
+  bool isModulePrivate() const { return ModulePrivate; }
+  
+  /// \brief Specify whether this declaration was marked as being private
+  /// to the module in which it was defined.
+  void setModulePrivate(bool MP = true) {
+    ModulePrivate = MP;
+  }
+  
   /// \brief Determine whether this declaration is a C++ class member.
   bool isCXXClassMember() const {
     const DeclContext *DC = getDeclContext();
@@ -805,7 +817,7 @@ public:
       return !isFileVarDecl();
 
     // Return true for:  Auto, Register.
-    // Return false for: Extern, Static, PrivateExtern.
+    // Return false for: Extern, Static, PrivateExtern, OpenCLWorkGroupLocal.
 
     return getStorageClass() >= SC_Auto;
   }
@@ -1470,7 +1482,7 @@ private:
   void setInstantiationOfMemberFunction(ASTContext &C, FunctionDecl *FD,
                                         TemplateSpecializationKind TSK);
 
-  void setParams(ASTContext &C, ParmVarDecl **NewParamInfo, unsigned NumParams);
+  void setParams(ASTContext &C, llvm::ArrayRef<ParmVarDecl *> NewParamInfo);
 
 protected:
   FunctionDecl(Kind DK, DeclContext *DC, SourceLocation StartLoc,
@@ -1740,8 +1752,8 @@ public:
     assert(i < getNumParams() && "Illegal param #");
     return ParamInfo[i];
   }
-  void setParams(ParmVarDecl **NewParamInfo, unsigned NumParams) {
-    setParams(getASTContext(), NewParamInfo, NumParams);
+  void setParams(llvm::ArrayRef<ParmVarDecl *> NewParamInfo) {
+    setParams(getASTContext(), NewParamInfo);
   }
 
   /// getMinRequiredArguments - Returns the minimum number of arguments
@@ -1782,8 +1794,8 @@ public:
   }
 
   /// \brief Determine whether this function should be inlined, because it is
-  /// either marked "inline" or is a member function of a C++ class that
-  /// was defined in the class body.
+  /// either marked "inline" or "constexpr" or is a member function of a class
+  /// that was defined in the class body.
   bool isInlined() const;
 
   bool isInlineDefinitionExternallyVisible() const;
@@ -1907,7 +1919,7 @@ public:
   /// or if it had no explicit template argument list, returns NULL.
   /// Note that it an explicit template argument list may be written empty,
   /// e.g., template<> void foo<>(char* s);
-  const TemplateArgumentListInfo*
+  const ASTTemplateArgumentListInfo*
   getTemplateSpecializationArgsAsWritten() const;
 
   /// \brief Specify that this function declaration is actually a function
@@ -1965,7 +1977,7 @@ public:
   /// specialization or a member of a class template specialization.
   ///
   /// \returns the first point of instantiation, if this function was 
-  /// instantiated from a template; otherwie, returns an invalid source 
+  /// instantiated from a template; otherwise, returns an invalid source 
   /// location.
   SourceLocation getPointOfInstantiation() const;
                        
@@ -2340,6 +2352,9 @@ private:
   /// in the syntax of a declarator.
   bool IsEmbeddedInDeclarator : 1;
 
+  /// /brief True if this tag is free standing, e.g. "struct foo;".
+  bool IsFreeStanding : 1;
+
 protected:
   // These are used by (and only defined for) EnumDecl.
   unsigned NumPositiveBits : 8;
@@ -2390,6 +2405,7 @@ protected:
     IsDefinition = false;
     IsBeingDefined = false;
     IsEmbeddedInDeclarator = false;
+    IsFreeStanding = false;
     setPreviousDeclaration(PrevDecl);
   }
 
@@ -2448,6 +2464,11 @@ public:
   }
   void setEmbeddedInDeclarator(bool isInDeclarator) {
     IsEmbeddedInDeclarator = isInDeclarator;
+  }
+
+  bool isFreeStanding() const { return IsFreeStanding; }
+  void setFreeStanding(bool isFreeStanding = true) {
+    IsFreeStanding = isFreeStanding;
   }
 
   /// \brief Whether this declaration declares a type that is
@@ -2987,7 +3008,7 @@ public:
     assert(i < getNumParams() && "Illegal param #");
     return ParamInfo[i];
   }
-  void setParams(ParmVarDecl **NewParamInfo, unsigned NumParams);
+  void setParams(llvm::ArrayRef<ParmVarDecl *> NewParamInfo);
 
   /// hasCaptures - True if this block (or its nested blocks) captures
   /// anything of local storage from its enclosing scopes.
@@ -3030,8 +3051,9 @@ public:
 /// Insertion operator for diagnostics.  This allows sending NamedDecl's
 /// into a diagnostic with <<.
 inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
-                                           NamedDecl* ND) {
-  DB.AddTaggedVal(reinterpret_cast<intptr_t>(ND), Diagnostic::ak_nameddecl);
+                                           const NamedDecl* ND) {
+  DB.AddTaggedVal(reinterpret_cast<intptr_t>(ND),
+                  DiagnosticsEngine::ak_nameddecl);
   return DB;
 }
 

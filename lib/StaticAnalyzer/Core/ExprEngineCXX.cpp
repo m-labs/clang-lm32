@@ -14,6 +14,7 @@
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/ObjCMessage.h"
 #include "clang/AST/DeclCXX.h"
 
 using namespace clang;
@@ -106,22 +107,19 @@ const CXXThisRegion *ExprEngine::getCXXThisRegion(const CXXMethodDecl *decl,
 void ExprEngine::CreateCXXTemporaryObject(const MaterializeTemporaryExpr *ME,
                                           ExplodedNode *Pred,
                                           ExplodedNodeSet &Dst) {
-  ExplodedNodeSet Tmp;
-  Visit(ME->GetTemporaryExpr(), Pred, Tmp);
-  for (ExplodedNodeSet::iterator I = Tmp.begin(), E = Tmp.end(); I != E; ++I) {
-    const ProgramState *state = (*I)->getState();
+  const Expr *tempExpr = ME->GetTemporaryExpr()->IgnoreParens();
+  const ProgramState *state = Pred->getState();
 
-    // Bind the temporary object to the value of the expression. Then bind
-    // the expression to the location of the object.
-    SVal V = state->getSVal(ME->GetTemporaryExpr());
+  // Bind the temporary object to the value of the expression. Then bind
+  // the expression to the location of the object.
+  SVal V = state->getSVal(tempExpr);
 
-    const MemRegion *R =
-      svalBuilder.getRegionManager().getCXXTempObjectRegion(ME,
-                                                   Pred->getLocationContext());
+  const MemRegion *R =
+    svalBuilder.getRegionManager().getCXXTempObjectRegion(ME,
+                                                 Pred->getLocationContext());
 
-    state = state->bindLoc(loc::MemRegionVal(R), V);
-    MakeNode(Dst, ME, Pred, state->BindExpr(ME, loc::MemRegionVal(R)));
-  }
+  state = state->bindLoc(loc::MemRegionVal(R), V);
+  MakeNode(Dst, ME, Pred, state->BindExpr(ME, loc::MemRegionVal(R)));
 }
 
 void ExprEngine::VisitCXXConstructExpr(const CXXConstructExpr *E, 
@@ -198,17 +196,6 @@ void ExprEngine::VisitCXXConstructExpr(const CXXConstructExpr *E,
 #endif
   
   // Default semantics: invalidate all regions passed as arguments.
-  SmallVector<const MemRegion*, 10> regionsToInvalidate;
-
-  // FIXME: We can have collisions on the conjured symbol if the
-  //  expression *I also creates conjured symbols.  We probably want
-  //  to identify conjured symbols by an expression pair: the enclosing
-  //  expression (the context) and the expression itself.  This should
-  //  disambiguate conjured symbols.
-  unsigned blockCount = Builder->getCurrentBlockCount();
-  
-  // NOTE: Even if RegionsToInvalidate is empty, we must still invalidate
-  //  global variables.
   ExplodedNodeSet destCall;
 
   for (ExplodedNodeSet::iterator
@@ -216,25 +203,10 @@ void ExprEngine::VisitCXXConstructExpr(const CXXConstructExpr *E,
        i != e; ++i)
   {
     ExplodedNode *Pred = *i;
+    const LocationContext *LC = Pred->getLocationContext();
     const ProgramState *state = Pred->getState();
 
-    // Accumulate list of regions that are invalidated.
-    for (CXXConstructExpr::const_arg_iterator
-          ai = E->arg_begin(), ae = E->arg_end();
-          ai != ae; ++ai)
-    {
-      SVal val = state->getSVal(*ai);
-      if (const MemRegion *region = val.getAsRegion())
-        regionsToInvalidate.push_back(region);
-    }
-    
-    // Invalidate the regions.    
-    state = state->invalidateRegions(regionsToInvalidate.data(),
-                                     regionsToInvalidate.data() +
-                                     regionsToInvalidate.size(),
-                                     E, blockCount, 0,
-                                     /* invalidateGlobals = */ true);
-    
+    state = invalidateArguments(state, CallOrObjCMessage(E, state), LC);
     Builder->MakeNode(destCall, E, Pred, state);
   }
   
@@ -317,17 +289,13 @@ void ExprEngine::VisitCXXNewExpr(const CXXNewExpr *CNE, ExplodedNode *Pred,
     if (ObjTy->isRecordType()) {
       regionsToInvalidate.push_back(EleReg);
       // Invalidate the regions.
-      state = state->invalidateRegions(regionsToInvalidate.data(),
-                                       regionsToInvalidate.data() +
-                                       regionsToInvalidate.size(),
+      state = state->invalidateRegions(regionsToInvalidate,
                                        CNE, blockCount, 0,
                                        /* invalidateGlobals = */ true);
       
     } else {
       // Invalidate the regions.
-      state = state->invalidateRegions(regionsToInvalidate.data(),
-                                       regionsToInvalidate.data() +
-                                       regionsToInvalidate.size(),
+      state = state->invalidateRegions(regionsToInvalidate,
                                        CNE, blockCount, 0,
                                        /* invalidateGlobals = */ true);
 

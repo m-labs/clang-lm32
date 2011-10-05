@@ -56,6 +56,7 @@ template <typename T> struct ProgramStateTrait {
 
 class ProgramStateManager;
 
+/// \class ProgramState
 /// ProgramState - This class encapsulates:
 ///
 ///    1. A mapping from expressions to values (Environment)
@@ -179,10 +180,7 @@ public:
                                DefinedOrUnknownSVal upperBound,
                                bool assumption) const;
 
-  //==---------------------------------------------------------------------==//
-  // Utility methods for getting regions.
-  //==---------------------------------------------------------------------==//
-
+  /// Utility method for getting regions.
   const VarRegion* getRegion(const VarDecl *D, const LocationContext *LC) const;
 
   //==---------------------------------------------------------------------==//
@@ -216,23 +214,13 @@ public:
 
   const ProgramState *unbindLoc(Loc LV) const;
 
-  /// invalidateRegion - Returns the state with bindings for the given region
-  ///  cleared from the store. See invalidateRegions.
-  const ProgramState *invalidateRegion(const MemRegion *R,
-                                  const Expr *E, unsigned BlockCount,
-                                  StoreManager::InvalidatedSymbols *IS = NULL)
-                                  const {
-    return invalidateRegions(&R, &R+1, E, BlockCount, IS, false);
-  }
-
   /// invalidateRegions - Returns the state with bindings for the given regions
   ///  cleared from the store. The regions are provided as a continuous array
   ///  from Begin to End. Optionally invalidates global regions as well.
-  const ProgramState *invalidateRegions(const MemRegion * const *Begin,
-                                   const MemRegion * const *End,
+  const ProgramState *invalidateRegions(ArrayRef<const MemRegion *> Regions,
                                    const Expr *E, unsigned BlockCount,
-                                   StoreManager::InvalidatedSymbols *IS,
-                                   bool invalidateGlobals) const;
+                                   StoreManager::InvalidatedSymbols *IS = 0,
+                                   bool invalidateGlobals = false) const;
 
   /// enterStackFrame - Returns the state for entry to the given stack frame,
   ///  preserving the current state.
@@ -272,11 +260,22 @@ public:
 
   SVal getSValAsScalarOrLoc(const MemRegion *R) const;
   
+  /// \brief Visits the symbols reachable from the given SVal using the provided
+  /// SymbolVisitor.
+  ///
+  /// This is a convenience API. Consider using ScanReachableSymbols class
+  /// directly when making multiple scans on the same state with the same
+  /// visitor to avoid repeated initialization cost.
+  /// \sa ScanReachableSymbols
   bool scanReachableSymbols(SVal val, SymbolVisitor& visitor) const;
   
+  /// \brief Visits the symbols reachable from the SVals in the given range
+  /// using the provided SymbolVisitor.
   bool scanReachableSymbols(const SVal *I, const SVal *E,
                             SymbolVisitor &visitor) const;
   
+  /// \brief Visits the symbols reachable from the regions in the given
+  /// MemRegions range using the provided SymbolVisitor.
   bool scanReachableSymbols(const MemRegion * const *I, 
                             const MemRegion * const *E,
                             SymbolVisitor &visitor) const;
@@ -342,14 +341,6 @@ public:
     return ProgramStateTrait<T>::Contains(ProgramStateTrait<T>::MakeData(d), key);
   }
 
-  // State pretty-printing.
-  class Printer {
-  public:
-    virtual ~Printer() {}
-    virtual void Print(raw_ostream &Out, const ProgramState *state,
-                       const char* nl, const char* sep) = 0;
-  };
-
   // Pretty-printing.
   void print(raw_ostream &Out, CFG &C, const char *nl = "\n",
              const char *sep = "") const;
@@ -368,11 +359,11 @@ private:
     --refCount;
   }
   
-  const ProgramState *invalidateRegionsImpl(const MemRegion * const *Begin,
-                                       const MemRegion * const *End,
-                                       const Expr *E, unsigned BlockCount,
-                                       StoreManager::InvalidatedSymbols &IS,
-                                       bool invalidateGlobals) const;
+  const ProgramState *
+  invalidateRegionsImpl(ArrayRef<const MemRegion *> Regions,
+                        const Expr *E, unsigned BlockCount,
+                        StoreManager::InvalidatedSymbols &IS,
+                        bool invalidateGlobals) const;
 };
 
 class ProgramStateSet {
@@ -414,7 +405,6 @@ public:
 
 class ProgramStateManager {
   friend class ProgramState;
-  friend class ExprEngine; // FIXME: Remove.
 private:
   /// Eng - The SubEngine that owns this state manager.
   SubEngine *Eng; /* Can be null. */
@@ -427,10 +417,6 @@ private:
 
   typedef llvm::DenseMap<void*,std::pair<void*,void (*)(void*)> > GDMContextsTy;
   GDMContextsTy GDMContexts;
-
-  /// Printers - A set of printer objects used for pretty-printing a ProgramState.
-  ///  ProgramStateManager owns these objects.
-  std::vector<ProgramState::Printer*> Printers;
 
   /// StateSet - FoldingSet containing all the states created for analyzing
   ///  a particular function.  This is used to unique states.
@@ -794,6 +780,32 @@ CB ProgramState::scanReachableSymbols(const MemRegion * const *beg,
   scanReachableSymbols(beg, end, cb);
   return cb;
 }
+
+/// \class ScanReachableSymbols
+/// A Utility class that allows to visit the reachable symbols using a custom
+/// SymbolVisitor.
+class ScanReachableSymbols : public SubRegionMap::Visitor  {
+  typedef llvm::DenseMap<const void*, unsigned> VisitedItems;
+
+  VisitedItems visited;
+  const ProgramState *state;
+  SymbolVisitor &visitor;
+  llvm::OwningPtr<SubRegionMap> SRM;
+public:
+
+  ScanReachableSymbols(const ProgramState *st, SymbolVisitor& v)
+    : state(st), visitor(v) {}
+
+  bool scan(nonloc::CompoundVal val);
+  bool scan(SVal val);
+  bool scan(const MemRegion *R);
+  bool scan(const SymExpr *sym);
+
+  // From SubRegionMap::Visitor.
+  bool Visit(const MemRegion* Parent, const MemRegion* SubRegion) {
+    return scan(SubRegion);
+  }
+};
 
 } // end GR namespace
 
