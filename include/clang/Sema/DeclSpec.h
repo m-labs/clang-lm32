@@ -42,6 +42,7 @@ namespace clang {
   class NestedNameSpecifierLoc;
   class ObjCDeclSpec;
   class Preprocessor;
+  class Sema;
   class Declarator;
   struct TemplateIdAnnotation;
 
@@ -259,6 +260,7 @@ public:
   static const TST TST_underlyingType = clang::TST_underlyingType;
   static const TST TST_auto = clang::TST_auto;
   static const TST TST_unknown_anytype = clang::TST_unknown_anytype;
+  static const TST TST_atomic = clang::TST_atomic;
   static const TST TST_error = clang::TST_error;
 
   // type-qualifiers
@@ -355,7 +357,7 @@ private:
 
   static bool isTypeRep(TST T) {
     return (T == TST_typename || T == TST_typeofType ||
-            T == TST_underlyingType);
+            T == TST_underlyingType || T == TST_atomic);
   }
   static bool isExprRep(TST T) {
     return (T == TST_typeofExpr || T == TST_decltype);
@@ -537,8 +539,8 @@ public:
   ///
   /// TODO: use a more general approach that still allows these
   /// diagnostics to be ignored when desired.
-  bool SetStorageClassSpec(SCS S, SourceLocation Loc, const char *&PrevSpec,
-                           unsigned &DiagID, const LangOptions &Lang);
+  bool SetStorageClassSpec(Sema &S, SCS SC, SourceLocation Loc,
+                           const char *&PrevSpec, unsigned &DiagID);
   bool SetStorageClassSpecThread(SourceLocation Loc, const char *&PrevSpec,
                                  unsigned &DiagID);
   bool SetTypeSpecWidth(TSW W, SourceLocation Loc, const char *&PrevSpec,

@@ -115,7 +115,12 @@ enum CXAvailabilityKind {
   /**
    * \brief The entity is not available; any use of it will be an error.
    */
-  CXAvailability_NotAvailable
+  CXAvailability_NotAvailable,
+  /**
+   * \brief The entity is available, but not accessible; any use of it will be
+   * an error.
+   */
+  CXAvailability_NotAccessible
 };
   
 /**
@@ -338,7 +343,7 @@ CINDEX_LINKAGE unsigned clang_equalRanges(CXSourceRange range1,
 /**
  * \brief Returns non-zero if \arg range is null.
  */
-int clang_Range_isNull(CXSourceRange range);
+CINDEX_LINKAGE int clang_Range_isNull(CXSourceRange range);
 
 /**
  * \brief Retrieve the file, line, column, and offset represented by
@@ -1857,6 +1862,7 @@ enum CXCursorKind {
  */
 typedef struct {
   enum CXCursorKind kind;
+  int xdata;
   void *data[3];
 } CXCursor;
 
@@ -3774,6 +3780,53 @@ CINDEX_LINKAGE void clang_remap_getFilenames(CXRemapping, unsigned index,
  * \brief Dispose the remapping.
  */
 CINDEX_LINKAGE void clang_remap_dispose(CXRemapping);
+
+/**
+ * @}
+ */
+
+/** \defgroup CINDEX_HIGH Higher level API functions
+ *
+ * @{
+ */
+
+enum CXVisitorResult {
+  CXVisit_Break,
+  CXVisit_Continue
+};
+
+typedef struct {
+  void *context;
+  enum CXVisitorResult (*visit)(void *context, CXCursor, CXSourceRange);
+} CXCursorAndRangeVisitor;
+
+/**
+ * \brief Find references of a declaration in a specific file.
+ * 
+ * \param cursor pointing to a declaration or a reference of one.
+ *
+ * \param file to search for references.
+ *
+ * \param visitor callback that will receive pairs of CXCursor/CXSourceRange for
+ * each reference found.
+ * The CXSourceRange will point inside the file; if the reference is inside
+ * a macro (and not a macro argument) the CXSourceRange will be invalid.
+ */
+CINDEX_LINKAGE void clang_findReferencesInFile(CXCursor cursor, CXFile file,
+                                               CXCursorAndRangeVisitor visitor);
+
+#ifdef __has_feature
+#  if __has_feature(blocks)
+
+typedef enum CXVisitorResult
+    (^CXCursorAndRangeVisitorBlock)(CXCursor, CXSourceRange);
+
+CINDEX_LINKAGE
+void clang_findReferencesInFileWithBlock(CXCursor, CXFile,
+                                         CXCursorAndRangeVisitorBlock);
+
+#  endif
+#endif
 
 /**
  * @}

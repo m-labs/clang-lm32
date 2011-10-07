@@ -27,6 +27,7 @@
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -47,7 +48,8 @@ using namespace clang;
 
 Darwin::Darwin(const HostInfo &Host, const llvm::Triple& Triple)
   : ToolChain(Host, Triple), TargetInitialized(false),
-    ARCRuntimeForSimulator(ARCSimulator_None)
+    ARCRuntimeForSimulator(ARCSimulator_None),
+    LibCXXForSimulator(LibCXXSimulator_None)
 {
   // Compute the initial Darwin version based on the host.
   bool HadExtra;
@@ -117,49 +119,29 @@ bool Darwin::hasBlocksRuntime() const {
     return !isMacosxVersionLT(10, 6);
 }
 
-// FIXME: Can we tablegen this?
 static const char *GetArmArchForMArch(StringRef Value) {
-  if (Value == "armv6k")
-    return "armv6";
-
-  if (Value == "armv5tej")
-    return "armv5";
-
-  if (Value == "xscale")
-    return "xscale";
-
-  if (Value == "armv4t")
-    return "armv4t";
-
-  if (Value == "armv7" || Value == "armv7-a" || Value == "armv7-r" ||
-      Value == "armv7-m" || Value == "armv7a" || Value == "armv7r" ||
-      Value == "armv7m")
-    return "armv7";
-
-  return 0;
+  return llvm::StringSwitch<const char*>(Value)
+    .Case("armv6k", "armv6")
+    .Case("armv5tej", "armv5")
+    .Case("xscale", "xscale")
+    .Case("armv4t", "armv4t")
+    .Case("armv7", "armv7")
+    .Cases("armv7a", "armv7-a", "armv7")
+    .Cases("armv7r", "armv7-r", "armv7")
+    .Cases("armv7m", "armv7-m", "armv7")
+    .Default(0);
 }
 
-// FIXME: Can we tablegen this?
 static const char *GetArmArchForMCpu(StringRef Value) {
-  if (Value == "arm10tdmi" || Value == "arm1020t" || Value == "arm9e" ||
-      Value == "arm946e-s" || Value == "arm966e-s" ||
-      Value == "arm968e-s" || Value == "arm10e" ||
-      Value == "arm1020e" || Value == "arm1022e" || Value == "arm926ej-s" ||
-      Value == "arm1026ej-s")
-    return "armv5";
-
-  if (Value == "xscale")
-    return "xscale";
-
-  if (Value == "arm1136j-s" || Value == "arm1136jf-s" ||
-      Value == "arm1176jz-s" || Value == "arm1176jzf-s" ||
-      Value == "cortex-m0" )
-    return "armv6";
-
-  if (Value == "cortex-a8" || Value == "cortex-r4" || Value == "cortex-m3")
-    return "armv7";
-
-  return 0;
+  return llvm::StringSwitch<const char *>(Value)
+    .Cases("arm9e", "arm946e-s", "arm966e-s", "arm968e-s", "arm926ej-s","armv5")
+    .Cases("arm10e", "arm10tdmi", "armv5")
+    .Cases("arm1020t", "arm1020e", "arm1022e", "arm1026ej-s", "armv5")
+    .Case("xscale", "xscale")
+    .Cases("arm1136j-s", "arm1136jf-s", "arm1176jz-s",
+           "arm1176jzf-s", "cortex-m0", "armv6")
+    .Cases("cortex-a8", "cortex-r4", "cortex-m3", "cortex-a9", "armv7")
+    .Default(0);
 }
 
 StringRef Darwin::getDarwinArchName(const ArgList &Args) const {
@@ -440,8 +422,9 @@ void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
   if (isTargetIPhoneOS()) {
     // If we are compiling as iOS / simulator, don't attempt to link libgcc_s.1,
     // it never went into the SDK.
-    if (!isTargetIOSSimulator())
-        CmdArgs.push_back("-lgcc_s.1");
+    // Linking against libgcc_s.1 isn't needed for iOS 5.0+
+    if (isIPhoneOSVersionLT(5, 0) && !isTargetIOSSimulator())
+      CmdArgs.push_back("-lgcc_s.1");
 
     // We currently always need a static runtime library for iOS.
     AddLinkRuntimeLib(Args, CmdArgs, "libclang_rt.ios.a");
@@ -522,6 +505,8 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
             Major < 10 && Minor < 100 && Micro < 100) {
           ARCRuntimeForSimulator = Major < 5 ? ARCSimulator_NoARCRuntime
                                              : ARCSimulator_HasARCRuntime;
+          LibCXXForSimulator = Major < 5 ? LibCXXSimulator_NotAvailable
+                                         : LibCXXSimulator_Available;
         }
         break;
       }
@@ -928,6 +913,33 @@ DerivedArgList *Darwin::TranslateArgs(const DerivedArgList &Args,
   // after argument translation because -Xarch_ arguments may add a version min
   // argument.
   AddDeploymentTarget(*DAL);
+
+  // Validate the C++ standard library choice.
+  CXXStdlibType Type = GetCXXStdlibType(*DAL);
+  if (Type == ToolChain::CST_Libcxx) {
+    switch (LibCXXForSimulator) {
+    case LibCXXSimulator_None:
+      // Handle non-simulator cases.
+      if (isTargetIPhoneOS()) {
+        if (isIPhoneOSVersionLT(5, 0)) {
+          getDriver().Diag(clang::diag::err_drv_invalid_libcxx_deployment)
+            << "iOS 5.0";
+        }
+      } else {
+        if (isMacosxVersionLT(10, 7)) {
+          getDriver().Diag(clang::diag::err_drv_invalid_libcxx_deployment)
+            << "Mac OS X 10.7";
+        }
+      }
+      break;
+    case LibCXXSimulator_NotAvailable:
+      getDriver().Diag(clang::diag::err_drv_invalid_libcxx_deployment)
+        << "iOS 5.0";
+      break;
+    case LibCXXSimulator_Available:
+      break;
+    }
+  }
 
   return DAL;
 }

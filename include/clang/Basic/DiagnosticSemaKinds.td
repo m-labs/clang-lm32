@@ -498,9 +498,14 @@ def warn_objc_property_retain_of_block : Warning<
     "retain'ed block property does not copy the block "
     "- use copy attribute instead">, InGroup<ObjCRetainBlockProperty>;
 def warn_atomic_property_rule : Warning<
-  "writable atomic property %0 cannot pair a synthesized setter/getter "
-  "with a user defined setter/getter">,
+  "writable atomic property %0 cannot pair a synthesized %select{getter|setter}1 "
+  "with a user defined %select{getter|setter}2">,
   InGroup<DiagGroup<"atomic-property-with-user-defined-accessor">>;
+def note_atomic_property_fixup_suggest : Note<"setter and getter must both be "
+  "synthesized, or both be user defined,or the property must be nonatomic">;
+def warn_atomic_property_nontrivial_assign_op : Warning<
+  "atomic property of type %0 synthesizing setter using non-trivial assignment"
+  "operator">, InGroup<DiagGroup<"objc-property-atomic-setter-synthesis">>;
 def warn_ownin_getter_rule : Warning<
   "property's synthesized getter follows Cocoa naming"
   " convention for returning 'owned' objects">,
@@ -1192,8 +1197,6 @@ def err_invalid_constexpr_var_decl : Error<
   "constexpr variable declaration must be a definition">;
 def err_constexpr_var_requires_init : Error<
   "declaration of constexpr variable %0 requires an initializer">;
-def err_constexpr_initialized_static_member : Error<
-  "definition of initialized static data member %0 cannot be marked constexpr">;
 def err_constexpr_var_requires_const_init : Error<
   "constexpr variable %0 must be initialized by a constant expression">;
 def err_constexpr_redecl_mismatch : Error<
@@ -3072,6 +3075,10 @@ def err_block_with_return_type_requires_args : Error<
   "block with explicit return type requires argument list">;
 def err_func_def_incomplete_result : Error<
   "incomplete result type %0 in function definition">;
+def err_atomic_specifier_bad_type : Error<
+  "_Atomic cannot be applied to "
+  "%select{incomplete |array |function |reference |atomic |qualified |}0type "
+  "%1 %select{||||||which is not trivially copyable}0">;
 
 // Expressions.
 def ext_sizeof_function_type : Extension<

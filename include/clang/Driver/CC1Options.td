@@ -541,6 +541,8 @@ def pic_level : Separate<"-pic-level">,
   HelpText<"Value for __PIC__">;
 def pthread : Flag<"-pthread">,
   HelpText<"Support POSIX threads in generated code">;
+def fpack_struct : Separate<"-fpack-struct">,
+  HelpText<"Specify the default maximum struct packing alignment">;
 def fpascal_strings : Flag<"-fpascal-strings">,
   HelpText<"Recognize and construct Pascal-style string literals">;
 def fno_rtti : Flag<"-fno-rtti">,
@@ -712,3 +714,10 @@ def cl_mad_enable : Flag<"-cl-mad-enable">,
   HelpText<"OpenCL only. Enable less precise MAD instructions to be generated.">;
 def cl_std_EQ : Joined<"-cl-std=">,
   HelpText<"OpenCL language standard to compile for">;
+
+//===----------------------------------------------------------------------===//
+// CUDA Options
+//===----------------------------------------------------------------------===//
+
+def fcuda_is_device : Flag<"-fcuda-is-device">,
+  HelpText<"Generate code for CUDA device">;

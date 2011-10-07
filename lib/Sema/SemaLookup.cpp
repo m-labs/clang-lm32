@@ -669,7 +669,7 @@ static bool LookupDirect(Sema &S, LookupResult &R, const DeclContext *DC) {
   //   name lookup. Instead, any conversion function templates visible in the
   //   context of the use are considered. [...]
   const CXXRecordDecl *Record = cast<CXXRecordDecl>(DC);
-  if (!Record->isDefinition())
+  if (!Record->isCompleteDefinition())
     return Found;
 
   const UnresolvedSetImpl *Unresolved = Record->getConversionFunctions();
@@ -1353,7 +1353,7 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
   // Make sure that the declaration context is complete.
   assert((!isa<TagDecl>(LookupCtx) ||
           LookupCtx->isDependentContext() ||
-          cast<TagDecl>(LookupCtx)->isDefinition() ||
+          cast<TagDecl>(LookupCtx)->isCompleteDefinition() ||
           Context.getTypeDeclType(cast<TagDecl>(LookupCtx))->getAs<TagType>()
             ->isBeingDefined()) &&
          "Declaration context must already be complete!");
@@ -2000,6 +2000,12 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result, QualType Ty) {
     case Type::ObjCObjectPointer:
       Result.Namespaces.insert(Result.S.Context.getTranslationUnitDecl());
       break;
+
+    // Atomic types are just wrappers; use the associations of the
+    // contained type.
+    case Type::Atomic:
+      T = cast<AtomicType>(T)->getValueType().getTypePtr();
+      continue;
     }
 
     if (Queue.empty()) break;
@@ -2701,7 +2707,7 @@ static void LookupVisibleDecls(DeclContext *Ctx, LookupResult &Result,
          D != DEnd; ++D) {
       if (NamedDecl *ND = dyn_cast<NamedDecl>(*D)) {
         if (Result.isAcceptableDecl(ND)) {
-          Consumer.FoundDecl(ND, Visited.checkHidden(ND), InBaseClass);
+          Consumer.FoundDecl(ND, Visited.checkHidden(ND), Ctx, InBaseClass);
           Visited.add(ND);
         }
       } else if (ObjCForwardProtocolDecl *ForwardProto
@@ -2712,14 +2718,15 @@ static void LookupVisibleDecls(DeclContext *Ctx, LookupResult &Result,
              P != PEnd;
              ++P) {
           if (Result.isAcceptableDecl(*P)) {
-            Consumer.FoundDecl(*P, Visited.checkHidden(*P), InBaseClass);
+            Consumer.FoundDecl(*P, Visited.checkHidden(*P), Ctx, InBaseClass);
             Visited.add(*P);
           }
         }
       } else if (ObjCClassDecl *Class = dyn_cast<ObjCClassDecl>(*D)) {
           ObjCInterfaceDecl *IFace = Class->getForwardInterfaceDecl();
           if (Result.isAcceptableDecl(IFace)) {
-            Consumer.FoundDecl(IFace, Visited.checkHidden(IFace), InBaseClass);
+            Consumer.FoundDecl(IFace, Visited.checkHidden(IFace), Ctx,
+                               InBaseClass);
             Visited.add(IFace);
           }
       }
@@ -2861,7 +2868,7 @@ static void LookupVisibleDecls(Scope *S, LookupResult &Result,
          D != DEnd; ++D) {
       if (NamedDecl *ND = dyn_cast<NamedDecl>(*D))
         if (Result.isAcceptableDecl(ND)) {
-          Consumer.FoundDecl(ND, Visited.checkHidden(ND), false);
+          Consumer.FoundDecl(ND, Visited.checkHidden(ND), 0, false);
           Visited.add(ND);
         }
     }
@@ -3043,7 +3050,8 @@ public:
       delete I->second;
   }
   
-  virtual void FoundDecl(NamedDecl *ND, NamedDecl *Hiding, bool InBaseClass);
+  virtual void FoundDecl(NamedDecl *ND, NamedDecl *Hiding, DeclContext *Ctx,
+                         bool InBaseClass);
   void FoundName(StringRef Name);
   void addKeywordResult(StringRef Keyword);
   void addName(StringRef Name, NamedDecl *ND, unsigned Distance,
@@ -3074,7 +3082,7 @@ public:
 }
 
 void TypoCorrectionConsumer::FoundDecl(NamedDecl *ND, NamedDecl *Hiding,
-                                       bool InBaseClass) {
+                                       DeclContext *Ctx, bool InBaseClass) {
   // Don't consider hidden names for typo correction.
   if (Hiding)
     return;

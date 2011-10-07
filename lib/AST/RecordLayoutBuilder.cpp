@@ -1211,6 +1211,11 @@ void RecordLayoutBuilder::InitializeLayout(const Decl *D) {
   
   IsMsStruct = D->hasAttr<MsStructAttr>();
 
+  // Honor the default struct packing maximum alignment flag.
+  if (unsigned DefaultMaxFieldAlignment = Context.getLangOptions().PackStruct) {
+    MaxFieldAlignment = CharUnits::fromQuantity(DefaultMaxFieldAlignment);
+  }
+
   // mac68k alignment supersedes maximum field alignment and attribute aligned,
   // and forces all structures to have 2-byte alignment. The IBM docs on it
   // allude to additional (more complicated) semantics, especially with regard
@@ -2002,8 +2007,13 @@ RecordLayoutBuilder::Diag(SourceLocation Loc, unsigned DiagID) {
 /// position information.
 const ASTRecordLayout &
 ASTContext::getASTRecordLayout(const RecordDecl *D) const {
+  // These asserts test different things.  A record has a definition
+  // as soon as we begin to parse the definition.  That definition is
+  // not a complete definition (which is what isDefinition() tests)
+  // until we *finish* parsing the definition.
   D = D->getDefinition();
   assert(D && "Cannot get layout of forward declarations!");
+  assert(D->isCompleteDefinition() && "Cannot layout type before complete!");
 
   // Look up this layout, if already laid out, return what we have.
   // Note that we can't save a reference to the entry because this function
