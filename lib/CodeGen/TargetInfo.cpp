@@ -3161,7 +3161,6 @@ void Mico32TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
 
 llvm::Value *Mico32ABIInfo::EmitVAArg(llvm::Value *VAListAddr, QualType Ty,
                                    CodeGenFunction &CFG) const {
-  llvm_unreachable("Mico32 does not support varargs");
   return 0;
 }
 
