@@ -390,6 +390,19 @@ public:
 
   /// \brief Returns whether this expression refers to a vector element.
   bool refersToVectorElement() const;
+
+  /// \brief Returns whether this expression has a placeholder type.
+  bool hasPlaceholderType() const {
+    return getType()->isPlaceholderType();
+  }
+
+  /// \brief Returns whether this expression has a specific placeholder type.
+  bool hasPlaceholderType(BuiltinType::Kind K) const {
+    assert(BuiltinType::isPlaceholderTypeKind(K));
+    if (const BuiltinType *BT = dyn_cast<BuiltinType>(getType()))
+      return BT->getKind() == K;
+    return false;
+  }
   
   /// isKnownToHaveBooleanValue - Return true if this is an integer expression
   /// that is known to return 0 or 1.  This happens for _Bool/bool expressions
@@ -412,11 +425,8 @@ public:
   /// initializer, which can be emitted at compile-time.
   bool isConstantInitializer(ASTContext &Ctx, bool ForRef) const;
 
-  /// EvalResult is a struct with detailed info about an evaluated expression.
-  struct EvalResult {
-    /// Val - This is the value the expression can be folded to.
-    APValue Val;
-
+  /// EvalStatus is a struct with detailed info about an evaluation in progress.
+  struct EvalStatus {
     /// HasSideEffects - Whether the evaluated expression has side effects.
     /// For example, (f() && 0) can be folded, but it still has side effects.
     bool HasSideEffects;
@@ -433,11 +443,8 @@ public:
     const Expr *DiagExpr;
     SourceLocation DiagLoc;
 
-    EvalResult() : HasSideEffects(false), Diag(0), DiagExpr(0) {}
+    EvalStatus() : HasSideEffects(false), Diag(0), DiagExpr(0) {}
 
-    // isGlobalLValue - Return true if the evaluated lvalue expression
-    // is global.
-    bool isGlobalLValue() const;
     // hasSideEffects - Return true if the evaluated expression has
     // side effects.
     bool hasSideEffects() const {
@@ -445,36 +452,56 @@ public:
     }
   };
 
-  /// Evaluate - Return true if this is a constant which we can fold using
-  /// any crazy technique (that has nothing to do with language standards) that
-  /// we want to.  If this function returns true, it returns the folded constant
-  /// in Result.
-  bool Evaluate(EvalResult &Result, const ASTContext &Ctx) const;
+  /// EvalResult is a struct with detailed info about an evaluated expression.
+  struct EvalResult : EvalStatus {
+    /// Val - This is the value the expression can be folded to.
+    APValue Val;
+
+    // isGlobalLValue - Return true if the evaluated lvalue expression
+    // is global.
+    bool isGlobalLValue() const;
+  };
+
+  /// EvaluateAsRValue - Return true if this is a constant which we can fold to
+  /// an rvalue using any crazy technique (that has nothing to do with language
+  /// standards) that we want to, even if the expression has side-effects. If
+  /// this function returns true, it returns the folded constant in Result. If
+  /// the expression is a glvalue, an lvalue-to-rvalue conversion will be
+  /// applied.
+  bool EvaluateAsRValue(EvalResult &Result, const ASTContext &Ctx) const;
 
   /// EvaluateAsBooleanCondition - Return true if this is a constant
   /// which we we can fold and convert to a boolean condition using
-  /// any crazy technique that we want to.
+  /// any crazy technique that we want to, even if the expression has
+  /// side-effects.
   bool EvaluateAsBooleanCondition(bool &Result, const ASTContext &Ctx) const;
 
-  /// isEvaluatable - Call Evaluate to see if this expression can be constant
-  /// folded, but discard the result.
+  /// EvaluateAsInt - Return true if this is a constant which we can fold and
+  /// convert to an integer without side-effects, using any crazy technique that
+  /// we want to.
+  bool EvaluateAsInt(llvm::APSInt &Result, const ASTContext &Ctx) const;
+
+  /// isEvaluatable - Call EvaluateAsRValue to see if this expression can be
+  /// constant folded without side-effects, but discard the result.
   bool isEvaluatable(const ASTContext &Ctx) const;
 
   /// HasSideEffects - This routine returns true for all those expressions
-  /// which must be evaluated each time and must not be optimized away 
+  /// which must be evaluated each time and must not be optimized away
   /// or evaluated at compile time. Example is a function call, volatile
   /// variable read.
   bool HasSideEffects(const ASTContext &Ctx) const;
-  
-  /// EvaluateAsInt - Call Evaluate and return the folded integer. This
-  /// must be called on an expression that constant folds to an integer.
-  llvm::APSInt EvaluateAsInt(const ASTContext &Ctx) const;
 
-  /// EvaluateAsLValue - Evaluate an expression to see if it's a lvalue
-  /// with link time known address.
+  /// EvaluateKnownConstInt - Call EvaluateAsRValue and return the folded
+  /// integer. This must be called on an expression that constant folds to an
+  /// integer.
+  llvm::APSInt EvaluateKnownConstInt(const ASTContext &Ctx) const;
+
+  /// EvaluateAsLValue - Evaluate an expression to see if we can fold it to an
+  /// lvalue with link time known address, with no side-effects.
   bool EvaluateAsLValue(EvalResult &Result, const ASTContext &Ctx) const;
 
-  /// EvaluateAsLValue - Evaluate an expression to see if it's a lvalue.
+  /// EvaluateAsLValue - Evaluate an expression to see if we can fold it to an
+  /// lvalue, even if the expression has side-effects.
   bool EvaluateAsAnyLValue(EvalResult &Result, const ASTContext &Ctx) const;
 
   /// \brief Enumeration used to describe the kind of Null pointer constant
@@ -1244,8 +1271,13 @@ public:
 private:
   friend class ASTStmtReader;
 
-  const char *StrData;
-  unsigned ByteLength;
+  union {
+    const char *asChar;
+    const uint16_t *asUInt16;
+    const uint32_t *asUInt32;
+  } StrData;
+  unsigned Length;
+  unsigned CharByteWidth;
   unsigned NumConcatenated;
   unsigned Kind : 3;
   bool IsPascal : 1;
@@ -1254,6 +1286,8 @@ private:
   StringLiteral(QualType Ty) :
     Expr(StringLiteralClass, Ty, VK_LValue, OK_Ordinary, false, false, false,
          false) {}
+
+  static int mapCharByteWidth(TargetInfo const &target,StringKind k);
 
 public:
   /// This is the "fully general" constructor that allows representation of
@@ -1273,15 +1307,52 @@ public:
   static StringLiteral *CreateEmpty(ASTContext &C, unsigned NumStrs);
 
   StringRef getString() const {
-    return StringRef(StrData, ByteLength);
+    assert(CharByteWidth==1
+           && "This function is used in places that assume strings use char");
+    return StringRef(StrData.asChar, getByteLength());
   }
 
-  unsigned getByteLength() const { return ByteLength; }
+  /// Allow clients that need the byte representation, such as ASTWriterStmt
+  /// ::VisitStringLiteral(), access.
+  StringRef getBytes() const {
+    // FIXME: StringRef may not be the right type to use as a result for this...
+    assert((CharByteWidth==1 || CharByteWidth==2 || CharByteWidth==4)
+           && "unsupported CharByteWidth");
+    if (CharByteWidth==4) {
+      return StringRef(reinterpret_cast<const char*>(StrData.asUInt32),
+                       getByteLength());
+    } else if (CharByteWidth==2) {
+      return StringRef(reinterpret_cast<const char*>(StrData.asUInt16),
+                       getByteLength());
+    } else {
+      return StringRef(StrData.asChar, getByteLength());
+    }
+  }
+
+  uint32_t getCodeUnit(size_t i) const {
+    assert(i<Length && "out of bounds access");
+    assert((CharByteWidth==1 || CharByteWidth==2 || CharByteWidth==4)
+           && "unsupported CharByteWidth");
+    if (CharByteWidth==4) {
+      return StrData.asUInt32[i];
+    } else if (CharByteWidth==2) {
+      return StrData.asUInt16[i];
+    } else {
+      return static_cast<unsigned char>(StrData.asChar[i]);
+    }
+  }
+
+  unsigned getByteLength() const { return CharByteWidth*Length; }
+  unsigned getLength() const { return Length; }
+  unsigned getCharByteWidth() const { return CharByteWidth; }
 
   /// \brief Sets the string data to the given string data.
-  void setString(ASTContext &C, StringRef Str);
+  void setString(ASTContext &C, StringRef Str,
+                 StringKind Kind, bool IsPascal);
 
   StringKind getKind() const { return static_cast<StringKind>(Kind); }
+  
+  
   bool isAscii() const { return Kind == Ascii; }
   bool isWide() const { return Kind == Wide; }
   bool isUTF8() const { return Kind == UTF8; }
@@ -1296,6 +1367,7 @@ public:
         return true;
     return false;
   }
+  
   /// getNumConcatenated - Get the number of string literal tokens that were
   /// concatenated in translation phase #6 to form this string literal.
   unsigned getNumConcatenated() const { return NumConcatenated; }
@@ -1434,12 +1506,26 @@ public:
 
   bool isPrefix() const { return isPrefix(getOpcode()); }
   bool isPostfix() const { return isPostfix(getOpcode()); }
+
+  static bool isIncrementOp(Opcode Op) {
+    return Op == UO_PreInc || Op == UO_PostInc;
+  }
   bool isIncrementOp() const {
-    return Opc == UO_PreInc || Opc == UO_PostInc;
+    return isIncrementOp(getOpcode());
   }
+
+  static bool isDecrementOp(Opcode Op) {
+    return Op == UO_PreDec || Op == UO_PostDec;
+  }
+  bool isDecrementOp() const {
+    return isDecrementOp(getOpcode());
+  }
+
+  static bool isIncrementDecrementOp(Opcode Op) { return Op <= UO_PreDec; }
   bool isIncrementDecrementOp() const {
-    return Opc <= UO_PreDec;
+    return isIncrementDecrementOp(getOpcode());
   }
+
   static bool isArithmeticOp(Opcode Op) {
     return Op >= UO_Plus && Op <= UO_LNot;
   }
@@ -1921,6 +2007,9 @@ public:
   /// \brief Retrieve the call arguments.
   Expr **getArgs() {
     return reinterpret_cast<Expr **>(SubExprs+getNumPreArgs()+PREARGS_START);
+  }
+  const Expr *const *getArgs() const {
+    return const_cast<CallExpr*>(this)->getArgs();
   }
   
   /// getArg - Return the specified argument.
@@ -3098,7 +3187,7 @@ public:
 
   unsigned getShuffleMaskIdx(ASTContext &Ctx, unsigned N) {
     assert((N < NumExprs - 2) && "Shuffle idx out of range!");
-    return getExpr(N+2)->EvaluateAsInt(Ctx).getZExtValue();
+    return getExpr(N+2)->EvaluateKnownConstInt(Ctx).getZExtValue();
   }
 
   // Iterators
@@ -3377,6 +3466,10 @@ public:
     return const_cast<InitListExpr *>(this)->getArrayFiller();
   }
   void setArrayFiller(Expr *filler);
+
+  /// \brief Return true if this is an array initializer and its array "filler"
+  /// has been set.
+  bool hasArrayFiller() const { return getArrayFiller(); }
 
   /// \brief If this initializes a union, specifies which field in the
   /// union to initialize.
@@ -4156,6 +4249,101 @@ public:
   
   // Iterators
   child_range children() { return child_range(&SrcExpr, &SrcExpr+1); }
+};
+
+/// AtomicExpr - Variadic atomic builtins: __atomic_exchange, __atomic_fetch_*,
+/// __atomic_load, __atomic_store, and __atomic_compare_exchange_*, for the
+/// similarly-named C++0x instructions.  All of these instructions take one
+/// primary pointer and at least one memory order.
+class AtomicExpr : public Expr {
+public:
+  enum AtomicOp { Load, Store, CmpXchgStrong, CmpXchgWeak, Xchg,
+                  Add, Sub, And, Or, Xor };
+private:
+  enum { PTR, ORDER, VAL1, ORDER_FAIL, VAL2, END_EXPR };
+  Stmt* SubExprs[END_EXPR];
+  unsigned NumSubExprs;
+  SourceLocation BuiltinLoc, RParenLoc;
+  AtomicOp Op;
+
+public:
+  AtomicExpr(SourceLocation BLoc, Expr **args, unsigned nexpr, QualType t,
+             AtomicOp op, SourceLocation RP);
+
+  /// \brief Build an empty AtomicExpr.
+  explicit AtomicExpr(EmptyShell Empty) : Expr(AtomicExprClass, Empty) { }
+
+  Expr *getPtr() const {
+    return cast<Expr>(SubExprs[PTR]);
+  }
+  void setPtr(Expr *E) {
+    SubExprs[PTR] = E;
+  }
+  Expr *getOrder() const {
+    return cast<Expr>(SubExprs[ORDER]);
+  }
+  void setOrder(Expr *E) {
+    SubExprs[ORDER] = E;
+  }
+  Expr *getVal1() const {
+    assert(NumSubExprs >= 3);
+    return cast<Expr>(SubExprs[VAL1]);
+  }
+  void setVal1(Expr *E) {
+    assert(NumSubExprs >= 3);
+    SubExprs[VAL1] = E;
+  }
+  Expr *getOrderFail() const {
+    assert(NumSubExprs == 5);
+    return cast<Expr>(SubExprs[ORDER_FAIL]);
+  }
+  void setOrderFail(Expr *E) {
+    assert(NumSubExprs == 5);
+    SubExprs[ORDER_FAIL] = E;
+  }
+  Expr *getVal2() const {
+    assert(NumSubExprs == 5);
+    return cast<Expr>(SubExprs[VAL2]);
+  }
+  void setVal2(Expr *E) {
+    assert(NumSubExprs == 5);
+    SubExprs[VAL2] = E;
+  }
+
+  AtomicOp getOp() const { return Op; }
+  void setOp(AtomicOp op) { Op = op; }
+  unsigned getNumSubExprs() { return NumSubExprs; }
+  void setNumSubExprs(unsigned num) { NumSubExprs = num; }
+
+  Expr **getSubExprs() { return reinterpret_cast<Expr **>(SubExprs); }
+
+  bool isVolatile() const {
+    return getPtr()->getType()->getPointeeType().isVolatileQualified();
+  }
+
+  bool isCmpXChg() const {
+    return getOp() == AtomicExpr::CmpXchgStrong ||
+           getOp() == AtomicExpr::CmpXchgWeak;
+  }
+
+  SourceLocation getBuiltinLoc() const { return BuiltinLoc; }
+  void setBuiltinLoc(SourceLocation L) { BuiltinLoc = L; }
+
+  SourceLocation getRParenLoc() const { return RParenLoc; }
+  void setRParenLoc(SourceLocation L) { RParenLoc = L; }
+
+  SourceRange getSourceRange() const {
+    return SourceRange(BuiltinLoc, RParenLoc);
+  }
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == AtomicExprClass;
+  }
+  static bool classof(const AtomicExpr *) { return true; }
+
+  // Iterators
+  child_range children() {
+    return child_range(SubExprs, SubExprs+NumSubExprs);
+  }
 };
 }  // end namespace clang
 

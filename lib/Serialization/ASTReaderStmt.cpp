@@ -372,12 +372,13 @@ void ASTStmtReader::VisitStringLiteral(StringLiteral *E) {
   assert(Record[Idx] == E->getNumConcatenated() &&
          "Wrong number of concatenated tokens!");
   ++Idx;
-  E->Kind = static_cast<StringLiteral::StringKind>(Record[Idx++]);
-  E->IsPascal = Record[Idx++];
+  StringLiteral::StringKind kind =
+        static_cast<StringLiteral::StringKind>(Record[Idx++]);
+  bool isPascal = Record[Idx++];
 
   // Read string data
   llvm::SmallString<16> Str(&Record[Idx], &Record[Idx] + Len);
-  E->setString(Reader.getContext(), Str.str());
+  E->setString(Reader.getContext(), Str.str(), kind, isPascal);
   Idx += Len;
 
   // Read source locations
@@ -774,6 +775,25 @@ void ASTStmtReader::VisitGenericSelectionExpr(GenericSelectionExpr *E) {
   E->RParenLoc = ReadSourceLocation(Record, Idx);
 }
 
+void ASTStmtReader::VisitAtomicExpr(AtomicExpr *E) {
+  VisitExpr(E);
+  E->setOp(AtomicExpr::AtomicOp(Record[Idx++]));
+  E->setPtr(Reader.ReadSubExpr());
+  E->setOrder(Reader.ReadSubExpr());
+  E->setNumSubExprs(2);
+  if (E->getOp() != AtomicExpr::Load) {
+    E->setVal1(Reader.ReadSubExpr());
+    E->setNumSubExprs(3);
+  }
+  if (E->isCmpXChg()) {
+    E->setOrderFail(Reader.ReadSubExpr());
+    E->setVal2(Reader.ReadSubExpr());
+    E->setNumSubExprs(5);
+  }
+  E->setBuiltinLoc(ReadSourceLocation(Record, Idx));
+  E->setRParenLoc(ReadSourceLocation(Record, Idx));
+}
+
 //===----------------------------------------------------------------------===//
 // Objective-C Expressions and Statements
 
@@ -971,6 +991,15 @@ void ASTStmtReader::VisitCXXForRangeStmt(CXXForRangeStmt *S) {
   S->setInc(Reader.ReadSubExpr());
   S->setLoopVarStmt(Reader.ReadSubStmt());
   S->setBody(Reader.ReadSubStmt());
+}
+
+void ASTStmtReader::VisitMSDependentExistsStmt(MSDependentExistsStmt *S) {
+  VisitStmt(S);
+  S->KeywordLoc = ReadSourceLocation(Record, Idx);
+  S->IsIfExists = Record[Idx++];
+  S->QualifierLoc = Reader.ReadNestedNameSpecifierLoc(F, Record, Idx);
+  ReadDeclarationNameInfo(S->NameInfo, Record, Idx);
+  S->SubStmt = Reader.ReadSubStmt();
 }
 
 void ASTStmtReader::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
@@ -1425,6 +1454,10 @@ Stmt *ASTReader::ReadStmtFromStream(Module &F) {
 
   ReadingKindTracker ReadingKind(Read_Stmt, *this);
   llvm::BitstreamCursor &Cursor = F.DeclsCursor;
+  
+  // Map of offset to previously deserialized stmt. The offset points
+  /// just after the stmt record.
+  llvm::DenseMap<uint64_t, Stmt *> StmtEntries;
 
 #ifndef NDEBUG
   unsigned PrevNumStmts = StmtStack.size();
@@ -1464,9 +1497,17 @@ Stmt *ASTReader::ReadStmtFromStream(Module &F) {
     Idx = 0;
     Record.clear();
     bool Finished = false;
+    bool IsStmtReference = false;
     switch ((StmtCode)Cursor.ReadRecord(Code, Record)) {
     case STMT_STOP:
       Finished = true;
+      break;
+
+    case STMT_REF_PTR:
+      IsStmtReference = true;
+      assert(StmtEntries.find(Record[0]) != StmtEntries.end() &&
+             "No stmt was recorded for this offset reference!");
+      S = StmtEntries[Record[Idx++]];
       break;
 
     case STMT_NULL_PTR:
@@ -1816,6 +1857,13 @@ Stmt *ASTReader::ReadStmtFromStream(Module &F) {
       S = new (Context) CXXForRangeStmt(Empty);
       break;
 
+    case STMT_MS_DEPENDENT_EXISTS:
+      S = new (Context) MSDependentExistsStmt(SourceLocation(), true,
+                                              NestedNameSpecifierLoc(),
+                                              DeclarationNameInfo(),
+                                              0);
+      break;
+        
     case EXPR_CXX_OPERATOR_CALL:
       S = new (Context) CXXOperatorCallExpr(Context, Empty);
       break;
@@ -2010,6 +2058,10 @@ Stmt *ASTReader::ReadStmtFromStream(Module &F) {
     case EXPR_ASTYPE:
       S = new (Context) AsTypeExpr(Empty);
       break;
+
+    case EXPR_ATOMIC:
+      S = new (Context) AtomicExpr(Empty);
+      break;
     }
     
     // We hit a STMT_STOP, so we're done with this expression.
@@ -2018,8 +2070,11 @@ Stmt *ASTReader::ReadStmtFromStream(Module &F) {
 
     ++NumStatementsRead;
 
-    if (S)
+    if (S && !IsStmtReference) {
       Reader.Visit(S);
+      StmtEntries[Cursor.GetCurrentBitNo()] = S;
+    }
+
 
     assert(Idx == Record.size() && "Invalid deserialization of statement");
     StmtStack.push_back(S);

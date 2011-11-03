@@ -243,6 +243,7 @@ public:
   static const TST TST_char16 = clang::TST_char16;
   static const TST TST_char32 = clang::TST_char32;
   static const TST TST_int = clang::TST_int;
+  static const TST TST_half = clang::TST_half;
   static const TST TST_float = clang::TST_float;
   static const TST TST_double = clang::TST_double;
   static const TST TST_bool = clang::TST_bool;
@@ -1104,6 +1105,16 @@ struct DeclaratorChunk {
     /// If this is an invalid location, there is no ref-qualifier.
     unsigned RefQualifierLoc;
 
+    /// \brief The location of the const-qualifier, if any.
+    ///
+    /// If this is an invalid location, there is no const-qualifier.
+    unsigned ConstQualifierLoc;
+
+    /// \brief The location of the volatile-qualifier, if any.
+    ///
+    /// If this is an invalid location, there is no volatile-qualifier.
+    unsigned VolatileQualifierLoc;
+
     /// \brief The location of the 'mutable' qualifer in a lambda-declarator, if
     /// any.
     unsigned MutableLoc;
@@ -1167,6 +1178,16 @@ struct DeclaratorChunk {
     /// \brief Retrieve the location of the ref-qualifier, if any.
     SourceLocation getRefQualifierLoc() const {
       return SourceLocation::getFromRawEncoding(RefQualifierLoc);
+    }
+
+    /// \brief Retrieve the location of the ref-qualifier, if any.
+    SourceLocation getConstQualifierLoc() const {
+      return SourceLocation::getFromRawEncoding(ConstQualifierLoc);
+    }
+
+    /// \brief Retrieve the location of the ref-qualifier, if any.
+    SourceLocation getVolatileQualifierLoc() const {
+      return SourceLocation::getFromRawEncoding(VolatileQualifierLoc);
     }
 
     /// \brief Retrieve the location of the 'mutable' qualifier, if any.
@@ -1305,6 +1326,8 @@ struct DeclaratorChunk {
                                      unsigned TypeQuals, 
                                      bool RefQualifierIsLvalueRef,
                                      SourceLocation RefQualifierLoc,
+                                     SourceLocation ConstQualifierLoc,
+                                     SourceLocation VolatileQualifierLoc,
                                      SourceLocation MutableLoc,
                                      ExceptionSpecificationType ESpecType,
                                      SourceLocation ESpecLoc,
@@ -1411,6 +1434,12 @@ private:
   /// GroupingParens - Set by Parser::ParseParenDeclarator().
   bool GroupingParens : 1;
 
+  /// FunctionDefinition - Is this Declarator for a function or member defintion
+  bool FunctionDefinition : 1;
+
+  // Redeclaration - Is this Declarator is a redeclaration.
+  bool Redeclaration : 1;
+
   /// Attrs - Attributes.
   ParsedAttributes Attrs;
 
@@ -1436,8 +1465,9 @@ public:
   Declarator(const DeclSpec &ds, TheContext C)
     : DS(ds), Range(ds.getSourceRange()), Context(C),
       InvalidType(DS.getTypeSpecType() == DeclSpec::TST_error),
-      GroupingParens(false), Attrs(ds.getAttributePool().getFactory()),
-      AsmLabel(0), InlineParamsUsed(false), Extension(false) {
+      GroupingParens(false), FunctionDefinition(false), Redeclaration(false),
+      Attrs(ds.getAttributePool().getFactory()), AsmLabel(0),
+      InlineParamsUsed(false), Extension(false) {
   }
 
   ~Declarator() {
@@ -1796,6 +1826,12 @@ public:
   bool hasEllipsis() const { return EllipsisLoc.isValid(); }
   SourceLocation getEllipsisLoc() const { return EllipsisLoc; }
   void setEllipsisLoc(SourceLocation EL) { EllipsisLoc = EL; }
+
+  void setFunctionDefinition(bool Val) { FunctionDefinition = Val; }
+  bool isFunctionDefinition() const { return FunctionDefinition; }
+
+  void setRedeclaration(bool Val) { Redeclaration = Val; }
+  bool isRedeclaration() const { return Redeclaration; }
 };
 
 /// FieldDeclarator - This little struct is used to capture information about

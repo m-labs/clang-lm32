@@ -373,6 +373,12 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
   CCCIsCPP = true;
   CCGenDiagnostics = true;
 
+  // Save the original job command(s).
+  std::string Cmd;
+  llvm::raw_string_ostream OS(Cmd);
+  C.PrintJob(OS, C.getJobs(), "\n", false);
+  OS.flush();
+
   // Clear stale state and suppress tool output.
   C.initCompilationForDiagnostics();
   Diags.Reset();
@@ -449,11 +455,26 @@ void Driver::generateCompilationDiagnostics(Compilation &C,
   // If the command succeeded, we are done.
   if (Res == 0) {
     Diag(clang::diag::note_drv_command_failed_diag_msg)
-      << "Preprocessed source(s) are located at:";
+      << "Preprocessed source(s) and associated run script(s) are located at:";
     ArgStringList Files = C.getTempFiles();
     for (ArgStringList::const_iterator it = Files.begin(), ie = Files.end();
-         it != ie; ++it)
+         it != ie; ++it) {
       Diag(clang::diag::note_drv_command_failed_diag_msg) << *it;
+
+      std::string Err;
+      std::string Script = StringRef(*it).rsplit('.').first;
+      Script += ".sh";
+      llvm::raw_fd_ostream ScriptOS(Script.c_str(), Err,
+                                    llvm::raw_fd_ostream::F_Excl |
+                                    llvm::raw_fd_ostream::F_Binary);
+      if (!Err.empty()) {
+        Diag(clang::diag::note_drv_command_failed_diag_msg)
+          << "Error generating run script: " + Script + " " + Err;
+      } else {
+        ScriptOS << Cmd;
+        Diag(clang::diag::note_drv_command_failed_diag_msg) << Script;
+      }
+    }
   } else {
     // Failure, remove preprocessed files.
     if (!C.getArgs().hasArg(options::OPT_save_temps))
@@ -1225,17 +1246,9 @@ static const Tool &SelectToolForJob(Compilation &C, const ToolChain *TC,
   // bottom up, so what we are actually looking for is an assembler job with a
   // compiler input.
 
-  // FIXME: This doesn't belong here, but ideally we will support static soon
-  // anyway.
-  bool HasStatic = (C.getArgs().hasArg(options::OPT_mkernel) ||
-                    C.getArgs().hasArg(options::OPT_static) ||
-                    C.getArgs().hasArg(options::OPT_fapple_kext));
-  bool IsDarwin = TC->getTriple().getOS() == llvm::Triple::Darwin;
-  bool IsIADefault = TC->IsIntegratedAssemblerDefault() &&
-    !(HasStatic && IsDarwin);
   if (C.getArgs().hasFlag(options::OPT_integrated_as,
-                         options::OPT_no_integrated_as,
-                         IsIADefault) &&
+                          options::OPT_no_integrated_as,
+                          TC->IsIntegratedAssemblerDefault()) &&
       !C.getArgs().hasArg(options::OPT_save_temps) &&
       isa<AssembleJobAction>(JA) &&
       Inputs->size() == 1 && isa<CompileJobAction>(*Inputs->begin())) {
@@ -1557,6 +1570,8 @@ const HostInfo *Driver::GetHostInfo(const char *TripleStr) const {
   case llvm::Triple::AuroraUX:
     return createAuroraUXHostInfo(*this, Triple);
   case llvm::Triple::Darwin:
+  case llvm::Triple::MacOSX:
+  case llvm::Triple::IOS:
     return createDarwinHostInfo(*this, Triple);
   case llvm::Triple::DragonFly:
     return createDragonFlyHostInfo(*this, Triple);

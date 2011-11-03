@@ -760,14 +760,14 @@ static bool checkIBOutletCommon(Sema &S, Decl *D, const AttributeList &Attr) {
   // have an object reference type.
   if (const ObjCIvarDecl *VD = dyn_cast<ObjCIvarDecl>(D)) {
     if (!VD->getType()->getAs<ObjCObjectPointerType>()) {
-      S.Diag(Attr.getLoc(), diag::err_iboutlet_object_type)
+      S.Diag(Attr.getLoc(), diag::warn_iboutlet_object_type)
         << Attr.getName() << VD->getType() << 0;
       return false;
     }
   }
   else if (const ObjCPropertyDecl *PD = dyn_cast<ObjCPropertyDecl>(D)) {
     if (!PD->getType()->getAs<ObjCObjectPointerType>()) {
-      S.Diag(Attr.getLoc(), diag::err_iboutlet_object_type) 
+      S.Diag(Attr.getLoc(), diag::warn_iboutlet_object_type) 
         << Attr.getName() << PD->getType() << 1;
       return false;
     }
@@ -805,7 +805,7 @@ static void handleIBOutletCollection(Sema &S, Decl *D,
 
   IdentifierInfo *II = Attr.getParameterName();
   if (!II)
-    II = &S.Context.Idents.get("id");
+    II = &S.Context.Idents.get("NSObject");
   
   ParsedType TypeRep = S.getTypeName(*II, Attr.getLoc(), 
                         S.getScopeForContext(D->getDeclContext()->getParent()));
@@ -818,8 +818,7 @@ static void handleIBOutletCollection(Sema &S, Decl *D,
   // FIXME. Gnu attribute extension ignores use of builtin types in
   // attributes. So, __attribute__((iboutletcollection(char))) will be
   // treated as __attribute__((iboutletcollection())).
-  if (!QT->isObjCIdType() && !QT->isObjCClassType() &&
-      !QT->isObjCObjectType()) {
+  if (!QT->isObjCIdType() && !QT->isObjCObjectType()) {
     S.Diag(Attr.getLoc(), diag::err_iboutletcollection_type) << II;
     return;
   }
@@ -1915,6 +1914,10 @@ static void handleWeakAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   }
 
   if (!isa<VarDecl>(D) && !isa<FunctionDecl>(D)) {
+    if (isa<CXXRecordDecl>(D)) {
+      D->addAttr(::new (S.Context) WeakAttr(Attr.getRange(), S.Context));
+      return;
+    }
     S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
       << Attr.getName() << ExpectedVariableOrFunction;
     return;
@@ -1946,7 +1949,7 @@ static void handleWeakImportAttr(Sema &S, Decl *D, const AttributeList &Attr) {
         << "weak_import" << 2 /*variable and function*/;
     else if (isa<ObjCPropertyDecl>(D) || isa<ObjCMethodDecl>(D) ||
              (S.Context.getTargetInfo().getTriple().isOSDarwin() &&
-              isa<ObjCInterfaceDecl>(D))) {
+              (isa<ObjCInterfaceDecl>(D) || isa<EnumDecl>(D)))) {
       // Nothing to warn about here.
     } else
       S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
@@ -2541,6 +2544,10 @@ static void handleAlignedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 }
 
 void Sema::AddAlignedAttr(SourceRange AttrRange, Decl *D, Expr *E) {
+  // FIXME: Handle pack-expansions here.
+  if (DiagnoseUnexpandedParameterPack(E))
+    return;
+
   if (E->isTypeDependent() || E->isValueDependent()) {
     // Save dependent expressions in the AST to be instantiated.
     D->addAttr(::new (Context) AlignedAttr(AttrRange, Context, true, E));
@@ -3136,10 +3143,14 @@ static void handleLaunchBoundsAttr(Sema &S, Decl *D, const AttributeList &Attr){
 //===----------------------------------------------------------------------===//
 
 static bool isValidSubjectOfNSAttribute(Sema &S, QualType type) {
-  return type->isObjCObjectPointerType() || S.Context.isObjCNSObjectType(type);
+  return type->isDependentType() || 
+         type->isObjCObjectPointerType() || 
+         S.Context.isObjCNSObjectType(type);
 }
 static bool isValidSubjectOfCFAttribute(Sema &S, QualType type) {
-  return type->isPointerType() || isValidSubjectOfNSAttribute(S, type);
+  return type->isDependentType() || 
+         type->isPointerType() || 
+         isValidSubjectOfNSAttribute(S, type);
 }
 
 static void handleNSConsumedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -3737,6 +3748,22 @@ void Sema::ProcessDeclAttributeList(Scope *S, Decl *D,
     dyn_cast<NamedDecl>(D)->getNameAsString();
     return;
   }
+}
+
+// Annotation attributes are the only attributes allowed after an access
+// specifier.
+bool Sema::ProcessAccessDeclAttributeList(AccessSpecDecl *ASDecl,
+                                          const AttributeList *AttrList) {
+  for (const AttributeList* l = AttrList; l; l = l->getNext()) {
+    if (l->getKind() == AttributeList::AT_annotate) {
+      handleAnnotateAttr(*this, ASDecl, *l);
+    } else {
+      Diag(l->getLoc(), diag::err_only_annotate_after_access_spec);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /// checkUnusedDeclAttributes - Check a list of attributes to see if it

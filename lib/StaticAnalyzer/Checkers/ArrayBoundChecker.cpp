@@ -84,7 +84,6 @@ void ArrayBoundChecker::checkLocation(SVal l, bool isLoad, const Stmt* LoadS,
   
   // Array bound check succeeded.  From this point forward the array bound
   // should always succeed.
-  assert(StInBound);
   C.addTransition(StInBound);
 }
 

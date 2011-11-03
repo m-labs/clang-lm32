@@ -71,6 +71,8 @@ public:
   unsigned MergeAllConstants : 1; /// Merge identical constants.
   unsigned NoCommon          : 1; /// Set when -fno-common or C++ is enabled.
   unsigned NoDwarf2CFIAsm    : 1; /// Set when -fno-dwarf2-cfi-asm is enabled.
+  unsigned NoDwarfDirectoryAsm : 1; /// Set when -fno-dwarf-directory-asm is
+                                    /// enabled.
   unsigned NoExecStack       : 1; /// Set when -Wa,--noexecstack is enabled.
   unsigned NoGlobalMerge     : 1; /// Set when -mno-global-merge is enabled.
   unsigned NoImplicitFloat   : 1; /// Set when -mno-implicit-float is enabled.
@@ -113,6 +115,9 @@ public:
   /// Enable additional debugging information.
   std::string DebugPass;
 
+  /// The string to embed in debug information as the current working directory.
+  std::string DebugCompilationDir;
+
   /// The string to embed in the debug information for the compile unit, if
   /// non-empty.
   std::string DwarfDebugFlags;
@@ -122,6 +127,9 @@ public:
 
   /// The float precision limit to use, if non-empty.
   std::string LimitFloatPrecision;
+
+  /// The name of the bitcode file to link before optzns.
+  std::string LinkBitcodeFile;
 
   /// The kind of inlining to perform.
   InliningMethod Inlining;

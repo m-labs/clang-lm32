@@ -45,6 +45,7 @@ static CXCursorKind GetCursorKind(const Attr *A) {
     case attr::IBOutletCollection: return CXCursor_IBOutletCollectionAttr;
     case attr::Final: return CXCursor_CXXFinalAttr;
     case attr::Override: return CXCursor_CXXOverrideAttr;
+    case attr::Annotate: return CXCursor_AnnotateAttr;
   }
 
   return CXCursor_UnexposedAttr;
@@ -201,6 +202,7 @@ CXCursor cxcursor::MakeCXCursor(Stmt *S, Decl *Parent, CXTranslationUnit TU,
   
   case Stmt::ArrayTypeTraitExprClass:
   case Stmt::AsTypeExprClass:
+  case Stmt::AtomicExprClass:
   case Stmt::BinaryConditionalOperatorClass:
   case Stmt::BinaryTypeTraitExprClass:
   case Stmt::CXXBindTemporaryExprClass:
@@ -428,7 +430,7 @@ CXCursor cxcursor::MakeCXCursor(Stmt *S, Decl *Parent, CXTranslationUnit TU,
     K = CXCursor_CallExpr;
     break;
       
-  case Stmt::ObjCMessageExprClass:      
+  case Stmt::ObjCMessageExprClass: {
     K = CXCursor_ObjCMessageExpr;
     int SelectorIdIndex = -1;
     // Check if cursor points to a selector id.
@@ -443,6 +445,11 @@ CXCursor cxcursor::MakeCXCursor(Stmt *S, Decl *Parent, CXTranslationUnit TU,
     }
     CXCursor C = { K, 0, { Parent, S, TU } };
     return getSelectorIdentifierCursor(SelectorIdIndex, C);
+  }
+      
+  case Stmt::MSDependentExistsStmtClass:
+    K = CXCursor_UnexposedStmt;
+    break;
   }
   
   CXCursor C = { K, 0, { Parent, S, TU } };
@@ -466,12 +473,12 @@ cxcursor::getCursorObjCSuperClassRef(CXCursor C) {
                                       reinterpret_cast<uintptr_t>(C.data[1])));
 }
 
-CXCursor cxcursor::MakeCursorObjCProtocolRef(ObjCProtocolDecl *Super, 
+CXCursor cxcursor::MakeCursorObjCProtocolRef(const ObjCProtocolDecl *Proto, 
                                              SourceLocation Loc, 
                                              CXTranslationUnit TU) {
-  assert(Super && TU && "Invalid arguments!");
+  assert(Proto && TU && "Invalid arguments!");
   void *RawLoc = reinterpret_cast<void *>(Loc.getRawEncoding());
-  CXCursor C = { CXCursor_ObjCProtocolRef, 0, { Super, RawLoc, TU } };
+  CXCursor C = { CXCursor_ObjCProtocolRef, 0, { (void*)Proto, RawLoc, TU } };
   return C;    
 }
 
@@ -483,7 +490,7 @@ cxcursor::getCursorObjCProtocolRef(CXCursor C) {
                                       reinterpret_cast<uintptr_t>(C.data[1])));
 }
 
-CXCursor cxcursor::MakeCursorObjCClassRef(ObjCInterfaceDecl *Class, 
+CXCursor cxcursor::MakeCursorObjCClassRef(const ObjCInterfaceDecl *Class, 
                                           SourceLocation Loc, 
                                           CXTranslationUnit TU) {
   // 'Class' can be null for invalid code.
@@ -491,7 +498,7 @@ CXCursor cxcursor::MakeCursorObjCClassRef(ObjCInterfaceDecl *Class,
     return MakeCXCursorInvalid(CXCursor_InvalidCode);
   assert(TU && "Invalid arguments!");
   void *RawLoc = reinterpret_cast<void *>(Loc.getRawEncoding());
-  CXCursor C = { CXCursor_ObjCClassRef, 0, { Class, RawLoc, TU } };
+  CXCursor C = { CXCursor_ObjCClassRef, 0, { (void*)Class, RawLoc, TU } };
   return C;    
 }
 
@@ -503,11 +510,11 @@ cxcursor::getCursorObjCClassRef(CXCursor C) {
                                       reinterpret_cast<uintptr_t>(C.data[1])));
 }
 
-CXCursor cxcursor::MakeCursorTypeRef(TypeDecl *Type, SourceLocation Loc, 
+CXCursor cxcursor::MakeCursorTypeRef(const TypeDecl *Type, SourceLocation Loc, 
                                      CXTranslationUnit TU) {
   assert(Type && TU && "Invalid arguments!");
   void *RawLoc = reinterpret_cast<void *>(Loc.getRawEncoding());
-  CXCursor C = { CXCursor_TypeRef, 0, { Type, RawLoc, TU } };
+  CXCursor C = { CXCursor_TypeRef, 0, { (void*)Type, RawLoc, TU } };
   return C;    
 }
 

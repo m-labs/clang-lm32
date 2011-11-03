@@ -740,6 +740,11 @@ public:
     assert(isActive() && "DiagnosticsEngine is inactive");
     return DiagObj->CurDiagID;
   }
+
+  /// \brief Retrieve the active diagnostic's location.
+  ///
+  /// \pre \c isActive()
+  SourceLocation getLocation() const { return DiagObj->CurDiagLoc; }
   
   /// \brief Clear out the current diagnostic.
   void Clear() { DiagObj = 0; }
@@ -949,6 +954,11 @@ public:
   const CharSourceRange &getRange(unsigned Idx) const {
     assert(Idx < DiagObj->NumDiagRanges && "Invalid diagnostic range index!");
     return DiagObj->DiagRanges[Idx];
+  }
+
+  /// \brief Return an array reference for this diagnostic's ranges.
+  ArrayRef<CharSourceRange> getRanges() const {
+    return llvm::makeArrayRef(DiagObj->DiagRanges, DiagObj->NumDiagRanges);
   }
 
   unsigned getNumFixItHints() const {

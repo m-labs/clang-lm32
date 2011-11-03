@@ -290,11 +290,32 @@ private:
   /// in the chain.
   DeclUpdateOffsetsMap DeclUpdateOffsets;
 
-  typedef llvm::DenseMap<serialization::DeclID,
-                         std::pair<Module *, uint64_t> >
+  struct ReplacedDeclInfo {
+    Module *Mod;
+    uint64_t Offset;
+    unsigned RawLoc;
+
+    ReplacedDeclInfo() : Mod(0), Offset(0), RawLoc(0) {}
+    ReplacedDeclInfo(Module *Mod, uint64_t Offset, unsigned RawLoc)
+      : Mod(Mod), Offset(Offset), RawLoc(RawLoc) {}
+  };
+
+  typedef llvm::DenseMap<serialization::DeclID, ReplacedDeclInfo>
       DeclReplacementMap;
   /// \brief Declarations that have been replaced in a later file in the chain.
   DeclReplacementMap ReplacedDecls;
+
+  struct FileDeclsInfo {
+    Module *Mod;
+    ArrayRef<serialization::LocalDeclID> Decls;
+
+    FileDeclsInfo() : Mod(0) {}
+    FileDeclsInfo(Module *Mod, ArrayRef<serialization::LocalDeclID> Decls)
+      : Mod(Mod), Decls(Decls) {}
+  };
+
+  /// \brief Map from a FileID to the file-level declarations that it contains.
+  llvm::DenseMap<FileID, FileDeclsInfo> FileDeclIDs;
 
   // Updates for visible decls can occur for other contexts than just the
   // TU, and when we read those update records, the actual context will not
@@ -679,7 +700,8 @@ private:
   RecordLocation TypeCursorForIndex(unsigned Index);
   void LoadedDecl(unsigned Index, Decl *D);
   Decl *ReadDeclRecord(serialization::DeclID ID);
-  RecordLocation DeclCursorForID(serialization::DeclID ID);
+  RecordLocation DeclCursorForID(serialization::DeclID ID,
+                                 unsigned &RawLocation);
   void loadDeclUpdateRecords(serialization::DeclID ID, Decl *D);
   void loadObjCChainedCategories(serialization::GlobalDeclID ID,
                                  ObjCInterfaceDecl *D);
@@ -702,6 +724,11 @@ private:
   serialization::PreprocessedEntityID
     findNextPreprocessedEntity(
                         GlobalSLocOffsetMapType::const_iterator SLocMapI) const;
+
+  /// \brief Returns (Module, Local index) pair for \arg GlobalIndex of a
+  /// preprocessed entity.
+  std::pair<Module *, unsigned>
+    getModulePreprocessedEntity(unsigned GlobalIndex);
 
   void PassInterestingDeclsToConsumer();
 
@@ -800,6 +827,11 @@ public:
   /// preprocessed entities that \arg Range encompasses.
   virtual std::pair<unsigned, unsigned>
       findPreprocessedEntitiesInRange(SourceRange Range);
+  
+  /// \brief Optionally returns true or false if the preallocated preprocessed
+  /// entity with index \arg Index came from file \arg FID.
+  virtual llvm::Optional<bool> isPreprocessedEntityInFileID(unsigned Index,
+                                                            FileID FID);
 
   /// \brief Read the header file information for the given file entry.
   virtual HeaderFileInfo GetHeaderFileInfo(const FileEntry *FE);
@@ -889,6 +921,9 @@ public:
   /// \brief Returns true if global DeclID \arg ID originated from module
   /// \arg M.
   bool isDeclIDFromModule(serialization::GlobalDeclID ID, Module &M) const;
+
+  /// \brief Returns the source location for the decl \arg ID.
+  SourceLocation getSourceLocationForDeclID(serialization::GlobalDeclID ID);
   
   /// \brief Resolve a declaration ID into a declaration, potentially
   /// building a new declaration.
@@ -973,6 +1008,12 @@ public:
   virtual ExternalLoadResult FindExternalLexicalDecls(const DeclContext *DC,
                                         bool (*isKindWeWant)(Decl::Kind),
                                         SmallVectorImpl<Decl*> &Decls);
+
+  /// \brief Get the decls that are contained in a file in the Offset/Length
+  /// range. \arg Length can be 0 to indicate a point at \arg Offset instead of
+  /// a range. 
+  virtual void FindFileRegionDecls(FileID File, unsigned Offset,unsigned Length,
+                                   SmallVectorImpl<Decl *> &Decls);
 
   /// \brief Notify ASTReader that we started deserialization of
   /// a decl or type so until FinishedDeserializing is called there may be
@@ -1245,6 +1286,9 @@ public:
 
   /// \brief Read the macro definition for this identifier.
   virtual void LoadMacroDefinition(IdentifierInfo *II);
+
+  /// \brief Update an out-of-date identifier.
+  virtual void updateOutOfDateIdentifier(IdentifierInfo &II);
 
   /// \brief Read the macro definition corresponding to this iterator
   /// into the unread macro record offsets table.

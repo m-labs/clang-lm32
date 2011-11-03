@@ -110,6 +110,8 @@ def disable_llvm_verifier : Flag<"-disable-llvm-verifier">,
   HelpText<"Don't run the LLVM IR verifier pass">;
 def disable_red_zone : Flag<"-disable-red-zone">,
   HelpText<"Do not emit code that uses the red zone.">;
+def fdebug_compilation_dir : Separate<"-fdebug-compilation-dir">,
+  HelpText<"The compilation directory to embed in the debug info.">;
 def dwarf_debug_flags : Separate<"-dwarf-debug-flags">,
   HelpText<"The string to embed in the Dwarf debug flags record.">;
 def fforbid_guard_variables : Flag<"-fforbid-guard-variables">,
@@ -117,6 +119,8 @@ def fforbid_guard_variables : Flag<"-fforbid-guard-variables">,
 def g : Flag<"-g">, HelpText<"Generate source level debug information">;
 def fno_dwarf2_cfi_asm : Flag<"-fno-dwarf2-cfi-asm">,
   HelpText<"Don't use the cfi directives">;
+def fno_dwarf_directory_asm : Flag<"-fno-dwarf-directory-asm">,
+  HelpText<"Don't separate directory and filename in .file directives">;
 def fcatch_undefined_behavior : Flag<"-fcatch-undefined-behavior">,
   HelpText<"Generate runtime checks for undefined behavior.">;
 def flimit_debug_info : Flag<"-flimit-debug-info">,
@@ -192,6 +196,8 @@ def mms_bitfields : Flag<"-mms-bitfields">,
   HelpText<"Set the default structure layout to be compatible with the Microsoft compiler standard.">;
 def mstackrealign : Flag<"-mstackrealign">,
   HelpText<"Force realign the stack at entry to every function.">;
+def mlink_bitcode_file : Separate<"-mlink-bitcode-file">,
+  HelpText<"Link the given bitcode file before performing optimizations.">;
 def O : Joined<"-O">, HelpText<"Optimization level">;
 def Os : Flag<"-Os">, HelpText<"Optimize for size">;
 def Oz : Flag<"-Oz">, HelpText<"Optimize for size, regardless of performance">;
@@ -224,6 +230,9 @@ def dump_build_information : Separate<"-dump-build-information">,
   HelpText<"output a dump of some build information to a file">;
 def diagnostic_log_file : Separate<"-diagnostic-log-file">,
   HelpText<"Filename (or -) to log diagnostics to">;
+def diagnostic_serialized_file : Separate<"-diagnostic-serialized-file">,
+  MetaVarName<"<filename>">,
+  HelpText<"File for serializing diagnostics in a binary format">;
 def fno_show_column : Flag<"-fno-show-column">,
   HelpText<"Do not include column number on diagnostics">;
 def fshow_column : Flag<"-fshow-column">,
@@ -553,6 +562,8 @@ def dump_deserialized_pch_decls : Flag<"-dump-deserialized-decls">,
   HelpText<"Dump declarations that are deserialized from PCH, for testing">;
 def error_on_deserialized_pch_decl : Separate<"-error-on-deserialized-decl">,
   HelpText<"Emit error if a specific declaration is deserialized from PCH, for testing">;
+def error_on_deserialized_pch_decl_EQ : Joined<"-error-on-deserialized-decl=">,
+  Alias<error_on_deserialized_pch_decl>;
 def fshort_wchar : Flag<"-fshort-wchar">,
   HelpText<"Force wchar_t to be a short unsigned int">;
 def fshort_enums : Flag<"-fshort-enums">,
@@ -597,13 +608,15 @@ def fdeprecated_macro : Flag<"-fdeprecated-macro">,
   HelpText<"Defines the __DEPRECATED macro">;
 def fno_deprecated_macro : Flag<"-fno-deprecated-macro">,
   HelpText<"Undefines the __DEPRECATED macro">;
+def fapple_pragma_pack : Flag<"-fapple-pragma-pack">,
+  HelpText<"Enable Apple gcc-compatible #pragma pack handling">;
 
 //===----------------------------------------------------------------------===//
 // Header Search Options
 //===----------------------------------------------------------------------===//
 
-def nostdinc : Flag<"-nostdinc">,
-  HelpText<"Disable standard #include directories">;
+def nostdsysteminc : Flag<"-nostdsysteminc">,
+  HelpText<"Disable standard system #include directories">;
 def nostdincxx : Flag<"-nostdinc++">,
   HelpText<"Disable standard #include directories for the C++ standard library">;
 def nobuiltininc : Flag<"-nobuiltininc">,
@@ -637,6 +650,8 @@ def objc_isystem : JoinedOrSeparate<"-objc-isystem">,
 def objcxx_isystem : JoinedOrSeparate<"-objcxx-isystem">,
   MetaVarName<"<directory>">,
   HelpText<"Add directory to the ObjC++ SYSTEM include search path">;
+def iframework : JoinedOrSeparate<"-iframework">, MetaVarName<"<directory>">,
+  HelpText<"Add directory to SYSTEM framework search path">;
 def isystem : JoinedOrSeparate<"-isystem">, MetaVarName<"<directory>">,
   HelpText<"Add directory to SYSTEM include search path">;
 def iwithsysroot : JoinedOrSeparate<"-iwithsysroot">,MetaVarName<"<directory>">,

@@ -305,7 +305,10 @@ void UserDefinedConversionSequence::DebugPrint() const {
     Before.DebugPrint();
     OS << " -> ";
   }
-  OS << '\'' << ConversionFunction << '\'';
+  if (ConversionFunction)
+    OS << '\'' << *ConversionFunction << '\'';
+  else
+    OS << "aggregate initialization";
   if (After.First || After.Second || After.Third) {
     OS << " -> ";
     After.DebugPrint();
@@ -540,6 +543,77 @@ OverloadCandidate::DeductionFailureInfo::getSecondArg() {
 void OverloadCandidateSet::clear() {
   inherited::clear();
   Functions.clear();
+}
+
+namespace {
+  class UnbridgedCastsSet {
+    struct Entry {
+      Expr **Addr;
+      Expr *Saved;
+    };
+    SmallVector<Entry, 2> Entries;
+    
+  public:
+    void save(Sema &S, Expr *&E) {
+      assert(E->hasPlaceholderType(BuiltinType::ARCUnbridgedCast));
+      Entry entry = { &E, E };
+      Entries.push_back(entry);
+      E = S.stripARCUnbridgedCast(E);
+    }
+
+    void restore() {
+      for (SmallVectorImpl<Entry>::iterator
+             i = Entries.begin(), e = Entries.end(); i != e; ++i) 
+        *i->Addr = i->Saved;
+    }
+  };
+}
+
+/// checkPlaceholderForOverload - Do any interesting placeholder-like
+/// preprocessing on the given expression.
+///
+/// \param unbridgedCasts a collection to which to add unbridged casts;
+///   without this, they will be immediately diagnosed as errors
+///
+/// Return true on unrecoverable error.
+static bool checkPlaceholderForOverload(Sema &S, Expr *&E,
+                                        UnbridgedCastsSet *unbridgedCasts = 0) {
+  if (const BuiltinType *placeholder =  E->getType()->getAsPlaceholderType()) {
+    // We can't handle overloaded expressions here because overload
+    // resolution might reasonably tweak them.
+    if (placeholder->getKind() == BuiltinType::Overload) return false;
+
+    // If the context potentially accepts unbridged ARC casts, strip
+    // the unbridged cast and add it to the collection for later restoration.
+    if (placeholder->getKind() == BuiltinType::ARCUnbridgedCast &&
+        unbridgedCasts) {
+      unbridgedCasts->save(S, E);
+      return false;
+    }
+
+    // Go ahead and check everything else.
+    ExprResult result = S.CheckPlaceholderExpr(E);
+    if (result.isInvalid())
+      return true;
+
+    E = result.take();
+    return false;
+  }
+
+  // Nothing to do.
+  return false;
+}
+
+/// checkArgPlaceholdersForOverload - Check a set of call operands for
+/// placeholders.
+static bool checkArgPlaceholdersForOverload(Sema &S, Expr **args,
+                                            unsigned numArgs,
+                                            UnbridgedCastsSet &unbridged) {
+  for (unsigned i = 0; i != numArgs; ++i)
+    if (checkPlaceholderForOverload(S, args[i], &unbridged))
+      return true;
+
+  return false;
 }
 
 // IsOverload - Determine whether the given New declaration is an
@@ -912,18 +986,18 @@ Sema::TryImplicitConversion(Expr *From, QualType ToType,
 /// explicit user-defined conversions are permitted.
 ExprResult
 Sema::PerformImplicitConversion(Expr *From, QualType ToType,
-                                AssignmentAction Action, bool AllowExplicit,
-                                bool Diagnose) {
+                                AssignmentAction Action, bool AllowExplicit) {
   ImplicitConversionSequence ICS;
-  return PerformImplicitConversion(From, ToType, Action, AllowExplicit, ICS,
-                                   Diagnose);
+  return PerformImplicitConversion(From, ToType, Action, AllowExplicit, ICS);
 }
 
 ExprResult
 Sema::PerformImplicitConversion(Expr *From, QualType ToType,
                                 AssignmentAction Action, bool AllowExplicit,
-                                ImplicitConversionSequence& ICS,
-                                bool Diagnose) {
+                                ImplicitConversionSequence& ICS) {
+  if (checkPlaceholderForOverload(*this, From))
+    return ExprError();
+
   // Objective-C ARC: Determine whether we will allow the writeback conversion.
   bool AllowObjCWritebackConversion
     = getLangOptions().ObjCAutoRefCount && 
@@ -935,8 +1009,6 @@ Sema::PerformImplicitConversion(Expr *From, QualType ToType,
                                      /*InOverloadResolution=*/false,
                                      /*CStyle=*/false,
                                      AllowObjCWritebackConversion);
-  if (!Diagnose && ICS.isFailure())
-    return ExprError();
   return PerformImplicitConversion(From, ToType, ICS, Action);
 }
 
@@ -1469,10 +1541,10 @@ bool Sema::IsIntegralPromotion(Expr *From, QualType FromType, QualType ToType) {
 /// FromType to ToType is a floating point promotion (C++ 4.6). If so,
 /// returns true and sets PromotedType to the promoted type.
 bool Sema::IsFloatingPointPromotion(QualType FromType, QualType ToType) {
-  /// An rvalue of type float can be converted to an rvalue of type
-  /// double. (C++ 4.6p1).
   if (const BuiltinType *FromBuiltin = FromType->getAs<BuiltinType>())
     if (const BuiltinType *ToBuiltin = ToType->getAs<BuiltinType>()) {
+      /// An rvalue of type float can be converted to an rvalue of type
+      /// double. (C++ 4.6p1).
       if (FromBuiltin->getKind() == BuiltinType::Float &&
           ToBuiltin->getKind() == BuiltinType::Double)
         return true;
@@ -1484,6 +1556,11 @@ bool Sema::IsFloatingPointPromotion(QualType FromType, QualType ToType) {
           (FromBuiltin->getKind() == BuiltinType::Float ||
            FromBuiltin->getKind() == BuiltinType::Double) &&
           (ToBuiltin->getKind() == BuiltinType::LongDouble))
+        return true;
+
+      // Half can be promoted to float.
+      if (FromBuiltin->getKind() == BuiltinType::Half &&
+          ToBuiltin->getKind() == BuiltinType::Float)
         return true;
     }
 
@@ -2627,11 +2704,15 @@ CompareImplicitConversionSequences(Sema &S,
   if (ICS1.getKind() != ICS2.getKind())
     return ImplicitConversionSequence::Indistinguishable;
 
+  ImplicitConversionSequence::CompareKind Result =
+      ImplicitConversionSequence::Indistinguishable;
+
   // Two implicit conversion sequences of the same form are
   // indistinguishable conversion sequences unless one of the
   // following rules apply: (C++ 13.3.3.2p3):
   if (ICS1.isStandard())
-    return CompareStandardConversionSequences(S, ICS1.Standard, ICS2.Standard);
+    Result = CompareStandardConversionSequences(S,
+                                                ICS1.Standard, ICS2.Standard);
   else if (ICS1.isUserDefined()) {
     // User-defined conversion sequence U1 is a better conversion
     // sequence than another user-defined conversion sequence U2 if
@@ -2641,12 +2722,21 @@ CompareImplicitConversionSequences(Sema &S,
     // U2 (C++ 13.3.3.2p3).
     if (ICS1.UserDefined.ConversionFunction ==
           ICS2.UserDefined.ConversionFunction)
-      return CompareStandardConversionSequences(S,
-                                                ICS1.UserDefined.After,
-                                                ICS2.UserDefined.After);
+      Result = CompareStandardConversionSequences(S,
+                                                  ICS1.UserDefined.After,
+                                                  ICS2.UserDefined.After);
   }
 
-  return ImplicitConversionSequence::Indistinguishable;
+  // List-initialization sequence L1 is a better conversion sequence than
+  // list-initialization sequence L2 if L1 converts to std::initializer_list<X>
+  // for some X and L2 does not.
+  if (Result == ImplicitConversionSequence::Indistinguishable &&
+      ICS1.isListInitializationSequence() &&
+      ICS2.isListInitializationSequence()) {
+    // FIXME: Find out if ICS1 converts to initializer_list and ICS2 doesn't.
+  }
+
+  return Result;
 }
 
 static bool hasSimilarType(ASTContext &Context, QualType T1, QualType T2) {
@@ -3687,6 +3777,105 @@ TryReferenceInit(Sema &S, Expr *&Init, QualType DeclType,
   return ICS;
 }
 
+static ImplicitConversionSequence
+TryCopyInitialization(Sema &S, Expr *From, QualType ToType,
+                      bool SuppressUserConversions,
+                      bool InOverloadResolution,
+                      bool AllowObjCWritebackConversion);
+
+/// TryListConversion - Try to copy-initialize a value of type ToType from the
+/// initializer list From.
+static ImplicitConversionSequence
+TryListConversion(Sema &S, InitListExpr *From, QualType ToType,
+                  bool SuppressUserConversions,
+                  bool InOverloadResolution,
+                  bool AllowObjCWritebackConversion) {
+  // C++11 [over.ics.list]p1:
+  //   When an argument is an initializer list, it is not an expression and
+  //   special rules apply for converting it to a parameter type.
+
+  ImplicitConversionSequence Result;
+  Result.setBad(BadConversionSequence::no_conversion, From, ToType);
+  Result.setListInitializationSequence();
+
+  // C++11 [over.ics.list]p2:
+  //   If the parameter type is std::initializer_list<X> or "array of X" and
+  //   all the elements can be implicitly converted to X, the implicit
+  //   conversion sequence is the worst conversion necessary to convert an
+  //   element of the list to X.
+  // FIXME: Recognize std::initializer_list.
+  // FIXME: Arrays don't make sense until we can deal with references.
+  if (ToType->isArrayType())
+    return Result;
+
+  // C++11 [over.ics.list]p3:
+  //   Otherwise, if the parameter is a non-aggregate class X and overload
+  //   resolution chooses a single best constructor [...] the implicit
+  //   conversion sequence is a user-defined conversion sequence. If multiple
+  //   constructors are viable but none is better than the others, the
+  //   implicit conversion sequence is a user-defined conversion sequence.
+  // FIXME: Implement this.
+  if (ToType->isRecordType() && !ToType->isAggregateType())
+    return Result;
+
+  // C++11 [over.ics.list]p4:
+  //   Otherwise, if the parameter has an aggregate type which can be
+  //   initialized from the initializer list [...] the implicit conversion
+  //   sequence is a user-defined conversion sequence.
+  if (ToType->isAggregateType()) {
+    // Type is an aggregate, argument is an init list. At this point it comes
+    // down to checking whether the initialization works.
+    // FIXME: Find out whether this parameter is consumed or not.
+    InitializedEntity Entity =
+        InitializedEntity::InitializeParameter(S.Context, ToType,
+                                               /*Consumed=*/false);
+    if (S.CanPerformCopyInitialization(Entity, S.Owned(From))) {
+      Result.setUserDefined();
+      Result.UserDefined.Before.setAsIdentityConversion();
+      // Initializer lists don't have a type.
+      Result.UserDefined.Before.setFromType(QualType());
+      Result.UserDefined.Before.setAllToTypes(QualType());
+
+      Result.UserDefined.After.setAsIdentityConversion();
+      Result.UserDefined.After.setFromType(ToType);
+      Result.UserDefined.After.setAllToTypes(ToType);
+    }
+    return Result;
+  }
+
+  // C++11 [over.ics.list]p5:
+  //   Otherwise, if the parameter is a reference, see 13.3.3.1.4.
+  // FIXME: Implement this.
+  if (ToType->isReferenceType())
+    return Result;
+
+  // C++11 [over.ics.list]p6:
+  //   Otherwise, if the parameter type is not a class:
+  if (!ToType->isRecordType()) {
+    //    - if the initializer list has one element, the implicit conversion
+    //      sequence is the one required to convert the element to the
+    //      parameter type.
+    // FIXME: Catch narrowing here?
+    unsigned NumInits = From->getNumInits();
+    if (NumInits == 1)
+      Result = TryCopyInitialization(S, From->getInit(0), ToType,
+                                     SuppressUserConversions,
+                                     InOverloadResolution,
+                                     AllowObjCWritebackConversion);
+    //    - if the initializer list has no elements, the implicit conversion
+    //      sequence is the identity conversion.
+    else if (NumInits == 0) {
+      Result.setStandard();
+      Result.Standard.setAsIdentityConversion();
+    }
+    return Result;
+  }
+
+  // C++11 [over.ics.list]p7:
+  //   In all cases other than those enumerated above, no conversion is possible
+  return Result;
+}
+
 /// TryCopyInitialization - Try to copy-initialize a value of type
 /// ToType from the expression From. Return the implicit conversion
 /// sequence required to pass this argument, which may be a bad
@@ -3698,6 +3887,10 @@ TryCopyInitialization(Sema &S, Expr *From, QualType ToType,
                       bool SuppressUserConversions,
                       bool InOverloadResolution,
                       bool AllowObjCWritebackConversion) {
+  if (InitListExpr *FromInitList = dyn_cast<InitListExpr>(From))
+    return TryListConversion(S, FromInitList, ToType, SuppressUserConversions,
+                             InOverloadResolution,AllowObjCWritebackConversion);
+
   if (ToType->isReferenceType())
     return TryReferenceInit(S, From, ToType,
                             /*FIXME:*/From->getLocStart(),
@@ -3918,6 +4111,9 @@ TryContextuallyConvertToBool(Sema &S, Expr *From) {
 /// PerformContextuallyConvertToBool - Perform a contextual conversion
 /// of the expression From to bool (C++0x [conv]p3).
 ExprResult Sema::PerformContextuallyConvertToBool(Expr *From) {
+  if (checkPlaceholderForOverload(*this, From))
+    return ExprError();
+
   ImplicitConversionSequence ICS = TryContextuallyConvertToBool(*this, From);
   if (!ICS.isBad())
     return PerformImplicitConversion(From, Context.BoolTy, ICS, AA_Converting);
@@ -3977,6 +4173,9 @@ TryContextuallyConvertToObjCPointer(Sema &S, Expr *From) {
 /// PerformContextuallyConvertToObjCPointer - Perform a contextual
 /// conversion of the expression From to an Objective-C pointer type.
 ExprResult Sema::PerformContextuallyConvertToObjCPointer(Expr *From) {
+  if (checkPlaceholderForOverload(*this, From))
+    return ExprError();
+
   QualType Ty = Context.getObjCIdType();
   ImplicitConversionSequence ICS =
     TryContextuallyConvertToObjCPointer(*this, From);
@@ -6375,7 +6574,11 @@ Sema::AddBuiltinOperatorCandidates(OverloadedOperatorKind Op,
 
   // Exit early when no non-record types have been added to the candidate set
   // for any of the arguments to the operator.
-  if (!HasNonRecordCandidateType)
+  //
+  // We can't exit early for !, ||, or &&, since there we have always have
+  // 'bool' overloads.
+  if (!HasNonRecordCandidateType && 
+      !(Op == OO_Exclaim || Op == OO_AmpAmp || Op == OO_PipePipe))
     return;
 
   // Setup an object to manage the common state for building overloads.
@@ -7506,8 +7709,9 @@ struct CompareOverloadCandidatesForDisplay {
 
         if (L->DeductionFailure.Result != R->DeductionFailure.Result)
           return RankDeductionFailure(L->DeductionFailure)
-              <= RankDeductionFailure(R->DeductionFailure);
-      }
+               < RankDeductionFailure(R->DeductionFailure);
+      } else if (R->FailureKind == ovl_fail_bad_deduction)
+        return false;
 
       // TODO: others?
     }
@@ -8115,25 +8319,31 @@ Sema::ResolveSingleFunctionTemplateSpecialization(OverloadExpr *ovl,
 
 
 
-// Resolve and fix an overloaded expression that
-// can be resolved because it identifies a single function
-// template specialization
+// Resolve and fix an overloaded expression that can be resolved
+// because it identifies a single function template specialization.
+//
 // Last three arguments should only be supplied if Complain = true
-ExprResult Sema::ResolveAndFixSingleFunctionTemplateSpecialization(
-             Expr *SrcExpr, bool doFunctionPointerConverion, bool complain,
-                                  const SourceRange& OpRangeForComplaining, 
+//
+// Return true if it was logically possible to so resolve the
+// expression, regardless of whether or not it succeeded.  Always
+// returns true if 'complain' is set.
+bool Sema::ResolveAndFixSingleFunctionTemplateSpecialization(
+                      ExprResult &SrcExpr, bool doFunctionPointerConverion,
+                   bool complain, const SourceRange& OpRangeForComplaining, 
                                            QualType DestTypeForComplaining, 
                                             unsigned DiagIDForComplaining) {
-  assert(SrcExpr->getType() == Context.OverloadTy);
+  assert(SrcExpr.get()->getType() == Context.OverloadTy);
 
-  OverloadExpr::FindResult ovl = OverloadExpr::find(SrcExpr);
+  OverloadExpr::FindResult ovl = OverloadExpr::find(SrcExpr.get());
 
   DeclAccessPair found;
   ExprResult SingleFunctionExpression;
   if (FunctionDecl *fn = ResolveSingleFunctionTemplateSpecialization(
                            ovl.Expression, /*complain*/ false, &found)) {
-    if (DiagnoseUseOfDecl(fn, SrcExpr->getSourceRange().getBegin()))
-      return ExprError();
+    if (DiagnoseUseOfDecl(fn, SrcExpr.get()->getSourceRange().getBegin())) {
+      SrcExpr = ExprError();
+      return true;
+    }
 
     // It is only correct to resolve to an instance method if we're
     // resolving a form that's permitted to be a pointer to member.
@@ -8142,28 +8352,34 @@ ExprResult Sema::ResolveAndFixSingleFunctionTemplateSpecialization(
     if (!ovl.HasFormOfMemberPointer &&
         isa<CXXMethodDecl>(fn) &&
         cast<CXXMethodDecl>(fn)->isInstance()) {
-      if (complain) {
-        Diag(ovl.Expression->getExprLoc(),
-             diag::err_invalid_use_of_bound_member_func)
-          << ovl.Expression->getSourceRange();
-        // TODO: I believe we only end up here if there's a mix of
-        // static and non-static candidates (otherwise the expression
-        // would have 'bound member' type, not 'overload' type).
-        // Ideally we would note which candidate was chosen and why
-        // the static candidates were rejected.
-      }
-      
-      return ExprError();
+      if (!complain) return false;
+
+      Diag(ovl.Expression->getExprLoc(),
+           diag::err_bound_member_function)
+        << 0 << ovl.Expression->getSourceRange();
+
+      // TODO: I believe we only end up here if there's a mix of
+      // static and non-static candidates (otherwise the expression
+      // would have 'bound member' type, not 'overload' type).
+      // Ideally we would note which candidate was chosen and why
+      // the static candidates were rejected.
+      SrcExpr = ExprError();
+      return true;
     }
 
     // Fix the expresion to refer to 'fn'.
     SingleFunctionExpression =
-      Owned(FixOverloadedFunctionReference(SrcExpr, found, fn));
+      Owned(FixOverloadedFunctionReference(SrcExpr.take(), found, fn));
 
     // If desired, do function-to-pointer decay.
-    if (doFunctionPointerConverion)
+    if (doFunctionPointerConverion) {
       SingleFunctionExpression =
         DefaultFunctionArrayLvalueConversion(SingleFunctionExpression.take());
+      if (SingleFunctionExpression.isInvalid()) {
+        SrcExpr = ExprError();
+        return true;
+      }
+    }
   }
 
   if (!SingleFunctionExpression.isUsable()) {
@@ -8173,12 +8389,17 @@ ExprResult Sema::ResolveAndFixSingleFunctionTemplateSpecialization(
         << DestTypeForComplaining
         << OpRangeForComplaining 
         << ovl.Expression->getQualifierLoc().getSourceRange();
-      NoteAllOverloadCandidates(SrcExpr);
-    }      
-    return ExprError();
+      NoteAllOverloadCandidates(SrcExpr.get());
+
+      SrcExpr = ExprError();
+      return true;
+    }
+
+    return false;
   }
 
-  return SingleFunctionExpression;
+  SrcExpr = SingleFunctionExpression;
+  return true;
 }
 
 /// \brief Add a single candidate to the overload set.
@@ -8466,6 +8687,10 @@ Sema::BuildOverloadedCallExpr(Scope *S, Expr *Fn, UnresolvedLookupExpr *ULE,
            "std is associated namespace but not doing ADL");
 #endif
 
+  UnbridgedCastsSet UnbridgedCasts;
+  if (checkArgPlaceholdersForOverload(*this, Args, NumArgs, UnbridgedCasts))
+    return ExprError();
+
   OverloadCandidateSet CandidateSet(Fn->getExprLoc());
 
   // Add the functions denoted by the callee to the set of candidate
@@ -8492,14 +8717,15 @@ Sema::BuildOverloadedCallExpr(Scope *S, Expr *Fn, UnresolvedLookupExpr *ULE,
                                  RParenLoc, /*EmptyLookup=*/true);
   }
 
+  UnbridgedCasts.restore();
+
   OverloadCandidateSet::iterator Best;
   switch (CandidateSet.BestViableFunction(*this, Fn->getLocStart(), Best)) {
   case OR_Success: {
     FunctionDecl *FDecl = Best->Function;
     MarkDeclarationReferenced(Fn->getExprLoc(), FDecl);
     CheckUnresolvedLookupAccess(ULE, Best->FoundDecl);
-    DiagnoseUseOfDecl(FDecl? FDecl : Best->FoundDecl.getDecl(),
-                      ULE->getNameLoc());
+    DiagnoseUseOfDecl(FDecl, ULE->getNameLoc());
     Fn = FixOverloadedFunctionReference(Fn, Best->FoundDecl, FDecl);
     return BuildResolvedCallExpr(Fn, FDecl, LParenLoc, Args, NumArgs, RParenLoc,
                                  ExecConfig);
@@ -8576,12 +8802,8 @@ Sema::CreateOverloadedUnaryOp(SourceLocation OpLoc, unsigned OpcIn,
   // TODO: provide better source location info.
   DeclarationNameInfo OpNameInfo(OpName, OpLoc);
 
-  if (Input->getObjectKind() == OK_ObjCProperty) {
-    ExprResult Result = ConvertPropertyForRValue(Input);
-    if (Result.isInvalid())
-      return ExprError();
-    Input = Result.take();
-  }
+  if (checkPlaceholderForOverload(*this, Input))
+    return ExprError();
 
   Expr *Args[2] = { Input, 0 };
   unsigned NumArgs = 1;
@@ -8814,45 +9036,15 @@ Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
                                                    OpLoc));
   }
 
-  // Always do property rvalue conversions on the RHS.
-  if (Args[1]->getObjectKind() == OK_ObjCProperty) {
-    ExprResult Result = ConvertPropertyForRValue(Args[1]);
-    if (Result.isInvalid())
-      return ExprError();
-    Args[1] = Result.take();
-  }
+  // Always do placeholder-like conversions on the RHS.
+  if (checkPlaceholderForOverload(*this, Args[1]))
+    return ExprError();
 
-  // The LHS is more complicated.
-  if (Args[0]->getObjectKind() == OK_ObjCProperty) {
-
-    // There's a tension for assignment operators between primitive
-    // property assignment and the overloaded operators.
-    if (BinaryOperator::isAssignmentOp(Opc)) {
-      const ObjCPropertyRefExpr *PRE = LHS->getObjCProperty();
-
-      // Is the property "logically" settable?
-      bool Settable = (PRE->isExplicitProperty() ||
-                       PRE->getImplicitPropertySetter());
-
-      // To avoid gratuitously inventing semantics, use the primitive
-      // unless it isn't.  Thoughts in case we ever really care:
-      // - If the property isn't logically settable, we have to
-      //   load and hope.
-      // - If the property is settable and this is simple assignment,
-      //   we really should use the primitive.
-      // - If the property is settable, then we could try overloading
-      //   on a generic lvalue of the appropriate type;  if it works
-      //   out to a builtin candidate, we would do that same operation
-      //   on the property, and otherwise just error.
-      if (Settable)
-        return CreateBuiltinBinOp(OpLoc, Opc, Args[0], Args[1]);
-    }
-
-    ExprResult Result = ConvertPropertyForRValue(Args[0]);
-    if (Result.isInvalid())
-      return ExprError();
-    Args[0] = Result.take();
-  }
+  // Do placeholder-like conversion on the LHS; note that we should
+  // not get here with a PseudoObject LHS.
+  assert(Args[0]->getObjectKind() != OK_ObjCProperty);
+  if (checkPlaceholderForOverload(*this, Args[0]))
+    return ExprError();
 
   // If this is the assignment operator, we only perform overload resolution
   // if the left-hand side is a class or enumeration type. This is actually
@@ -9076,18 +9268,11 @@ Sema::CreateOverloadedArraySubscriptExpr(SourceLocation LLoc,
                                                    RLoc));
   }
 
-  if (Args[0]->getObjectKind() == OK_ObjCProperty) {
-    ExprResult Result = ConvertPropertyForRValue(Args[0]);
-    if (Result.isInvalid())
-      return ExprError();
-    Args[0] = Result.take();
-  }
-  if (Args[1]->getObjectKind() == OK_ObjCProperty) {
-    ExprResult Result = ConvertPropertyForRValue(Args[1]);
-    if (Result.isInvalid())
-      return ExprError();
-    Args[1] = Result.take();
-  }
+  // Handle placeholders on both operands.
+  if (checkPlaceholderForOverload(*this, Args[0]))
+    return ExprError();
+  if (checkPlaceholderForOverload(*this, Args[1]))
+    return ExprError();
 
   // Build an empty overload set.
   OverloadCandidateSet CandidateSet(LLoc);
@@ -9288,6 +9473,10 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
     return MaybeBindToTemporary(call);
   }
 
+  UnbridgedCastsSet UnbridgedCasts;
+  if (checkArgPlaceholdersForOverload(*this, Args, NumArgs, UnbridgedCasts))
+    return ExprError();
+
   MemberExpr *MemExpr;
   CXXMethodDecl *Method = 0;
   DeclAccessPair FoundDecl = DeclAccessPair::make(0, AS_public);
@@ -9297,6 +9486,7 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
     Method = cast<CXXMethodDecl>(MemExpr->getMemberDecl());
     FoundDecl = MemExpr->getFoundDecl();
     Qualifier = MemExpr->getQualifier();
+    UnbridgedCasts.restore();
   } else {
     UnresolvedMemberExpr *UnresExpr = cast<UnresolvedMemberExpr>(NakedMemExpr);
     Qualifier = UnresExpr->getQualifier();
@@ -9349,6 +9539,8 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
     }
 
     DeclarationName DeclName = UnresExpr->getMemberName();
+
+    UnbridgedCasts.restore();
 
     OverloadCandidateSet::iterator Best;
     switch (CandidateSet.BestViableFunction(*this, UnresExpr->getLocStart(),
@@ -9461,12 +9653,13 @@ Sema::BuildCallToObjectOfClassType(Scope *S, Expr *Obj,
                                    SourceLocation LParenLoc,
                                    Expr **Args, unsigned NumArgs,
                                    SourceLocation RParenLoc) {
+  if (checkPlaceholderForOverload(*this, Obj))
+    return ExprError();
   ExprResult Object = Owned(Obj);
-  if (Object.get()->getObjectKind() == OK_ObjCProperty) {
-    Object = ConvertPropertyForRValue(Object.take());
-    if (Object.isInvalid())
-      return ExprError();
-  }
+
+  UnbridgedCastsSet UnbridgedCasts;
+  if (checkArgPlaceholdersForOverload(*this, Args, NumArgs, UnbridgedCasts))
+    return ExprError();
 
   assert(Object.get()->getType()->isRecordType() && "Requires object type argument");
   const RecordType *Record = Object.get()->getType()->getAs<RecordType>();
@@ -9587,6 +9780,8 @@ Sema::BuildCallToObjectOfClassType(Scope *S, Expr *Obj,
 
   if (Best == CandidateSet.end())
     return true;
+
+  UnbridgedCasts.restore();
 
   if (Best->Function == 0) {
     // Since there is no function declaration, this is one of the
@@ -9737,12 +9932,8 @@ Sema::BuildOverloadedArrowExpr(Scope *S, Expr *Base, SourceLocation OpLoc) {
   assert(Base->getType()->isRecordType() &&
          "left-hand side must have class type");
 
-  if (Base->getObjectKind() == OK_ObjCProperty) {
-    ExprResult Result = ConvertPropertyForRValue(Base);
-    if (Result.isInvalid())
-      return ExprError();
-    Base = Result.take();
-  }
+  if (checkPlaceholderForOverload(*this, Base))
+    return ExprError();
 
   SourceLocation Loc = Base->getExprLoc();
 

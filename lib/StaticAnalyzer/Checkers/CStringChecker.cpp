@@ -1,4 +1,4 @@
-//= CStringChecker.h - Checks calls to C string functions ----------*- C++ -*-//
+//= CStringChecker.cpp - Checks calls to C string functions --------*- C++ -*-//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -659,7 +659,7 @@ SVal CStringChecker::getCStringLength(CheckerContext &C, const ProgramState *&st
     // C string. In the context of locations, the only time we can issue such
     // a warning is for labels.
     if (loc::GotoLabel *Label = dyn_cast<loc::GotoLabel>(&Buf)) {
-      if (ExplodedNode *N = C.generateNode(state)) {
+      if (ExplodedNode *N = C.addTransition(state)) {
         if (!BT_NotCString)
           BT_NotCString.reset(new BuiltinBug("API",
             "Argument is not a null-terminated string."));
@@ -716,7 +716,7 @@ SVal CStringChecker::getCStringLength(CheckerContext &C, const ProgramState *&st
     // Other regions (mostly non-data) can't have a reliable C string length.
     // In this case, an error is emitted and UndefinedVal is returned.
     // The caller should always be prepared to handle this case.
-    if (ExplodedNode *N = C.generateNode(state)) {
+    if (ExplodedNode *N = C.addTransition(state)) {
       if (!BT_NotCString)
         BT_NotCString.reset(new BuiltinBug("API",
           "Argument is not a null-terminated string."));
@@ -803,7 +803,7 @@ bool CStringChecker::SummarizeRegion(raw_ostream &os, ASTContext &Ctx,
   case MemRegion::FunctionTextRegionKind: {
     const FunctionDecl *FD = cast<FunctionTextRegion>(MR)->getDecl();
     if (FD)
-      os << "the address of the function '" << FD << "'";
+      os << "the address of the function '" << *FD << '\'';
     else
       os << "the address of a function";
     return true;
@@ -1017,7 +1017,7 @@ void CStringChecker::evalMemcmp(CheckerContext &C, const CallExpr *CE) const {
       state = CheckBufferAccess(C, state, Size, Left);
       if (state) {
         state = StSameBuf->BindExpr(CE, svalBuilder.makeZeroVal(CE->getType()));
-        C.addTransition(state); 
+        C.addTransition(state);
       }
     }
 
@@ -1733,7 +1733,7 @@ void CStringChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
     if (!isa<StringLiteral>(Init))
       continue;
 
-    Loc VarLoc = state->getLValue(D, C.getPredecessor()->getLocationContext());
+    Loc VarLoc = state->getLValue(D, C.getLocationContext());
     const MemRegion *MR = VarLoc.getAsRegion();
     if (!MR)
       continue;
@@ -1842,7 +1842,7 @@ void CStringChecker::checkDeadSymbols(SymbolReaper &SR,
   }
 
   state = state->set<CStringLength>(Entries);
-  C.generateNode(state);
+  C.addTransition(state);
 }
 
 void ento::registerCStringChecker(CheckerManager &mgr) {

@@ -1,4 +1,4 @@
-// RUN: c-index-test -test-load-source-usrs all %s | FileCheck %s
+                                                                 
 
 static inline int my_helper(int x, int y) { return x + y; }
 
@@ -80,6 +80,15 @@ int test_multi_declaration(void) {
 - (void)method;
 @end
 
+@interface CWithExt2
+@end
+@interface CWithExt2 () {
+  id var_ext;
+}
+@property (assign) id pro_ext;
+@end
+
+// RUN: c-index-test -test-load-source-usrs all -ccc-host-triple x86_64-apple-macosx10.7 %s | FileCheck %s
 // CHECK: usrs.m c:usrs.m@67@F@my_helper Extent=[3:1 - 3:60]
 // CHECK: usrs.m c:usrs.m@95@F@my_helper@x Extent=[3:29 - 3:34]
 // CHECK: usrs.m c:usrs.m@102@F@my_helper@y Extent=[3:36 - 3:41]
@@ -137,6 +146,12 @@ int test_multi_declaration(void) {
 // CHECK: usrs.m c:usrs.m@980@F@test_multi_declaration@baz Extent=[74:25 - 74:32]
 // CHECK: usrs.m c:objc(pl)P1 Extent=[79:1 - 81:5]
 // CHECK: usrs.m c:objc(pl)P1(im)method Extent=[80:1 - 80:16]
+// CHECK: usrs.m c:objc(cs)CWithExt2 Extent=[83:1 - 84:5]
+// CHECK: usrs.m c:objc(ext)CWithExt2@usrs.m@1111 Extent=[85:1 - 89:5]
+// CHECK: usrs.m c:objc(cs)CWithExt2@var_ext Extent=[86:3 - 86:13]
+// CHECK: usrs.m c:objc(cs)CWithExt2(py)pro_ext Extent=[88:1 - 88:30]
+// CHECK: usrs.m c:objc(cs)CWithExt2(im)pro_ext Extent=[88:23 - 88:30]
+// CHECK: usrs.m c:objc(cs)CWithExt2(im)setPro_ext: Extent=[88:23 - 88:30]
 
 // RUN: c-index-test -test-load-source all %s | FileCheck -check-prefix=CHECK-source %s
 // CHECK-source: usrs.m:3:19: FunctionDecl=my_helper:3:19 (Definition) Extent=[3:1 - 3:60]

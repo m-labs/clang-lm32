@@ -78,7 +78,7 @@ public:
 
   bool evalCall(const CallExpr *CE, CheckerContext &C) const;
   void checkDeadSymbols(SymbolReaper &SymReaper, CheckerContext &C) const;
-  void checkEndPath(EndOfFunctionNodeBuilder &B, ExprEngine &Eng) const;
+  void checkEndPath(CheckerContext &C) const;
   void checkPreStmt(const ReturnStmt *S, CheckerContext &C) const;
   const ProgramState *evalAssume(const ProgramState *state, SVal Cond,
                             bool Assumption) const;
@@ -385,7 +385,7 @@ bool MallocChecker::SummarizeRegion(raw_ostream &os,
   case MemRegion::FunctionTextRegionKind: {
     const FunctionDecl *FD = cast<FunctionTextRegion>(MR)->getDecl();
     if (FD)
-      os << "the address of the function '" << FD << "'";
+      os << "the address of the function '" << *FD << '\'';
     else
       os << "the address of a function";
     return true;
@@ -590,7 +590,7 @@ void MallocChecker::checkDeadSymbols(SymbolReaper &SymReaper,
     }
   }
   
-  ExplodedNode *N = C.generateNode(state->set<RegionState>(RS));
+  ExplodedNode *N = C.addTransition(state->set<RegionState>(RS));
 
   // FIXME: This does not handle when we have multiple leaks at a single
   // place.
@@ -604,21 +604,20 @@ void MallocChecker::checkDeadSymbols(SymbolReaper &SymReaper,
   }
 }
 
-void MallocChecker::checkEndPath(EndOfFunctionNodeBuilder &B,
-                                 ExprEngine &Eng) const {
-  const ProgramState *state = B.getState();
+void MallocChecker::checkEndPath(CheckerContext &Ctx) const {
+  const ProgramState *state = Ctx.getState();
   RegionStateTy M = state->get<RegionState>();
 
   for (RegionStateTy::iterator I = M.begin(), E = M.end(); I != E; ++I) {
     RefState RS = I->second;
     if (RS.isAllocated()) {
-      ExplodedNode *N = B.generateNode(state);
+      ExplodedNode *N = Ctx.addTransition(state);
       if (N) {
         if (!BT_Leak)
           BT_Leak.reset(new BuiltinBug("Memory leak",
                     "Allocated memory never released. Potential memory leak."));
         BugReport *R = new BugReport(*BT_Leak, BT_Leak->getDescription(), N);
-        Eng.getBugReporter().EmitReport(R);
+        Ctx.EmitReport(R);
       }
     }
   }
@@ -669,7 +668,7 @@ void MallocChecker::checkLocation(SVal l, bool isLoad, const Stmt *S,
   if (Sym) {
     const RefState *RS = C.getState()->get<RegionState>(Sym);
     if (RS && RS->isReleased()) {
-      if (ExplodedNode *N = C.generateNode()) {
+      if (ExplodedNode *N = C.addTransition()) {
         if (!BT_UseFree)
           BT_UseFree.reset(new BuiltinBug("Use dynamically allocated memory "
                                           "after it is freed."));

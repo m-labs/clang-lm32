@@ -237,6 +237,9 @@ const ObjCCategoryDecl* ObjCCategoryDecl::getNextClassExtension() const {
 
 ObjCIvarDecl *ObjCInterfaceDecl::lookupInstanceVariable(IdentifierInfo *ID,
                                               ObjCInterfaceDecl *&clsDeclared) {
+  if (ExternallyCompleted)
+    LoadExternalDefinition();
+
   ObjCInterfaceDecl* ClassDecl = this;
   while (ClassDecl != NULL) {
     if (ObjCIvarDecl *I = ClassDecl->getIvarDecl(ID)) {
@@ -261,6 +264,9 @@ ObjCIvarDecl *ObjCInterfaceDecl::lookupInstanceVariable(IdentifierInfo *ID,
 /// the it returns NULL.
 ObjCInterfaceDecl *ObjCInterfaceDecl::lookupInheritedClass(
                                         const IdentifierInfo*ICName) {
+  if (ExternallyCompleted)
+    LoadExternalDefinition();
+
   ObjCInterfaceDecl* ClassDecl = this;
   while (ClassDecl != NULL) {
     if (ClassDecl->getIdentifier() == ICName)
@@ -315,6 +321,9 @@ ObjCMethodDecl *ObjCInterfaceDecl::lookupMethod(Selector Sel,
 ObjCMethodDecl *ObjCInterfaceDecl::lookupPrivateMethod(
                                    const Selector &Sel,
                                    bool Instance) {
+  if (ExternallyCompleted)
+    LoadExternalDefinition();
+
   ObjCMethodDecl *Method = 0;
   if (ObjCImplementationDecl *ImpDecl = getImplementation())
     Method = Instance ? ImpDecl->getInstanceMethod(Sel) 
@@ -349,6 +358,13 @@ ObjCMethodDecl *ObjCMethodDecl::Create(ASTContext &C,
                                 isDefined,
                                 impControl,
                                 HasRelatedResultType);
+}
+
+void ObjCMethodDecl::setAsRedeclaration(const ObjCMethodDecl *PrevMethod) {
+  assert(PrevMethod);
+  getASTContext().setObjCMethodRedeclaration(PrevMethod, this);
+  IsRedeclaration = true;
+  PrevMethod->HasRedeclaration = true;
 }
 
 void ObjCMethodDecl::setParamsAndSelLocs(ASTContext &C,
@@ -393,6 +409,11 @@ void ObjCMethodDecl::setMethodParams(ASTContext &C,
 ObjCMethodDecl *ObjCMethodDecl::getNextRedeclaration() {
   ASTContext &Ctx = getASTContext();
   ObjCMethodDecl *Redecl = 0;
+  if (HasRedeclaration)
+    Redecl = const_cast<ObjCMethodDecl*>(Ctx.getObjCMethodRedeclaration(this));
+  if (Redecl)
+    return Redecl;
+
   Decl *CtxD = cast<Decl>(getDeclContext());
 
   if (ObjCInterfaceDecl *IFD = dyn_cast<ObjCInterfaceDecl>(CtxD)) {
@@ -414,6 +435,12 @@ ObjCMethodDecl *ObjCMethodDecl::getNextRedeclaration() {
       Redecl = CatD->getMethod(getSelector(), isInstanceMethod());
   }
 
+  if (!Redecl && isRedeclaration()) {
+    // This is the last redeclaration, go back to the first method.
+    return cast<ObjCContainerDecl>(CtxD)->getMethod(getSelector(),
+                                                    isInstanceMethod());
+  }
+
   return Redecl ? Redecl : this;
 }
 
@@ -433,6 +460,10 @@ ObjCMethodDecl *ObjCMethodDecl::getCanonicalDecl() {
                                                isInstanceMethod()))
         return MD;
   }
+
+  if (isRedeclaration())
+    return cast<ObjCContainerDecl>(CtxD)->getMethod(getSelector(),
+                                                    isInstanceMethod());
 
   return this;
 }
@@ -546,13 +577,13 @@ void ObjCMethodDecl::createImplicitParams(ASTContext &Context,
     selfIsConsumed = hasAttr<NSConsumesSelfAttr>();
 
     // 'self' is always __strong.  It's actually pseudo-strong except
-    // in init methods, though.
+    // in init methods (or methods labeled ns_consumes_self), though.
     Qualifiers qs;
     qs.setObjCLifetime(Qualifiers::OCL_Strong);
     selfTy = Context.getQualifiedType(selfTy, qs);
 
     // In addition, 'self' is const unless this is an init method.
-    if (getMethodFamily() != OMF_init) {
+    if (getMethodFamily() != OMF_init && !selfIsConsumed) {
       selfTy = selfTy.withConst();
       selfIsPseudoStrong = true;
     }
@@ -605,8 +636,9 @@ ObjCInterfaceDecl(DeclContext *DC, SourceLocation atLoc, IdentifierInfo *Id,
                   SourceLocation CLoc, bool FD, bool isInternal)
   : ObjCContainerDecl(ObjCInterface, DC, Id, CLoc, atLoc),
     TypeForDecl(0), SuperClass(0),
-    CategoryList(0), IvarList(0), 
-    ForwardDecl(FD), InternalInterface(isInternal), ExternallyCompleted(false) {
+    CategoryList(0), IvarList(0),
+    InitiallyForwardDecl(FD), ForwardDecl(FD),
+    InternalInterface(isInternal), ExternallyCompleted(false) {
 }
 
 void ObjCInterfaceDecl::LoadExternalDefinition() const {
@@ -848,8 +880,9 @@ ObjCAtDefsFieldDecl
 ObjCProtocolDecl *ObjCProtocolDecl::Create(ASTContext &C, DeclContext *DC,
                                            IdentifierInfo *Id,
                                            SourceLocation nameLoc,
-                                           SourceLocation atStartLoc) {
-  return new (C) ObjCProtocolDecl(DC, Id, nameLoc, atStartLoc);
+                                           SourceLocation atStartLoc,
+                                           bool isForwardDecl) {
+  return new (C) ObjCProtocolDecl(DC, Id, nameLoc, atStartLoc, isForwardDecl);
 }
 
 ObjCProtocolDecl *ObjCProtocolDecl::lookupProtocolNamed(IdentifierInfo *Name) {

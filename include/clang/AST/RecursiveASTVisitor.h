@@ -187,6 +187,11 @@ public:
   /// \returns false if the visitation was terminated early, true otherwise.
   bool TraverseNestedNameSpecifierLoc(NestedNameSpecifierLoc NNS);
 
+  /// \brief Recursively visit a name with its location information.
+  ///
+  /// \returns false if the visitation was terminated early, true otherwise.
+  bool TraverseDeclarationNameInfo(DeclarationNameInfo NameInfo);
+  
   /// \brief Recursively visit a template name and dispatch to the
   /// appropriate method.
   ///
@@ -546,6 +551,31 @@ bool RecursiveASTVisitor<Derived>::TraverseNestedNameSpecifierLoc(
 }
 
 template<typename Derived>
+bool RecursiveASTVisitor<Derived>::TraverseDeclarationNameInfo(
+                                                 DeclarationNameInfo NameInfo) {
+  switch (NameInfo.getName().getNameKind()) {
+  case DeclarationName::CXXConstructorName:
+  case DeclarationName::CXXDestructorName:
+  case DeclarationName::CXXConversionFunctionName:
+    if (TypeSourceInfo *TSInfo = NameInfo.getNamedTypeInfo())
+      TRY_TO(TraverseTypeLoc(TSInfo->getTypeLoc()));
+    
+    break;
+    
+  case DeclarationName::Identifier:
+  case DeclarationName::ObjCZeroArgSelector:
+  case DeclarationName::ObjCOneArgSelector:
+  case DeclarationName::ObjCMultiArgSelector:
+  case DeclarationName::CXXOperatorName:
+  case DeclarationName::CXXLiteralOperatorName:
+  case DeclarationName::CXXUsingDirective:
+    break;
+  }
+  
+  return true;
+}
+
+template<typename Derived>
 bool RecursiveASTVisitor<Derived>::TraverseTemplateName(TemplateName Template) {
   if (DependentTemplateName *DTN = Template.getAsDependentTemplateName())
     TRY_TO(TraverseNestedNameSpecifier(DTN->getQualifier()));
@@ -637,7 +667,9 @@ bool RecursiveASTVisitor<Derived>::TraverseTemplateArguments(
 template<typename Derived>
 bool RecursiveASTVisitor<Derived>::TraverseConstructorInitializer(
                                                      CXXCtorInitializer *Init) {
-  // FIXME: recurse on TypeLoc of the base initializer if isBaseInitializer()?
+  if (TypeSourceInfo *TInfo = Init->getTypeSourceInfo())
+    TRY_TO(TraverseTypeLoc(TInfo->getTypeLoc()));
+  
   if (Init->isWritten())
     TRY_TO(TraverseStmt(Init->getInit()));
   return true;
@@ -1216,6 +1248,7 @@ DEF_TRAVERSE_DECL(ObjCPropertyDecl, {
 
 DEF_TRAVERSE_DECL(UsingDecl, {
     TRY_TO(TraverseNestedNameSpecifierLoc(D->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(D->getNameInfo()));
   })
 
 DEF_TRAVERSE_DECL(UsingDirectiveDecl, {
@@ -1511,6 +1544,7 @@ DEF_TRAVERSE_DECL(UnresolvedUsingValueDecl, {
     // Like UnresolvedUsingTypenameDecl, but without the 'typename':
     //    template <class T> Class A : public Base<T> { using Base<T>::foo; };
     TRY_TO(TraverseNestedNameSpecifierLoc(D->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(D->getNameInfo()));
   })
 
 DEF_TRAVERSE_DECL(IndirectFieldDecl, {})
@@ -1548,6 +1582,7 @@ DEF_TRAVERSE_DECL(ObjCIvarDecl, {
 template<typename Derived>
 bool RecursiveASTVisitor<Derived>::TraverseFunctionHelper(FunctionDecl *D) {
   TRY_TO(TraverseNestedNameSpecifierLoc(D->getQualifierLoc()));
+  TRY_TO(TraverseDeclarationNameInfo(D->getNameInfo()));
 
   // If we're an explicit template specialization, iterate over the
   // template args that were explicitly specified.  If we were doing
@@ -1735,6 +1770,10 @@ DEF_TRAVERSE_STMT(ObjCAtTryStmt, { })
 DEF_TRAVERSE_STMT(ObjCForCollectionStmt, { })
 DEF_TRAVERSE_STMT(ObjCAutoreleasePoolStmt, { })
 DEF_TRAVERSE_STMT(CXXForRangeStmt, { })
+DEF_TRAVERSE_STMT(MSDependentExistsStmt, { 
+    TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(S->getNameInfo()));
+})
 DEF_TRAVERSE_STMT(ReturnStmt, { })
 DEF_TRAVERSE_STMT(SwitchStmt, { })
 DEF_TRAVERSE_STMT(WhileStmt, { })
@@ -1742,6 +1781,7 @@ DEF_TRAVERSE_STMT(WhileStmt, { })
 
 DEF_TRAVERSE_STMT(CXXDependentScopeMemberExpr, {
     TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(S->getMemberNameInfo()));
     if (S->hasExplicitTemplateArgs()) {
       TRY_TO(TraverseTemplateArgumentLocsHelper(
           S->getTemplateArgs(), S->getNumTemplateArgs()));
@@ -1750,12 +1790,14 @@ DEF_TRAVERSE_STMT(CXXDependentScopeMemberExpr, {
 
 DEF_TRAVERSE_STMT(DeclRefExpr, {
     TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(S->getNameInfo()));
     TRY_TO(TraverseTemplateArgumentLocsHelper(
         S->getTemplateArgs(), S->getNumTemplateArgs()));
   })
 
 DEF_TRAVERSE_STMT(DependentScopeDeclRefExpr, {
     TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(S->getNameInfo()));
     if (S->hasExplicitTemplateArgs()) {
       TRY_TO(TraverseTemplateArgumentLocsHelper(
           S->getExplicitTemplateArgs().getTemplateArgs(),
@@ -1765,6 +1807,7 @@ DEF_TRAVERSE_STMT(DependentScopeDeclRefExpr, {
 
 DEF_TRAVERSE_STMT(MemberExpr, {
     TRY_TO(TraverseNestedNameSpecifierLoc(S->getQualifierLoc()));
+    TRY_TO(TraverseDeclarationNameInfo(S->getMemberNameInfo()));
     TRY_TO(TraverseTemplateArgumentLocsHelper(
         S->getTemplateArgs(), S->getNumTemplateArgs()));
   })
@@ -1992,6 +2035,7 @@ DEF_TRAVERSE_STMT(SizeOfPackExpr, { })
 DEF_TRAVERSE_STMT(SubstNonTypeTemplateParmPackExpr, { })
 DEF_TRAVERSE_STMT(SubstNonTypeTemplateParmExpr, { })
 DEF_TRAVERSE_STMT(MaterializeTemporaryExpr, { })
+DEF_TRAVERSE_STMT(AtomicExpr, { })
 
 // These literals (all of them) do not need any action.
 DEF_TRAVERSE_STMT(IntegerLiteral, { })

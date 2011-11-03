@@ -86,3 +86,16 @@ void rdar8875946() {
   double _Complex  P;
   float _Complex  P2 = 3.3f + P;
 }
+
+double d = (d = 0.0); // expected-error {{not a compile-time constant}}
+double d2 = ++d; // expected-error {{not a compile-time constant}}
+
+int n = 2;
+int intLvalue[*(int*)((long)&n ?: 1)] = { 1, 2 }; // expected-error {{variable length array}}
+
+union u { int a; char b[4]; };
+char c = ((union u)(123456)).b[0]; // expected-error {{not a compile-time constant}}
+
+extern const int weak_int __attribute__((weak));
+const int weak_int = 42;
+int weak_int_test = weak_int; // expected-error {{not a compile-time constant}}

@@ -298,11 +298,18 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
 
   // Emit subprogram debug descriptor.
   if (CGDebugInfo *DI = getDebugInfo()) {
-    // FIXME: what is going on here and why does it ignore all these
-    // interesting type properties?
+    unsigned NumArgs = 0;
+    QualType *ArgsArray = new QualType[Args.size()];
+    for (FunctionArgList::const_iterator i = Args.begin(), e = Args.end();
+	 i != e; ++i) {
+      ArgsArray[NumArgs++] = (*i)->getType();
+    }
+
     QualType FnType =
-      getContext().getFunctionType(RetTy, 0, 0,
+      getContext().getFunctionType(RetTy, ArgsArray, NumArgs,
                                    FunctionProtoType::ExtProtoInfo());
+
+    delete[] ArgsArray;
 
     DI->setLocation(StartLoc);
     DI->EmitFunctionStart(GD, FnType, CurFn, Builder);
@@ -351,6 +358,9 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
     if (Ty->isVariablyModifiedType())
       EmitVariablyModifiedType(Ty);
   }
+  // Emit a location at the end of the prologue.
+  if (CGDebugInfo *DI = getDebugInfo())
+    DI->EmitLocation(Builder, StartLoc);
 }
 
 void CodeGenFunction::EmitFunctionBody(FunctionArgList &Args) {
@@ -503,7 +513,7 @@ ConstantFoldsToSimpleInteger(const Expr *Cond, llvm::APInt &ResultInt) {
   // FIXME: Rename and handle conversion of other evaluatable things
   // to bool.
   Expr::EvalResult Result;
-  if (!Cond->Evaluate(Result, getContext()) || !Result.Val.isInt() ||
+  if (!Cond->EvaluateAsRValue(Result, getContext()) || !Result.Val.isInt() ||
       Result.HasSideEffects)
     return false;  // Not foldable, not integer or not fully evaluatable.
   

@@ -366,7 +366,7 @@ CodeGenFunction::ExpandTypeFromArgs(QualType Ty, LValue LV,
     QualType EltTy = CT->getElementType();
     llvm::Value *RealAddr = Builder.CreateStructGEP(Addr, 0, "real");
     EmitStoreThroughLValue(RValue::get(AI++), MakeAddrLValue(RealAddr, EltTy));
-    llvm::Value *ImagAddr = Builder.CreateStructGEP(Addr, 0, "imag");
+    llvm::Value *ImagAddr = Builder.CreateStructGEP(Addr, 1, "imag");
     EmitStoreThroughLValue(RValue::get(AI++), MakeAddrLValue(ImagAddr, EltTy));
   } else {
     EmitStoreThroughLValue(RValue::get(AI), LV);
@@ -611,6 +611,17 @@ bool CodeGenModule::ReturnTypeUsesFPRet(QualType ResultType) {
   return false;
 }
 
+bool CodeGenModule::ReturnTypeUsesFP2Ret(QualType ResultType) {
+  if (const ComplexType *CT = ResultType->getAs<ComplexType>()) {
+    if (const BuiltinType *BT = CT->getElementType()->getAs<BuiltinType>()) {
+      if (BT->getKind() == BuiltinType::LongDouble)
+        return getContext().getTargetInfo().useObjCFP2RetForComplexLongDouble();
+    }
+  }
+
+  return false;
+}
+
 llvm::FunctionType *CodeGenTypes::GetFunctionType(GlobalDecl GD) {
   const CGFunctionInfo &FI = getFunctionInfo(GD);
 
@@ -729,6 +740,8 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
 
   // FIXME: handle sseregparm someday...
   if (TargetDecl) {
+    if (TargetDecl->hasAttr<ReturnsTwiceAttr>())
+      FuncAttrs |= llvm::Attribute::ReturnsTwice;
     if (TargetDecl->hasAttr<NoThrowAttr>())
       FuncAttrs |= llvm::Attribute::NoUnwind;
     else if (const FunctionDecl *Fn = dyn_cast<FunctionDecl>(TargetDecl)) {

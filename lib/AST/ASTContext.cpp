@@ -50,7 +50,7 @@ unsigned ASTContext::NumImplicitDestructors;
 unsigned ASTContext::NumImplicitDestructorsDeclared;
 
 enum FloatingRank {
-  FloatRank, DoubleRank, LongDoubleRank
+  HalfRank, FloatRank, DoubleRank, LongDoubleRank
 };
 
 void 
@@ -461,8 +461,14 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target) {
   // Placeholder type for bound members.
   InitBuiltinType(BoundMemberTy,       BuiltinType::BoundMember);
 
+  // Placeholder type for pseudo-objects.
+  InitBuiltinType(PseudoObjectTy,      BuiltinType::PseudoObject);
+
   // "any" type; useful for debugger-like clients.
   InitBuiltinType(UnknownAnyTy,        BuiltinType::UnknownAny);
+
+  // Placeholder type for unbridged ARC casts.
+  InitBuiltinType(ARCUnbridgedCastTy,  BuiltinType::ARCUnbridgedCast);
 
   // C99 6.2.5p11.
   FloatComplexTy      = getComplexType(FloatTy);
@@ -483,6 +489,9 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target) {
 
   // nullptr type (C++0x 2.14.7)
   InitBuiltinType(NullPtrTy,           BuiltinType::NullPtr);
+
+  // half type (OpenCL 6.1.1.1) / ARM NEON __fp16
+  InitBuiltinType(HalfTy, BuiltinType::Half);
 }
 
 DiagnosticsEngine &ASTContext::getDiagnostics() const {
@@ -608,33 +617,33 @@ void ASTContext::setInstantiatedFromUnnamedFieldDecl(FieldDecl *Inst,
 bool ASTContext::ZeroBitfieldFollowsNonBitfield(const FieldDecl *FD, 
                                     const FieldDecl *LastFD) const {
   return (FD->isBitField() && LastFD && !LastFD->isBitField() &&
-          FD->getBitWidth()->EvaluateAsInt(*this).getZExtValue() == 0);
+          FD->getBitWidthValue(*this) == 0);
 }
 
 bool ASTContext::ZeroBitfieldFollowsBitfield(const FieldDecl *FD,
                                              const FieldDecl *LastFD) const {
   return (FD->isBitField() && LastFD && LastFD->isBitField() &&
-          FD->getBitWidth()->EvaluateAsInt(*this).getZExtValue() == 0 &&
-          LastFD->getBitWidth()->EvaluateAsInt(*this).getZExtValue() != 0);
+          FD->getBitWidthValue(*this) == 0 &&
+          LastFD->getBitWidthValue(*this) != 0);
 }
 
 bool ASTContext::BitfieldFollowsBitfield(const FieldDecl *FD,
                                          const FieldDecl *LastFD) const {
   return (FD->isBitField() && LastFD && LastFD->isBitField() &&
-          FD->getBitWidth()->EvaluateAsInt(*this).getZExtValue() &&
-          LastFD->getBitWidth()->EvaluateAsInt(*this).getZExtValue());
+          FD->getBitWidthValue(*this) &&
+          LastFD->getBitWidthValue(*this));
 }
 
 bool ASTContext::NonBitfieldFollowsBitfield(const FieldDecl *FD,
                                          const FieldDecl *LastFD) const {
   return (!FD->isBitField() && LastFD && LastFD->isBitField() &&
-          LastFD->getBitWidth()->EvaluateAsInt(*this).getZExtValue());  
+          LastFD->getBitWidthValue(*this));
 }
 
 bool ASTContext::BitfieldFollowsNonBitfield(const FieldDecl *FD,
                                              const FieldDecl *LastFD) const {
   return (FD->isBitField() && LastFD && !LastFD->isBitField() &&
-          FD->getBitWidth()->EvaluateAsInt(*this).getZExtValue());  
+          FD->getBitWidthValue(*this));
 }
 
 ASTContext::overridden_cxx_method_iterator
@@ -683,6 +692,7 @@ const llvm::fltSemantics &ASTContext::getFloatTypeSemantics(QualType T) const {
   assert(BT && "Not a floating point type!");
   switch (BT->getKind()) {
   default: llvm_unreachable("Not a floating point type!");
+  case BuiltinType::Half:       return Target->getHalfFormat();
   case BuiltinType::Float:      return Target->getFloatFormat();
   case BuiltinType::Double:     return Target->getDoubleFormat();
   case BuiltinType::LongDouble: return Target->getLongDoubleFormat();
@@ -905,6 +915,10 @@ ASTContext::getTypeInfo(const Type *T) const {
       Width = 128;
       Align = 128; // int128_t is 128-bit aligned on all targets.
       break;
+    case BuiltinType::Half:
+      Width = Target->getHalfWidth();
+      Align = Target->getHalfAlign();
+      break;
     case BuiltinType::Float:
       Width = Target->getFloatWidth();
       Align = Target->getFloatAlign();
@@ -1064,13 +1078,25 @@ ASTContext::getTypeInfo(const Type *T) const {
   }
 
   case Type::Atomic: {
-    // FIXME: The alignment needs to be "fixed".
-    return getTypeInfo(cast<AtomicType>(T)->getValueType());
+    std::pair<uint64_t, unsigned> Info
+      = getTypeInfo(cast<AtomicType>(T)->getValueType());
+    Width = Info.first;
+    Align = Info.second;
+    if (Width != 0 && Width <= Target->getMaxAtomicPromoteWidth() &&
+        llvm::isPowerOf2_64(Width)) {
+      // We can potentially perform lock-free atomic operations for this
+      // type; promote the alignment appropriately.
+      // FIXME: We could potentially promote the width here as well...
+      // is that worthwhile?  (Non-struct atomic types generally have
+      // power-of-two size anyway, but structs might not.  Requires a bit
+      // of implementation work to make sure we zero out the extra bits.)
+      Align = static_cast<unsigned>(Width);
+    }
   }
 
   }
 
-  assert(Align && (Align & (Align-1)) == 0 && "Alignment must be power of 2");
+  assert(llvm::isPowerOf2_32(Align) && "Alignment must be power of 2");
   return std::make_pair(Width, Align);
 }
 
@@ -1233,6 +1259,17 @@ void ASTContext::setObjCImplementation(ObjCCategoryDecl *CatD,
                            ObjCCategoryImplDecl *ImplD) {
   assert(CatD && ImplD && "Passed null params");
   ObjCImpls[CatD] = ImplD;
+}
+
+ObjCInterfaceDecl *ASTContext::getObjContainingInterface(NamedDecl *ND) const {
+  if (ObjCInterfaceDecl *ID = dyn_cast<ObjCInterfaceDecl>(ND->getDeclContext()))
+    return ID;
+  if (ObjCCategoryDecl *CD = dyn_cast<ObjCCategoryDecl>(ND->getDeclContext()))
+    return CD->getClassInterface();
+  if (ObjCImplDecl *IMD = dyn_cast<ObjCImplDecl>(ND->getDeclContext()))
+    return IMD->getClassInterface();
+
+  return 0;
 }
 
 /// \brief Get the copy initialization expression of VarDecl,or NULL if 
@@ -2975,6 +3012,16 @@ CanQualType ASTContext::getSizeType() const {
   return getFromTargetType(Target->getSizeType());
 }
 
+/// getIntMaxType - Return the unique type for "intmax_t" (C99 7.18.1.5).
+CanQualType ASTContext::getIntMaxType() const {
+  return getFromTargetType(Target->getIntMaxType());
+}
+
+/// getUIntMaxType - Return the unique type for "uintmax_t" (C99 7.18.1.5).
+CanQualType ASTContext::getUIntMaxType() const {
+  return getFromTargetType(Target->getUIntMaxType());
+}
+
 /// getSignedWCharType - Return the type of "signed wchar_t".
 /// Used when in C++, as a GCC extension.
 QualType ASTContext::getSignedWCharType() const {
@@ -2989,7 +3036,7 @@ QualType ASTContext::getUnsignedWCharType() const {
   return UnsignedIntTy;
 }
 
-/// getPointerDiffType - Return the unique type for "ptrdiff_t" (ref?)
+/// getPointerDiffType - Return the unique type for "ptrdiff_t" (C99 7.17)
 /// defined in <stddef.h>. Pointer - pointer requires this (C99 6.5.6p9).
 QualType ASTContext::getPointerDiffType() const {
   return getFromTargetType(Target->getPtrDiffType(0));
@@ -3471,6 +3518,7 @@ static FloatingRank getFloatingRank(QualType T) {
   assert(T->getAs<BuiltinType>() && "getFloatingRank(): not a floating type");
   switch (T->getAs<BuiltinType>()->getKind()) {
   default: llvm_unreachable("getFloatingRank(): not a floating type");
+  case BuiltinType::Half:       return HalfRank;
   case BuiltinType::Float:      return FloatRank;
   case BuiltinType::Double:     return DoubleRank;
   case BuiltinType::LongDouble: return LongDoubleRank;
@@ -3522,18 +3570,6 @@ int ASTContext::getFloatingTypeOrder(QualType LHS, QualType RHS) const {
 /// or if it is not canonicalized.
 unsigned ASTContext::getIntegerRank(const Type *T) const {
   assert(T->isCanonicalUnqualified() && "T should be canonicalized");
-  if (const EnumType* ET = dyn_cast<EnumType>(T))
-    T = ET->getDecl()->getPromotionType().getTypePtr();
-
-  if (T->isSpecificBuiltinType(BuiltinType::WChar_S) ||
-      T->isSpecificBuiltinType(BuiltinType::WChar_U))
-    T = getFromTargetType(Target->getWCharType()).getTypePtr();
-
-  if (T->isSpecificBuiltinType(BuiltinType::Char16))
-    T = getFromTargetType(Target->getChar16Type()).getTypePtr();
-
-  if (T->isSpecificBuiltinType(BuiltinType::Char32))
-    T = getFromTargetType(Target->getChar32Type()).getTypePtr();
 
   switch (cast<BuiltinType>(T)->getKind()) {
   default: llvm_unreachable("getIntegerRank(): not a built-in integer");
@@ -3577,8 +3613,7 @@ QualType ASTContext::isPromotableBitField(Expr *E) const {
 
   QualType FT = Field->getType();
 
-  llvm::APSInt BitWidthAP = Field->getBitWidth()->EvaluateAsInt(*this);
-  uint64_t BitWidth = BitWidthAP.getZExtValue();
+  uint64_t BitWidth = Field->getBitWidthValue(*this);
   uint64_t IntSize = getTypeSize(IntTy);
   // GCC extension compatibility: if the bit-field size is less than or equal
   // to the size of int, it gets promoted no matter what its type is.
@@ -3604,6 +3639,34 @@ QualType ASTContext::getPromotedIntegerType(QualType Promotable) const {
   assert(Promotable->isPromotableIntegerType());
   if (const EnumType *ET = Promotable->getAs<EnumType>())
     return ET->getDecl()->getPromotionType();
+
+  if (const BuiltinType *BT = Promotable->getAs<BuiltinType>()) {
+    // C++ [conv.prom]: A prvalue of type char16_t, char32_t, or wchar_t
+    // (3.9.1) can be converted to a prvalue of the first of the following
+    // types that can represent all the values of its underlying type:
+    // int, unsigned int, long int, unsigned long int, long long int, or
+    // unsigned long long int [...]
+    // FIXME: Is there some better way to compute this?
+    if (BT->getKind() == BuiltinType::WChar_S ||
+        BT->getKind() == BuiltinType::WChar_U ||
+        BT->getKind() == BuiltinType::Char16 ||
+        BT->getKind() == BuiltinType::Char32) {
+      bool FromIsSigned = BT->getKind() == BuiltinType::WChar_S;
+      uint64_t FromSize = getTypeSize(BT);
+      QualType PromoteTypes[] = { IntTy, UnsignedIntTy, LongTy, UnsignedLongTy,
+                                  LongLongTy, UnsignedLongLongTy };
+      for (size_t Idx = 0; Idx < llvm::array_lengthof(PromoteTypes); ++Idx) {
+        uint64_t ToSize = getTypeSize(PromoteTypes[Idx]);
+        if (FromSize < ToSize ||
+            (FromSize == ToSize &&
+             FromIsSigned == PromoteTypes[Idx]->isSignedIntegerType()))
+          return PromoteTypes[Idx];
+      }
+      llvm_unreachable("char type should fit into long long");
+    }
+  }
+
+  // At this point, we should have a signed or unsigned integer type.
   if (Promotable->isSignedIntegerType())
     return IntTy;
   uint64_t PromotableSize = getTypeSize(Promotable);
@@ -4255,8 +4318,7 @@ static char ObjCEncodingForEnumType(const ASTContext *C, const EnumType *ET) {
 
 static void EncodeBitField(const ASTContext *Ctx, std::string& S,
                            QualType T, const FieldDecl *FD) {
-  const Expr *E = FD->getBitWidth();
-  assert(E && "bitfield width not there - getObjCEncodingForTypeImpl");
+  assert(FD->isBitField() && "not a bitfield - getObjCEncodingForTypeImpl");
   S += 'b';
   // The NeXT runtime encodes bit fields as b followed by the number of bits.
   // The GNU runtime requires more information; bitfields are encoded as b,
@@ -4282,8 +4344,7 @@ static void EncodeBitField(const ASTContext *Ctx, std::string& S,
     else
       S += ObjCEncodingForPrimitiveKind(Ctx, T);
   }
-  unsigned N = E->EvaluateAsInt(*Ctx).getZExtValue();
-  S += llvm::utostr(N);
+  S += llvm::utostr(FD->getBitWidthValue(*Ctx));
 }
 
 // FIXME: Use SmallString for accumulating string.
@@ -4699,7 +4760,7 @@ void ASTContext::getObjCEncodingForStructureImpl(RecordDecl *RDecl,
 
       if (field->isBitField()) {
         EncodeBitField(this, S, field->getType(), field);
-        CurOffs += field->getBitWidth()->EvaluateAsInt(*this).getZExtValue();
+        CurOffs += field->getBitWidthValue(*this);
       } else {
         QualType qt = field->getType();
         getLegacyIntegralTypeEncoding(qt);

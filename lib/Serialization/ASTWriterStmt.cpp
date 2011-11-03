@@ -331,7 +331,7 @@ void ASTStmtWriter::VisitStringLiteral(StringLiteral *E) {
   // StringLiteral. However, we can't do so now because we have no
   // provision for coping with abbreviations when we're jumping around
   // the AST file during deserialization.
-  Record.append(E->getString().begin(), E->getString().end());
+  Record.append(E->getBytes().begin(), E->getBytes().end());
   for (unsigned I = 0, N = E->getNumConcatenated(); I != N; ++I)
     Writer.AddSourceLocation(E->getStrTokenLoc(I), Record);
   Code = serialization::EXPR_STRING_LITERAL;
@@ -736,6 +736,21 @@ void ASTStmtWriter::VisitGenericSelectionExpr(GenericSelectionExpr *E) {
   Code = serialization::EXPR_GENERIC_SELECTION;
 }
 
+void ASTStmtWriter::VisitAtomicExpr(AtomicExpr *E) {
+  VisitExpr(E);
+  Record.push_back(E->getOp());
+  Writer.AddStmt(E->getPtr());
+  Writer.AddStmt(E->getOrder());
+  if (E->getOp() != AtomicExpr::Load)
+    Writer.AddStmt(E->getVal1());
+  if (E->isCmpXChg()) {
+    Writer.AddStmt(E->getOrderFail());
+    Writer.AddStmt(E->getVal2());
+  }
+  Writer.AddSourceLocation(E->getBuiltinLoc(), Record);
+  Writer.AddSourceLocation(E->getRParenLoc(), Record);
+}
+
 //===----------------------------------------------------------------------===//
 // Objective-C Expressions and Statements.
 //===----------------------------------------------------------------------===//
@@ -940,6 +955,16 @@ void ASTStmtWriter::VisitCXXForRangeStmt(CXXForRangeStmt *S) {
   Writer.AddStmt(S->getLoopVarStmt());
   Writer.AddStmt(S->getBody());
   Code = serialization::STMT_CXX_FOR_RANGE;
+}
+
+void ASTStmtWriter::VisitMSDependentExistsStmt(MSDependentExistsStmt *S) {
+  VisitStmt(S);
+  Writer.AddSourceLocation(S->getKeywordLoc(), Record);
+  Record.push_back(S->isIfExists());
+  Writer.AddNestedNameSpecifierLoc(S->getQualifierLoc(), Record);
+  Writer.AddDeclarationNameInfo(S->getNameInfo(), Record);
+  Writer.AddStmt(S->getSubStmt());
+  Code = serialization::STMT_MS_DEPENDENT_EXISTS;
 }
 
 void ASTStmtWriter::VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
@@ -1428,7 +1453,9 @@ unsigned ASTWriter::getOpaqueValueID(OpaqueValueExpr *e) {
 
 /// \brief Write the given substatement or subexpression to the
 /// bitstream.
-void ASTWriter::WriteSubStmt(Stmt *S) {
+void ASTWriter::WriteSubStmt(Stmt *S,
+                             llvm::DenseMap<Stmt *, uint64_t> &SubStmtEntries,
+                             llvm::DenseSet<Stmt *> &ParentStmts) {
   RecordData Record;
   ASTStmtWriter Writer(*this, Record);
   ++NumStatements;
@@ -1437,6 +1464,32 @@ void ASTWriter::WriteSubStmt(Stmt *S) {
     Stream.EmitRecord(serialization::STMT_NULL_PTR, Record);
     return;
   }
+
+  llvm::DenseMap<Stmt *, uint64_t>::iterator I = SubStmtEntries.find(S);
+  if (I != SubStmtEntries.end()) {
+    Record.push_back(I->second);
+    Stream.EmitRecord(serialization::STMT_REF_PTR, Record);
+    return;
+  }
+
+#ifndef NDEBUG
+  assert(!ParentStmts.count(S) && "There is a Stmt cycle!");
+
+  struct ParentStmtInserterRAII {
+    Stmt *S;
+    llvm::DenseSet<Stmt *> &ParentStmts;
+
+    ParentStmtInserterRAII(Stmt *S, llvm::DenseSet<Stmt *> &ParentStmts)
+      : S(S), ParentStmts(ParentStmts) {
+      ParentStmts.insert(S);
+    }
+    ~ParentStmtInserterRAII() {
+      ParentStmts.erase(S);
+    }
+  };
+
+  ParentStmtInserterRAII ParentStmtInserter(S, ParentStmts);
+#endif
 
   // Redirect ASTWriter::AddStmt to collect sub stmts.
   SmallVector<Stmt *, 16> SubStmts;
@@ -1463,9 +1516,11 @@ void ASTWriter::WriteSubStmt(Stmt *S) {
   // This simplifies reading and allows to store a variable number of sub stmts
   // without knowing it in advance.
   while (!SubStmts.empty())
-    WriteSubStmt(SubStmts.pop_back_val());
+    WriteSubStmt(SubStmts.pop_back_val(), SubStmtEntries, ParentStmts);
   
   Stream.EmitRecord(Writer.Code, Record, Writer.AbbrevToUse);
+ 
+  SubStmtEntries[S] = Stream.GetCurrentBitNo();
 }
 
 /// \brief Flush all of the statements that have been added to the
@@ -1473,8 +1528,14 @@ void ASTWriter::WriteSubStmt(Stmt *S) {
 void ASTWriter::FlushStmts() {
   RecordData Record;
 
+  /// \brief Set of parent Stmts for the currently serializing sub stmt.
+  llvm::DenseSet<Stmt *> ParentStmts;
+  /// \brief Offsets of sub stmts already serialized. The offset points
+  /// just after the stmt record.
+  llvm::DenseMap<Stmt *, uint64_t> SubStmtEntries;
+
   for (unsigned I = 0, N = StmtsToEmit.size(); I != N; ++I) {
-    WriteSubStmt(StmtsToEmit[I]);
+    WriteSubStmt(StmtsToEmit[I], SubStmtEntries, ParentStmts);
     
     assert(N == StmtsToEmit.size() &&
            "Substatement written via AddStmt rather than WriteSubStmt!");
@@ -1483,6 +1544,9 @@ void ASTWriter::FlushStmts() {
     // expression records that follow this one are part of a different
     // expression.
     Stream.EmitRecord(serialization::STMT_STOP, Record);
+
+    SubStmtEntries.clear();
+    ParentStmts.clear();
   }
 
   StmtsToEmit.clear();

@@ -128,6 +128,12 @@ private:
   // Method has a definition.
   unsigned IsDefined : 1;
 
+  /// \brief Method redeclaration in the same interface.
+  unsigned IsRedeclaration : 1;
+
+  /// \brief Is redeclared in the same interface.
+  mutable unsigned HasRedeclaration : 1;
+
   // NOTE: VC++ treats enums as signed, avoid using ImplementationControl enum
   /// @required/@optional
   unsigned DeclImplementation : 2;
@@ -220,7 +226,7 @@ private:
     DeclContext(ObjCMethod), Family(InvalidObjCMethodFamily),
     IsInstance(isInstance), IsVariadic(isVariadic),
     IsSynthesized(isSynthesized),
-    IsDefined(isDefined),
+    IsDefined(isDefined), IsRedeclaration(0), HasRedeclaration(0),
     DeclImplementation(impControl), objcDeclQualifier(OBJC_TQ_None),
     RelatedResultType(HasRelatedResultType),
     SelLocsKind(SelLoc_StandardNoSpace),
@@ -267,6 +273,10 @@ public:
   
   /// \brief Note whether this method has a related result type.
   void SetRelatedResultType(bool RRT = true) { RelatedResultType = RRT; }
+
+  /// \brief True if this is a method redeclaration in the same interface.
+  bool isRedeclaration() const { return IsRedeclaration; }
+  void setAsRedeclaration(const ObjCMethodDecl *PrevMethod);
   
   // Location information, modeled after the Stmt API.
   SourceLocation getLocStart() const { return getLocation(); }
@@ -556,6 +566,11 @@ class ObjCInterfaceDecl : public ObjCContainerDecl {
   /// extensions and implementation. This list is built lazily.
   ObjCIvarDecl *IvarList;
 
+  /// \brief True if it was initially declared with @class.
+  /// Differs with \see ForwardDecl in that \see ForwardDecl will change to
+  /// false when we see the @interface, but InitiallyForwardDecl will remain
+  /// true.
+  bool InitiallyForwardDecl : 1;
   bool ForwardDecl:1; // declared with @class.
   bool InternalInterface:1; // true - no @interface for @implementation
   
@@ -577,6 +592,12 @@ public:
                                    SourceLocation ClassLoc = SourceLocation(),
                                    bool ForwardDecl = false,
                                    bool isInternal = false);
+
+  virtual SourceRange getSourceRange() const {
+    if (isForwardDecl())
+      return SourceRange(getAtStartLoc(), getLocation());
+    return ObjCContainerDecl::getSourceRange();
+  }
   
   /// \brief Indicate that this Objective-C class is complete, but that
   /// the external AST source will be responsible for filling in its contents
@@ -682,6 +703,11 @@ public:
   void mergeClassExtensionProtocolList(ObjCProtocolDecl *const* List, 
                                        unsigned Num,
                                        ASTContext &C);
+
+  /// \brief True if it was initially declared with @class.
+  /// Differs with \see isForwardDecl in that \see isForwardDecl will change to
+  /// false when we see the @interface, but this will remain true.
+  bool isInitiallyForwardDecl() const { return InitiallyForwardDecl; }
 
   bool isForwardDecl() const { return ForwardDecl; }
   void setForwardDecl(bool val) { ForwardDecl = val; }
@@ -914,21 +940,25 @@ class ObjCProtocolDecl : public ObjCContainerDecl {
   /// Referenced protocols
   ObjCProtocolList ReferencedProtocols;
 
-  bool isForwardProtoDecl; // declared with @protocol.
+  bool InitiallyForwardDecl : 1;
+  bool isForwardProtoDecl : 1; // declared with @protocol.
 
   SourceLocation EndLoc; // marks the '>' or identifier.
 
   ObjCProtocolDecl(DeclContext *DC, IdentifierInfo *Id,
-                   SourceLocation nameLoc, SourceLocation atStartLoc)
+                   SourceLocation nameLoc, SourceLocation atStartLoc,
+                   bool isForwardDecl)
     : ObjCContainerDecl(ObjCProtocol, DC, Id, nameLoc, atStartLoc),
-      isForwardProtoDecl(true) {
+      InitiallyForwardDecl(isForwardDecl),
+      isForwardProtoDecl(isForwardDecl) {
   }
 
 public:
   static ObjCProtocolDecl *Create(ASTContext &C, DeclContext *DC,
                                   IdentifierInfo *Id,
                                   SourceLocation nameLoc,
-                                  SourceLocation atStartLoc);
+                                  SourceLocation atStartLoc,
+                                  bool isForwardDecl);
 
   const ObjCProtocolList &getReferencedProtocols() const {
     return ReferencedProtocols;
@@ -963,6 +993,11 @@ public:
   ObjCMethodDecl *lookupClassMethod(Selector Sel) const {
     return lookupMethod(Sel, false/*isInstance*/);
   }
+
+  /// \brief True if it was initially a forward reference.
+  /// Differs with \see isForwardDecl in that \see isForwardDecl will change to
+  /// false when we see the definition, but this will remain true.
+  bool isInitiallyForwardDecl() const { return InitiallyForwardDecl; }
   
   bool isForwardDecl() const { return isForwardProtoDecl; }
   void setForwardDecl(bool val) { isForwardProtoDecl = val; }
@@ -975,6 +1010,9 @@ public:
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classof(const ObjCProtocolDecl *D) { return true; }
   static bool classofKind(Kind K) { return K == ObjCProtocol; }
+
+  friend class ASTDeclReader;
+  friend class ASTDeclWriter;
 };
 
 /// ObjCClassDecl - Specifies a list of forward class declarations. For example:

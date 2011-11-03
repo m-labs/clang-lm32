@@ -36,16 +36,36 @@ typedef _NSCachedAttributedString *BadClassForWeak;
 
 @property (assign) Foo *no_user_ivar1;
 @property (readonly) Foo *no_user_ivar2;
+
+@property (retain) id def1;
+@property (atomic,retain) id def2;
+@property (retain,atomic) id def3;
+
 @end
 
 @implementation Foo
 @synthesize x,w,q1,q2,oo,bcw,not_safe1,not_safe2,not_safe3;
 @synthesize no_user_ivar1, no_user_ivar2;
 @synthesize assign_plus1, assign_plus2, assign_plus3;
+@synthesize def1, def2, def3;
 
 -(void)test:(Foo *)parm {
   assign_plus1 = [[Foo alloc] init];
   assign_plus2 = [Foo new];
   assign_plus3 = [parm retain];
 }
+@end
+
+@interface TestExt
+@property (retain,readonly) TestExt *x1;
+@property (readonly) TestExt *x2;
+@end
+
+@interface TestExt()
+@property (retain,readwrite) TestExt *x1;
+@property (readwrite) TestExt *x2;
+@end
+
+@implementation TestExt
+@synthesize x1, x2;
 @end

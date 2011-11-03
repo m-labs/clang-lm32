@@ -15,6 +15,7 @@
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/LocInfoType.h"
 #include "clang/Sema/ParsedTemplate.h"
+#include "clang/Sema/SemaDiagnostic.h"
 #include "clang/Sema/Sema.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Expr.h"
@@ -150,6 +151,9 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
                                              unsigned TypeQuals,
                                              bool RefQualifierIsLvalueRef,
                                              SourceLocation RefQualifierLoc,
+                                             SourceLocation ConstQualifierLoc,
+                                             SourceLocation
+                                                 VolatileQualifierLoc,
                                              SourceLocation MutableLoc,
                                              ExceptionSpecificationType
                                                  ESpecType,
@@ -176,6 +180,8 @@ DeclaratorChunk DeclaratorChunk::getFunction(bool hasProto, bool isVariadic,
   I.Fun.ArgInfo                 = 0;
   I.Fun.RefQualifierIsLValueRef = RefQualifierIsLvalueRef;
   I.Fun.RefQualifierLoc         = RefQualifierLoc.getRawEncoding();
+  I.Fun.ConstQualifierLoc       = ConstQualifierLoc.getRawEncoding();
+  I.Fun.VolatileQualifierLoc    = VolatileQualifierLoc.getRawEncoding();
   I.Fun.MutableLoc              = MutableLoc.getRawEncoding();
   I.Fun.ExceptionSpecType       = ESpecType;
   I.Fun.ExceptionSpecLoc        = ESpecLoc.getRawEncoding();
@@ -257,6 +263,7 @@ bool Declarator::isDeclarationOfFunction() const {
     case TST_enum:
     case TST_error:
     case TST_float:
+    case TST_half:
     case TST_int:
     case TST_struct:
     case TST_union:
@@ -373,6 +380,7 @@ const char *DeclSpec::getSpecifierName(DeclSpec::TST T) {
   case DeclSpec::TST_char16:      return "char16_t";
   case DeclSpec::TST_char32:      return "char32_t";
   case DeclSpec::TST_int:         return "int";
+  case DeclSpec::TST_half:        return "half";
   case DeclSpec::TST_float:       return "float";
   case DeclSpec::TST_double:      return "double";
   case DeclSpec::TST_bool:        return "_Bool";
@@ -887,6 +895,13 @@ void DeclSpec::Finish(DiagnosticsEngine &D, Preprocessor &PP) {
       StorageClassSpec == SCS_auto)
     Diag(D, StorageClassSpecLoc, diag::warn_auto_storage_class)
       << FixItHint::CreateRemoval(StorageClassSpecLoc);
+  if (TypeSpecType == TST_char16 || TypeSpecType == TST_char32)
+    Diag(D, TSTLoc, diag::warn_cxx98_compat_unicode_type)
+      << (TypeSpecType == TST_char16 ? "char16_t" : "char32_t");
+  if (TypeSpecType == TST_decltype)
+    Diag(D, TSTLoc, diag::warn_cxx98_compat_decltype);
+  if (Constexpr_specified)
+    Diag(D, ConstexprLoc, diag::warn_cxx98_compat_constexpr);
 
   // C++ [class.friend]p6:
   //   No storage-class-specifier shall appear in the decl-specifier-seq

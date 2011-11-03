@@ -380,13 +380,15 @@ static void computeBlockInfo(CodeGenModule &CGM, CGBlockInfo &info) {
       }
     }
 
-    CharUnits size = C.getTypeSizeInChars(variable->getType());
+    QualType VT = variable->getType();
+    CharUnits size = C.getTypeSizeInChars(VT);
     CharUnits align = C.getDeclAlign(variable);
+    
     maxFieldAlign = std::max(maxFieldAlign, align);
 
     llvm::Type *llvmType =
-      CGM.getTypes().ConvertTypeForMem(variable->getType());
-
+      CGM.getTypes().ConvertTypeForMem(VT);
+    
     layout.push_back(BlockLayoutChunk(align, size, &*ci, llvmType));
   }
 
@@ -996,7 +998,7 @@ CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
     for (BlockDecl::capture_const_iterator ci = blockDecl->capture_begin(),
            ce = blockDecl->capture_end(); ci != ce; ++ci) {
       const VarDecl *variable = ci->getVariable();
-      DI->setLocation(variable->getLocation());
+      DI->EmitLocation(Builder, variable->getLocation());
 
       const CGBlockInfo::Capture &capture = blockInfo.getCapture(variable);
       if (capture.isConstant()) {

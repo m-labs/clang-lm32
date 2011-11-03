@@ -24,6 +24,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include <map>
 #include <queue>
@@ -43,6 +44,7 @@ class CXXBaseSpecifier;
 class CXXCtorInitializer;
 class FPOptions;
 class HeaderSearch;
+class IdentifierResolver;
 class MacroDefinition;
 class MemorizeStatCalls;
 class OpaqueValueExpr;
@@ -56,6 +58,8 @@ class SourceManager;
 class SwitchCase;
 class TargetInfo;
 class VersionTuple;
+
+namespace SrcMgr { class SLocEntry; }
 
 /// \brief Writes an AST file containing the contents of a translation unit.
 ///
@@ -140,7 +144,25 @@ private:
 
   /// \brief Offset of each declaration in the bitstream, indexed by
   /// the declaration's ID.
-  std::vector<uint32_t> DeclOffsets;
+  std::vector<serialization::DeclOffset> DeclOffsets;
+
+  /// \brief Sorted (by file offset) vector of pairs of file offset/DeclID.
+  typedef SmallVector<std::pair<unsigned, serialization::DeclID>, 64>
+    LocDeclIDsTy;
+  struct DeclIDInFileInfo {
+    LocDeclIDsTy DeclIDs;
+    /// \brief Set when the DeclIDs vectors from all files are joined, this
+    /// indicates the index that this particular vector has in the global one.
+    unsigned FirstDeclIndex;
+  };
+  typedef llvm::DenseMap<const SrcMgr::SLocEntry *,
+                         DeclIDInFileInfo *> FileDeclIDsTy;
+
+  /// \brief Map from file SLocEntries to info about the file-level declarations
+  /// that it contains.
+  FileDeclIDsTy FileDeclIDs;
+
+  void associateDeclWithFile(const Decl *D, serialization::DeclID);
 
   /// \brief The first ID number we can use for our own types.
   serialization::TypeID FirstTypeID;
@@ -264,14 +286,24 @@ private:
   /// another module.
   SmallVector<ChainedObjCCategoriesData, 16> LocalChainedObjCCategories;
 
+  struct ReplacedDeclInfo {
+    serialization::DeclID ID;
+    uint64_t Offset;
+    unsigned Loc;
+
+    ReplacedDeclInfo() : ID(0), Offset(0), Loc(0) {}
+    ReplacedDeclInfo(serialization::DeclID ID, uint64_t Offset,
+                     SourceLocation Loc)
+      : ID(ID), Offset(Offset), Loc(Loc.getRawEncoding()) {}
+  };
+
   /// \brief Decls that have been replaced in the current dependent AST file.
   ///
   /// When a decl changes fundamentally after being deserialized (this shouldn't
   /// happen, but the ObjC AST nodes are designed this way), it will be
   /// serialized again. In this case, it is registered here, so that the reader
   /// knows to read the updated version.
-  SmallVector<std::pair<serialization::DeclID, uint64_t>, 16>
-      ReplacedDecls;
+  SmallVector<ReplacedDeclInfo, 16> ReplacedDecls;
 
   /// \brief Statements that we've encountered while serializing a
   /// declaration or type.
@@ -331,7 +363,9 @@ private:
   SmallVector<QueuedCXXBaseSpecifiers, 2> CXXBaseSpecifiersToWrite;
                     
   /// \brief Write the given subexpression to the bitstream.
-  void WriteSubStmt(Stmt *S);
+  void WriteSubStmt(Stmt *S,
+                    llvm::DenseMap<Stmt *, uint64_t> &SubStmtEntries,
+                    llvm::DenseSet<Stmt *> &ParentStmts);
 
   void WriteBlockInfoBlock();
   void WriteMetadata(ASTContext &Context, StringRef isysroot,
@@ -350,9 +384,11 @@ private:
   uint64_t WriteDeclContextLexicalBlock(ASTContext &Context, DeclContext *DC);
   uint64_t WriteDeclContextVisibleBlock(ASTContext &Context, DeclContext *DC);
   void WriteTypeDeclOffsets();
+  void WriteFileDeclIDsMap();
   void WriteSelectors(Sema &SemaRef);
   void WriteReferencedSelectorsPool(Sema &SemaRef);
-  void WriteIdentifierTable(Preprocessor &PP, bool IsModule);
+  void WriteIdentifierTable(Preprocessor &PP, IdentifierResolver &IdResolver,
+                            bool IsModule);
   void WriteAttributes(const AttrVec &Attrs, RecordDataImpl &Record);
   void ResolveDeclUpdatesBlocks();
   void WriteDeclUpdatesBlocks();
@@ -388,6 +424,7 @@ public:
   /// \brief Create a new precompiled header writer that outputs to
   /// the given bitstream.
   ASTWriter(llvm::BitstreamWriter &Stream);
+  ~ASTWriter();
                     
   /// \brief Write a precompiled header for the given semantic analysis.
   ///

@@ -492,6 +492,13 @@ void Preprocessor::HandleIdentifier(Token &Identifier) {
 
   IdentifierInfo &II = *Identifier.getIdentifierInfo();
 
+  // If the information about this identifier is out of date, update it from
+  // the external source.
+  if (II.isOutOfDate()) {
+    ExternalSource->updateOutOfDateIdentifier(II);
+    Identifier.setKind(II.getTokenID());
+  }
+  
   // If this identifier was poisoned, and if it was not produced from a macro
   // expansion, emit an error.
   if (II.isPoisoned() && CurPPLexer) {
@@ -511,6 +518,17 @@ void Preprocessor::HandleIdentifier(Token &Identifier) {
         Identifier.setFlag(Token::DisableExpand);
       }
     }
+  }
+
+  // If this identifier is a keyword in C++11, produce a warning. Don't warn if
+  // we're not considering macro expansion, since this identifier might be the
+  // name of a macro.
+  // FIXME: This warning is disabled in cases where it shouldn't be, like
+  //   "#define constexpr constexpr", "int constexpr;"
+  if (II.isCXX11CompatKeyword() & !DisableMacroExpansion) {
+    Diag(Identifier, diag::warn_cxx11_keyword) << II.getName();
+    // Don't diagnose this keyword again in this translation unit.
+    II.setIsCXX11CompatKeyword(false);
   }
 
   // C++ 2.11p2: If this is an alternative representation of a C++ operator,

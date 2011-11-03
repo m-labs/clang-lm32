@@ -146,6 +146,7 @@ protected:
     friend class CXXUnresolvedConstructExpr; // ctor
     friend class CXXDependentScopeMemberExpr; // ctor
     friend class OverloadExpr; // ctor
+    friend class AtomicExpr; // ctor
     unsigned : NumStmtBits;
 
     unsigned ValueKind : 2;
@@ -1595,9 +1596,8 @@ public:
   }
 
   static bool classof(SEHTryStmt *) { return true; }
-
 };
-
+  
 }  // end namespace clang
 
 #endif

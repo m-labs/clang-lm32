@@ -337,7 +337,7 @@ public:
 class TransferFunctions : public StmtVisitor<TransferFunctions> {
   CFGBlockValues &vals;
   const CFG &cfg;
-  AnalysisContext &ac;
+  AnalysisDeclContext &ac;
   UninitVariablesHandler *handler;
   
   /// The last DeclRefExpr seen when analyzing a block.  Used to
@@ -356,7 +356,7 @@ class TransferFunctions : public StmtVisitor<TransferFunctions> {
   
 public:
   TransferFunctions(CFGBlockValues &vals, const CFG &cfg,
-                    AnalysisContext &ac,
+                    AnalysisDeclContext &ac,
                     UninitVariablesHandler *handler)
     : vals(vals), cfg(cfg), ac(ac), handler(handler),
       lastDR(0), lastLoad(0),
@@ -484,11 +484,17 @@ void TransferFunctions::VisitDeclStmt(DeclStmt *ds) {
               vals[vd] = Uninitialized;
               lastLoad = 0;
               lastDR = 0;
+              if (handler)
+                handler->handleSelfInit(vd);
               return;
             }
           }
 
           // All other cases: treat the new variable as initialized.
+          // This is a minor optimization to reduce the propagation
+          // of the analysis, since we will have already reported
+          // the use of the uninitialized value (which visiting the
+          // initializer).
           vals[vd] = Initialized;
         }
       }
@@ -609,7 +615,7 @@ void TransferFunctions::ProcessUses(Stmt *s) {
 //====------------------------------------------------------------------------//
 
 static bool runOnBlock(const CFGBlock *block, const CFG &cfg,
-                       AnalysisContext &ac, CFGBlockValues &vals,
+                       AnalysisDeclContext &ac, CFGBlockValues &vals,
                        llvm::BitVector &wasAnalyzed,
                        UninitVariablesHandler *handler = 0) {
   
@@ -666,7 +672,7 @@ static bool runOnBlock(const CFGBlock *block, const CFG &cfg,
 void clang::runUninitializedVariablesAnalysis(
     const DeclContext &dc,
     const CFG &cfg,
-    AnalysisContext &ac,
+    AnalysisDeclContext &ac,
     UninitVariablesHandler &handler,
     UninitVariablesAnalysisStats &stats) {
   CFGBlockValues vals(cfg);

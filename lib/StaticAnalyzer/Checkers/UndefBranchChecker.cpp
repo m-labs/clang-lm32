@@ -49,21 +49,19 @@ class UndefBranchChecker : public Checker<check::BranchCondition> {
   };
 
 public:
-  void checkBranchCondition(const Stmt *Condition, BranchNodeBuilder &Builder,
-                            ExprEngine &Eng) const;
+  void checkBranchCondition(const Stmt *Condition, CheckerContext &Ctx) const;
 };
 
 }
 
 void UndefBranchChecker::checkBranchCondition(const Stmt *Condition,
-                                              BranchNodeBuilder &Builder,
-                                              ExprEngine &Eng) const {
-  const ProgramState *state = Builder.getState();
-  SVal X = state->getSVal(Condition);
+                                              CheckerContext &Ctx) const {
+  SVal X = Ctx.getState()->getSVal(Condition);
   if (X.isUndef()) {
-    ExplodedNode *N = Builder.generateNode(Condition, state);
+    // Generate a sink node, which implicitly marks both outgoing branches as
+    // infeasible.
+    ExplodedNode *N = Ctx.generateSink();
     if (N) {
-      N->markAsSink();
       if (!BT)
         BT.reset(
                new BuiltinBug("Branch condition evaluates to a garbage value"));
@@ -100,11 +98,8 @@ void UndefBranchChecker::checkBranchCondition(const Stmt *Condition,
       R->addVisitor(bugreporter::getTrackNullOrUndefValueVisitor(N, Ex));
       R->addRange(Ex->getSourceRange());
 
-      Eng.getBugReporter().EmitReport(R);
+      Ctx.EmitReport(R);
     }
-
-    Builder.markInfeasible(true);
-    Builder.markInfeasible(false);
   }
 }
 
