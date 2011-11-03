@@ -1133,10 +1133,29 @@ namespace {
 class Mico32TargetInfo : public TargetInfo {
   static const char * const GCCRegNames[];
   static const TargetInfo::GCCRegAlias GCCRegAliases[];
+  std::vector<llvm::StringRef> AvailableFeatures;
 
 public:
   Mico32TargetInfo(const std::string& triple) : TargetInfo(triple) {
-    DescriptionString = "E-p:32:32:32-i8:8:8-i16:16:16";
+//    PointerWidth = PointerAlign = 32;
+//    LongWidth = LongAlign = 32;
+    LongLongWidth = 64;
+    LongLongAlign = 32;
+    DoubleWidth = 64;
+    DoubleAlign = 32;
+    LongDoubleWidth = 64;
+    LongDoubleAlign = 32;
+//    IntMaxType = SignedLong;
+//    UIntMaxType = UnsignedLong;
+//    Int64Type = SignedLongLong;
+    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a64:32:32-S32-s64:32:32-n32";
+    // Define available target features
+    // These must be defined in sorted order!      
+//    AvailableFeatures.push_back("barrel");
+//    AvailableFeatures.push_back("div");
+//    AvailableFeatures.push_back("mul");
+//    AvailableFeatures.push_back("sdiv");
+    AvailableFeatures.push_back("nospbias");
   }
 
   virtual void getTargetBuiltins(const Builtin::Info *&Records,
@@ -1178,6 +1197,19 @@ public:
   virtual const char *getClobbers() const {
     return "";
   }
+
+  bool setFeatureEnabled(llvm::StringMap<bool> &Features,
+                                           const std::string &Name,
+                                           bool Enabled) const {
+    if(std::binary_search(AvailableFeatures.begin(), AvailableFeatures.end(),
+                          Name)) {
+      Features[Name] = Enabled;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
 };
 
 /// Mico32TargetInfo::getTargetDefines - Return a set of the Mico32-specific
