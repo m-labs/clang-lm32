@@ -1153,7 +1153,7 @@ public:
 //    IntMaxType = SignedLong;
 //    UIntMaxType = UnsignedLong;
 //    Int64Type = SignedLongLong;
-    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a64:32:32-S32-s64:32:32-n32";
+    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:32:32-S32-s0:32:32-n32";
     // Define available target features
     // These must be defined in sorted order!      
 //    AvailableFeatures.push_back("barrel");
