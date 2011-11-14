@@ -1135,12 +1135,14 @@ CharUnits ASTContext::getTypeAlignInChars(const Type *T) const {
 unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
   unsigned ABIAlign = getTypeAlign(T);
 
+/*
   // Double and long long should be naturally aligned if possible.
   if (const ComplexType* CT = T->getAs<ComplexType>())
     T = CT->getElementType().getTypePtr();
   if (T->isSpecificBuiltinType(BuiltinType::Double) ||
       T->isSpecificBuiltinType(BuiltinType::LongLong))
     return std::max(ABIAlign, (unsigned)getTypeSize(T));
+*/
 
   return ABIAlign;
 }
