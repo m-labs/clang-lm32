@@ -30,6 +30,21 @@
 #include "llvm/Support/Path.h"
 using namespace clang;
 
+//===----------------------------------------------------------------------===//
+// Initialization.
+//===----------------------------------------------------------------------===//
+
+CompilerInvocationBase::CompilerInvocationBase()
+  : LangOpts(new LangOptions()) {}
+
+CompilerInvocationBase::CompilerInvocationBase(const CompilerInvocationBase &X)
+  : llvm::RefCountedBase<CompilerInvocation>(),
+    LangOpts(new LangOptions(*X.getLangOpts())) {}
+
+//===----------------------------------------------------------------------===//
+// Utility functions.
+//===----------------------------------------------------------------------===//
+
 static const char *getAnalysisStoreName(AnalysisStores Kind) {
   switch (Kind) {
   default:
@@ -575,10 +590,18 @@ static void HeaderSearchOptsToArgs(const HeaderSearchOptions &Opts,
         break;
       }
     } else {
-      if (E.Group != frontend::Angled && E.Group != frontend::System)
-        llvm::report_fatal_error("Invalid option set!");
-      Res.push_back(E.Group == frontend::Angled ? "-iwithprefixbefore" :
-                    "-iwithprefix");
+      if (E.IsInternal) {
+        assert(E.Group == frontend::System && "Unexpected header search group");
+        if (E.ImplicitExternC)
+          Res.push_back("-internal-externc-isystem");
+        else
+          Res.push_back("-internal-isystem");
+      } else {
+        if (E.Group != frontend::Angled && E.Group != frontend::System)
+          llvm::report_fatal_error("Invalid option set!");
+        Res.push_back(E.Group == frontend::Angled ? "-iwithprefixbefore" :
+                      "-iwithprefix");
+      }
     }
     Res.push_back(E.Path);
   }
@@ -644,6 +667,8 @@ static void LangOptsToArgs(const LangOptions &Opts,
     Res.push_back("-fpascal-strings");
   if (Opts.CatchUndefined)
     Res.push_back("-fcatch-undefined-behavior");
+  if (Opts.AddressSanitizer)
+    Res.push_back("-faddress-sanitizer");
   if (Opts.WritableStrings)
     Res.push_back("-fwritable-strings");
   if (Opts.ConstStrings)
@@ -764,6 +789,10 @@ static void LangOptsToArgs(const LangOptions &Opts,
     Res.push_back("-ftemplate-depth");
     Res.push_back(llvm::utostr(Opts.InstantiationDepth));
   }
+  if (Opts.ConstexprCallDepth != DefaultLangOpts.ConstexprCallDepth) {
+    Res.push_back("-fconstexpr-depth");
+    Res.push_back(llvm::utostr(Opts.ConstexprCallDepth));
+  }
   if (!Opts.ObjCConstantStringClass.empty()) {
     Res.push_back("-fconstant-string-class");
     Res.push_back(Opts.ObjCConstantStringClass);
@@ -780,6 +809,8 @@ static void LangOptsToArgs(const LangOptions &Opts,
     Res.push_back("-fdeprecated-macro");
   if (Opts.ApplePragmaPack)
     Res.push_back("-fapple-pragma-pack");
+  if (!Opts.CurrentModule.empty())
+    Res.push_back("-fmodule-name=" + Opts.CurrentModule);
 }
 
 static void PreprocessorOptsToArgs(const PreprocessorOptions &Opts,
@@ -879,7 +910,7 @@ void CompilerInvocation::toArgs(std::vector<std::string> &Res) {
   FileSystemOptsToArgs(getFileSystemOpts(), Res);
   FrontendOptsToArgs(getFrontendOpts(), Res);
   HeaderSearchOptsToArgs(getHeaderSearchOpts(), Res);
-  LangOptsToArgs(getLangOpts(), Res);
+  LangOptsToArgs(*getLangOpts(), Res);
   PreprocessorOptsToArgs(getPreprocessorOpts(), Res);
   PreprocessorOutputOptsToArgs(getPreprocessorOutputOpts(), Res);
   TargetOptsToArgs(getTargetOpts(), Res);
@@ -1019,7 +1050,8 @@ static void ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
     : CodeGenOptions::OnlyAlwaysInlining;
 
   Opts.DebugInfo = Args.hasArg(OPT_g);
-  Opts.LimitDebugInfo = Args.hasArg(OPT_flimit_debug_info);
+  Opts.LimitDebugInfo = !Args.hasArg(OPT_fno_limit_debug_info)
+    || Args.hasArg(OPT_flimit_debug_info);
   Opts.DisableLLVMOpts = Args.hasArg(OPT_disable_llvm_optzns);
   Opts.DisableRedZone = Args.hasArg(OPT_disable_red_zone);
   Opts.ForbidGuardVariables = Args.hasArg(OPT_fforbid_guard_variables);
@@ -1082,6 +1114,11 @@ static void ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.CoverageFile = Args.getLastArgValue(OPT_coverage_file);
   Opts.DebugCompilationDir = Args.getLastArgValue(OPT_fdebug_compilation_dir);
   Opts.LinkBitcodeFile = Args.getLastArgValue(OPT_mlink_bitcode_file);
+  Opts.StackRealignment = Args.hasArg(OPT_mstackrealign);
+  if (Arg *A = Args.getLastArg(OPT_mstack_alignment)) {
+    StringRef Val = A->getValue(Args);
+    Val.getAsInteger(10, Opts.StackAlignment);
+  }
 
   if (Arg *A = Args.getLastArg(OPT_fobjc_dispatch_method_EQ)) {
     StringRef Name = A->getValue(Args);
@@ -1482,6 +1519,15 @@ static void ParseHeaderSearchArgs(HeaderSearchOptions &Opts, ArgList &Args) {
        ie = Args.filtered_end(); it != ie; ++it)
     Opts.AddPath((*it)->getValue(Args), frontend::ObjCXXSystem, true, false,
                  true);
+
+  // Add the internal paths from a driver that detects standard include paths.
+  for (arg_iterator I = Args.filtered_begin(OPT_internal_isystem,
+                                            OPT_internal_externc_isystem),
+                    E = Args.filtered_end();
+       I != E; ++I)
+    Opts.AddPath((*I)->getValue(Args), frontend::System,
+                 false, false, /*IgnoreSysRoot=*/true, /*IsInternal=*/true,
+                 (*I)->getOption().matches(OPT_internal_externc_isystem));
 }
 
 void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
@@ -1737,7 +1783,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.ElideConstructors = !Args.hasArg(OPT_fno_elide_constructors);
   Opts.MathErrno = Args.hasArg(OPT_fmath_errno);
   Opts.InstantiationDepth = Args.getLastArgIntValue(OPT_ftemplate_depth, 1024,
-                                               Diags);
+                                                    Diags);
+  Opts.ConstexprCallDepth = Args.getLastArgIntValue(OPT_fconstexpr_depth, 512,
+                                                    Diags);
   Opts.DelayedTemplateParsing = Args.hasArg(OPT_fdelayed_template_parsing);
   Opts.NumLargeByValueCopy = Args.getLastArgIntValue(OPT_Wlarge_by_value_copy,
                                                     0, Diags);
@@ -1761,12 +1809,13 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.NoBitFieldTypeAlign = Args.hasArg(OPT_fno_bitfield_type_align);
   Opts.SinglePrecisionConstants = Args.hasArg(OPT_cl_single_precision_constant);
   Opts.FastRelaxedMath = Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.OptimizeSize = 0;
   Opts.MRTD = Args.hasArg(OPT_mrtd);
   Opts.FakeAddressSpaceMap = Args.hasArg(OPT_ffake_address_space_map);
   Opts.ParseUnknownAnytype = Args.hasArg(OPT_funknown_anytype);
   Opts.DebuggerSupport = Args.hasArg(OPT_fdebugger_support);
+  Opts.AddressSanitizer = Args.hasArg(OPT_faddress_sanitizer);
   Opts.ApplePragmaPack = Args.hasArg(OPT_fapple_pragma_pack);
+  Opts.CurrentModule = Args.getLastArgValue(OPT_fmodule_name);
 
   // Record whether the __DEPRECATED define was requested.
   Opts.Deprecated = Args.hasFlag(OPT_fdeprecated_macro,
@@ -1776,6 +1825,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   // FIXME: Eliminate this dependency.
   unsigned Opt = getOptimizationLevel(Args, IK, Diags);
   Opts.Optimize = Opt != 0;
+  Opts.OptimizeSize = Args.hasArg(OPT_Os) || Args.hasArg(OPT_Oz);
 
   // This is the __NO_INLINE__ define, which just depends on things like the
   // optimization level and -fno-inline, not actually whether the backend has
@@ -1955,9 +2005,9 @@ void CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
   ParseCodeGenArgs(Res.getCodeGenOpts(), *Args, DashX, Diags);
   ParseHeaderSearchArgs(Res.getHeaderSearchOpts(), *Args);
   if (DashX != IK_AST && DashX != IK_LLVM_IR) {
-    ParseLangArgs(Res.getLangOpts(), *Args, DashX, Diags);
+    ParseLangArgs(*Res.getLangOpts(), *Args, DashX, Diags);
     if (Res.getFrontendOpts().ProgramAction == frontend::RewriteObjC)
-      Res.getLangOpts().ObjCExceptions = 1;
+      Res.getLangOpts()->ObjCExceptions = 1;
   }
   // FIXME: ParsePreprocessorArgs uses the FileManager to read the contents of
   // PCH file and find the original header name. Remove the need to do that in
@@ -2030,9 +2080,9 @@ std::string CompilerInvocation::getModuleHash() const {
   
   // Extend the signature with the language options
 #define LANGOPT(Name, Bits, Default, Description) \
-  Signature.add(LangOpts.Name, Bits);
+  Signature.add(LangOpts->Name, Bits);
 #define ENUM_LANGOPT(Name, Type, Bits, Default, Description) \
-  Signature.add(static_cast<unsigned>(LangOpts.get##Name()), Bits);
+  Signature.add(static_cast<unsigned>(LangOpts->get##Name()), Bits);
 #define BENIGN_LANGOPT(Name, Bits, Default, Description)
 #define BENIGN_ENUM_LANGOPT(Name, Type, Bits, Default, Description)
 #include "clang/Basic/LangOptions.def"

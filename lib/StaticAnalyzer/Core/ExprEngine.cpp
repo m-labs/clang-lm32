@@ -83,13 +83,13 @@ ExprEngine::~ExprEngine() {
 
 const ProgramState *ExprEngine::getInitialState(const LocationContext *InitLoc) {
   const ProgramState *state = StateMgr.getInitialState(InitLoc);
+  const Decl *D = InitLoc->getDecl();
 
   // Preconditions.
-
   // FIXME: It would be nice if we had a more general mechanism to add
   // such preconditions.  Some day.
   do {
-    const Decl *D = InitLoc->getDecl();
+
     if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
       // Precondition: the first argument of 'main' is an integer guaranteed
       //  to be > 0.
@@ -119,25 +119,42 @@ const ProgramState *ExprEngine::getInitialState(const LocationContext *InitLoc) 
 
       if (const ProgramState *newState = state->assume(*Constraint, true))
         state = newState;
-
-      break;
     }
+    break;
+  }
+  while (0);
 
-    if (const ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(D)) {
-      // Precondition: 'self' is always non-null upon entry to an Objective-C
-      // method.
-      const ImplicitParamDecl *SelfD = MD->getSelfDecl();
-      const MemRegion *R = state->getRegion(SelfD, InitLoc);
-      SVal V = state->getSVal(loc::MemRegionVal(R));
+  if (const ObjCMethodDecl *MD = dyn_cast<ObjCMethodDecl>(D)) {
+    // Precondition: 'self' is always non-null upon entry to an Objective-C
+    // method.
+    const ImplicitParamDecl *SelfD = MD->getSelfDecl();
+    const MemRegion *R = state->getRegion(SelfD, InitLoc);
+    SVal V = state->getSVal(loc::MemRegionVal(R));
 
-      if (const Loc *LV = dyn_cast<Loc>(&V)) {
-        // Assume that the pointer value in 'self' is non-null.
-        state = state->assume(*LV, true);
-        assert(state && "'self' cannot be null");
+    if (const Loc *LV = dyn_cast<Loc>(&V)) {
+      // Assume that the pointer value in 'self' is non-null.
+      state = state->assume(*LV, true);
+      assert(state && "'self' cannot be null");
+    }
+  }
+
+  if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D)) {
+    if (!MD->isStatic()) {
+      // Precondition: 'this' is always non-null upon entry to the
+      // top-level function.  This is our starting assumption for
+      // analyzing an "open" program.
+      const StackFrameContext *SFC = InitLoc->getCurrentStackFrame();
+      if (SFC->getParent() == 0) {
+        loc::MemRegionVal L(getCXXThisRegion(MD, SFC));
+        SVal V = state->getSVal(L);
+        if (const Loc *LV = dyn_cast<Loc>(&V)) {
+          state = state->assume(*LV, true);
+          assert(state && "'this' cannot be null");
+        }
       }
     }
-  } while (0);
-
+  }
+    
   return state;
 }
 
@@ -220,6 +237,29 @@ void ExprEngine::processCFGElement(const CFGElement E, ExplodedNode *Pred,
   currentBuilderContext = 0;
 }
 
+static bool shouldRemoveDeadBindings(AnalysisManager &AMgr,
+                                     const CFGStmt S,
+                                     const ExplodedNode *Pred,
+                                     const LocationContext *LC) {
+  
+  // Are we never purging state values?
+  if (AMgr.getPurgeMode() == PurgeNone)
+    return false;
+
+  // Is this the beginning of a basic block?
+  if (isa<BlockEntrance>(Pred->getLocation()))
+    return true;
+
+  // Is this on a non-expression?
+  if (!isa<Expr>(S.getStmt()))
+    return true;
+  
+  // Is this an expression that is consumed by another expression?  If so,
+  // postpone cleaning out the state.
+  ParentMap &PM = LC->getAnalysisDeclContext()->getParentMap();
+  return !PM.isConsumedExpr(cast<Expr>(S.getStmt()));
+}
+
 void ExprEngine::ProcessStmt(const CFGStmt S,
                              ExplodedNode *Pred) {
   // TODO: Use RAII to remove the unnecessary, tagged nodes.
@@ -244,7 +284,7 @@ void ExprEngine::ProcessStmt(const CFGStmt S,
   const LocationContext *LC = EntryNode->getLocationContext();
   SymbolReaper SymReaper(LC, currentStmt, SymMgr, getStoreManager());
 
-  if (AMgr.getPurgeMode() != PurgeNone) {
+  if (shouldRemoveDeadBindings(AMgr, S, Pred, LC)) {
     getCheckerManager().runCheckersForLiveSymbols(CleanedState, SymReaper);
 
     const StackFrameContext *SFC = LC->getCurrentStackFrame();
@@ -854,6 +894,21 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
       }
       else
         VisitUnaryOperator(U, Pred, Dst);
+      Bldr.addNodes(Dst);
+      break;
+    }
+
+    case Stmt::PseudoObjectExprClass: {
+      Bldr.takeNodes(Pred);
+      const ProgramState *state = Pred->getState();
+      const PseudoObjectExpr *PE = cast<PseudoObjectExpr>(S);
+      if (const Expr *Result = PE->getResultExpr()) { 
+        SVal V = state->getSVal(Result);
+        Bldr.generateNode(S, Pred, state->BindExpr(S, V));
+      }
+      else
+        Bldr.generateNode(S, Pred, state->BindExpr(S, UnknownVal()));
+
       Bldr.addNodes(Dst);
       break;
     }
@@ -1610,7 +1665,8 @@ void ExprEngine::evalEagerlyAssume(ExplodedNodeSet &Dst, ExplodedNodeSet &Src,
 
     const ProgramState *state = Pred->getState();
     SVal V = state->getSVal(Ex);
-    if (nonloc::SymExprVal *SEV = dyn_cast<nonloc::SymExprVal>(&V)) {
+    nonloc::SymbolVal *SEV = dyn_cast<nonloc::SymbolVal>(&V);
+    if (SEV && SEV->isExpression()) {
       const std::pair<const ProgramPointTag *, const ProgramPointTag*> &tags =
         getEagerlyAssumeTags();
 

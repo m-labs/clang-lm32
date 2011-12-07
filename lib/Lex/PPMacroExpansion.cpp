@@ -583,6 +583,7 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
   const LangOptions &LangOpts = PP.getLangOptions();
 
   return llvm::StringSwitch<bool>(II->getName())
+           .Case("address_sanitizer", LangOpts.AddressSanitizer)
            .Case("attribute_analyzer_noreturn", true)
            .Case("attribute_availability", true)
            .Case("attribute_cf_returns_not_retained", true)
@@ -674,6 +675,7 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
                  PP.getIdentifierInfo("__is_empty")->getTokenID()
                                                             != tok::identifier)
            .Case("is_enum", LangOpts.CPlusPlus)
+           .Case("is_final", LangOpts.CPlusPlus)
            .Case("is_literal", LangOpts.CPlusPlus)
            .Case("is_standard_layout", LangOpts.CPlusPlus)
            // __is_pod is available only if the horrible

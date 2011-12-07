@@ -862,7 +862,14 @@ Decl *TemplateDeclInstantiator::VisitClassTemplateDecl(ClassTemplateDecl *D) {
   // Finish handling of friends.
   if (isFriend) {
     DC->makeDeclVisibleInContext(Inst, /*Recoverable*/ false);
+    Inst->setLexicalDeclContext(Owner);
+    RecordInst->setLexicalDeclContext(Owner);
     return Inst;
+  }
+
+  if (D->isOutOfLine()) {
+    Inst->setLexicalDeclContext(D->getLexicalDeclContext());
+    RecordInst->setLexicalDeclContext(D->getLexicalDeclContext());
   }
 
   Owner->addDecl(Inst);
@@ -1038,8 +1045,7 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(FunctionDecl *D,
   LocalInstantiationScope Scope(SemaRef, MergeWithParentScope);
 
   SmallVector<ParmVarDecl *, 4> Params;
-  TypeSourceInfo *TInfo = D->getTypeSourceInfo();
-  TInfo = SubstFunctionType(D, Params);
+  TypeSourceInfo *TInfo = SubstFunctionType(D, Params);
   if (!TInfo)
     return 0;
   QualType T = TInfo->getType();
@@ -1526,6 +1532,12 @@ TemplateDeclInstantiator::VisitCXXMethodDecl(CXXMethodDecl *D,
   Method->setAccess(D->getAccess());
 
   SemaRef.CheckOverrideControl(Method);
+
+  // If a function is defined as defaulted or deleted, mark it as such now.
+  if (D->isDefaulted())
+    Method->setDefaulted();
+  if (D->isDeletedAsWritten())
+    Method->setDeletedAsWritten();
 
   if (FunctionTemplate) {
     // If there's a function template, let our caller handle it.
@@ -2472,6 +2484,9 @@ void Sema::InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
   InstantiatingTemplate Inst(*this, PointOfInstantiation, Function);
   if (Inst)
     return;
+
+  // Copy the inner loc start from the pattern.
+  Function->setInnerLocStart(PatternDecl->getInnerLocStart());
 
   // If we're performing recursive template instantiation, create our own
   // queue of pending implicit instantiations that we will instantiate later,

@@ -105,6 +105,11 @@ public:
   unsigned VerifyModule      : 1; /// Control whether the module should be run
                                   /// through the LLVM Verifier.
 
+  unsigned StackRealignment  : 1; /// Control whether to permit stack
+                                  /// realignment.
+  unsigned StackAlignment;        /// Overrides default stack alignment,
+                                  /// if not 0.
+
   /// The code model to use (-mcmodel).
   std::string CodeModel;
 
@@ -198,6 +203,8 @@ public:
     UnwindTables = 0;
     UseRegisterSizedBitfieldAccess = 0;
     VerifyModule = 1;
+    StackRealignment = 0;
+    StackAlignment = 0;
 
     Inlining = NoInlining;
     RelocationModel = "pic";

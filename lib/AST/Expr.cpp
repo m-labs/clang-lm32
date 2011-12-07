@@ -185,21 +185,29 @@ static void computeDeclRefDependence(NamedDecl *D, QualType T,
   
   //  (VD) - a constant with integral or enumeration type and is
   //         initialized with an expression that is value-dependent.
+  //  (VD) - a constant with literal type and is initialized with an
+  //         expression that is value-dependent [C++11].
+  //  (VD) - FIXME: Missing from the standard:
+  //       -  an entity with reference type and is initialized with an
+  //          expression that is value-dependent [C++11]
   if (VarDecl *Var = dyn_cast<VarDecl>(D)) {
-    if (Var->getType()->isIntegralOrEnumerationType() &&
-        Var->getType().getCVRQualifiers() == Qualifiers::Const) {
+    if ((D->getASTContext().getLangOptions().CPlusPlus0x ?
+           Var->getType()->isLiteralType() :
+           Var->getType()->isIntegralOrEnumerationType()) &&
+        (Var->getType().getCVRQualifiers() == Qualifiers::Const ||
+         Var->getType()->isReferenceType())) {
       if (const Expr *Init = Var->getAnyInitializer())
         if (Init->isValueDependent()) {
           ValueDependent = true;
           InstantiationDependent = true;
         }
-    } 
-    
+    }
+
     // (VD) - FIXME: Missing from the standard: 
     //      -  a member function or a static data member of the current 
     //         instantiation
-    else if (Var->isStaticDataMember() && 
-             Var->getDeclContext()->isDependentContext()) {
+    if (Var->isStaticDataMember() && 
+        Var->getDeclContext()->isDependentContext()) {
       ValueDependent = true;
       InstantiationDependent = true;
     }
@@ -213,8 +221,7 @@ static void computeDeclRefDependence(NamedDecl *D, QualType T,
   if (isa<CXXMethodDecl>(D) && D->getDeclContext()->isDependentContext()) {
     ValueDependent = true;
     InstantiationDependent = true;
-    return;
-  }  
+  }
 }
 
 void DeclRefExpr::computeDependence() {
@@ -827,7 +834,7 @@ void CallExpr::setNumArgs(ASTContext& C, unsigned NumArgs) {
 
 /// isBuiltinCall - If this is a call to a builtin, return the builtin ID.  If
 /// not, return 0.
-unsigned CallExpr::isBuiltinCall(const ASTContext &Context) const {
+unsigned CallExpr::isBuiltinCall() const {
   // All simple function calls (e.g. func()) are implicitly cast to pointer to
   // function. As a result, we try and obtain the DeclRefExpr from the
   // ImplicitCastExpr.
@@ -1084,7 +1091,6 @@ void CastExpr::CheckCastConsistency() const {
 
   case CK_Dependent:
   case CK_LValueToRValue:
-  case CK_GetObjCProperty:
   case CK_NoOp:
   case CK_PointerToBoolean:
   case CK_IntegralToBoolean:
@@ -1110,8 +1116,6 @@ const char *CastExpr::getCastKindName() const {
     return "LValueBitCast";
   case CK_LValueToRValue:
     return "LValueToRValue";
-  case CK_GetObjCProperty:
-    return "GetObjCProperty";
   case CK_NoOp:
     return "NoOp";
   case CK_BaseToDerived:
@@ -1693,6 +1697,19 @@ bool Expr::isUnusedResultAWarning(SourceLocation &Loc, SourceRange &R1,
     Loc = getExprLoc();
     R1 = getSourceRange();
     return true;
+
+  case PseudoObjectExprClass: {
+    const PseudoObjectExpr *PO = cast<PseudoObjectExpr>(this);
+
+    // Only complain about things that have the form of a getter.
+    if (isa<UnaryOperator>(PO->getSyntacticForm()) ||
+        isa<BinaryOperator>(PO->getSyntacticForm()))
+      return false;
+
+    Loc = getExprLoc();
+    R1 = getSourceRange();
+    return true;
+  }
 
   case StmtExprClass: {
     // Statement exprs don't logically have side effects themselves, but are
@@ -2458,15 +2475,20 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef) const {
     const CXXConstructExpr *CE = cast<CXXConstructExpr>(this);
 
     // Only if it's
-    // 1) an application of the trivial default constructor or
-    if (!CE->getConstructor()->isTrivial()) return false;
-    if (!CE->getNumArgs()) return true;
+    if (CE->getConstructor()->isTrivial()) {
+      // 1) an application of the trivial default constructor or
+      if (!CE->getNumArgs()) return true;
 
-    // 2) an elidable trivial copy construction of an operand which is
-    //    itself a constant initializer.  Note that we consider the
-    //    operand on its own, *not* as a reference binding.
-    return CE->isElidable() &&
-           CE->getArg(0)->isConstantInitializer(Ctx, false);
+      // 2) an elidable trivial copy construction of an operand which is
+      //    itself a constant initializer.  Note that we consider the
+      //    operand on its own, *not* as a reference binding.
+      if (CE->isElidable() &&
+          CE->getArg(0)->isConstantInitializer(Ctx, false))
+        return true;
+    }
+
+    // 3) a foldable constexpr constructor.
+    break;
   }
   case CompoundLiteralExprClass: {
     // This handles gcc's extension that allows global initializers like
@@ -2519,23 +2541,27 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef) const {
   case CXXFunctionalCastExprClass:
   case CXXStaticCastExprClass:
   case ImplicitCastExprClass:
-  case CStyleCastExprClass:
+  case CStyleCastExprClass: {
+    const CastExpr *CE = cast<CastExpr>(this);
+
+    // Handle bitcasts of vector constants.
+    if (getType()->isVectorType() && CE->getCastKind() == CK_BitCast)
+      return CE->getSubExpr()->isConstantInitializer(Ctx, false);
+
     // Handle casts with a destination that's a struct or union; this
     // deals with both the gcc no-op struct cast extension and the
     // cast-to-union extension.
     if (getType()->isRecordType())
-      return cast<CastExpr>(this)->getSubExpr()
-        ->isConstantInitializer(Ctx, false);
-      
+      return CE->getSubExpr()->isConstantInitializer(Ctx, false);
+
     // Integer->integer casts can be handled here, which is important for
     // things like (int)(&&x-&&y).  Scary but true.
     if (getType()->isIntegerType() &&
-        cast<CastExpr>(this)->getSubExpr()->getType()->isIntegerType())
-      return cast<CastExpr>(this)->getSubExpr()
-        ->isConstantInitializer(Ctx, false);
-      
+        CE->getSubExpr()->getType()->isIntegerType())
+      return CE->getSubExpr()->isConstantInitializer(Ctx, false);
+
     break;
-      
+  }
   case MaterializeTemporaryExprClass:
     return cast<MaterializeTemporaryExpr>(this)->GetTemporaryExpr()
                                             ->isConstantInitializer(Ctx, false);
@@ -2598,6 +2624,9 @@ Expr::isNullPointerConstant(ASTContext &Ctx,
   } else if (const MaterializeTemporaryExpr *M 
                                    = dyn_cast<MaterializeTemporaryExpr>(this)) {
     return M->GetTemporaryExpr()->isNullPointerConstant(Ctx, NPC);
+  } else if (const OpaqueValueExpr *OVE = dyn_cast<OpaqueValueExpr>(this)) {
+    if (const Expr *Source = OVE->getSourceExpr())
+      return Source->isNullPointerConstant(Ctx, NPC);
   }
 
   // C++0x nullptr_t is always a null pointer constant.
@@ -3304,6 +3333,72 @@ const OpaqueValueExpr *OpaqueValueExpr::findInCopyConstruct(const Expr *e) {
   while (const ImplicitCastExpr *ice = dyn_cast<ImplicitCastExpr>(e))
     e = ice->getSubExpr();
   return cast<OpaqueValueExpr>(e);
+}
+
+PseudoObjectExpr *PseudoObjectExpr::Create(ASTContext &Context, EmptyShell sh,
+                                           unsigned numSemanticExprs) {
+  void *buffer = Context.Allocate(sizeof(PseudoObjectExpr) +
+                                    (1 + numSemanticExprs) * sizeof(Expr*),
+                                  llvm::alignOf<PseudoObjectExpr>());
+  return new(buffer) PseudoObjectExpr(sh, numSemanticExprs);
+}
+
+PseudoObjectExpr::PseudoObjectExpr(EmptyShell shell, unsigned numSemanticExprs)
+  : Expr(PseudoObjectExprClass, shell) {
+  PseudoObjectExprBits.NumSubExprs = numSemanticExprs + 1;
+}
+
+PseudoObjectExpr *PseudoObjectExpr::Create(ASTContext &C, Expr *syntax,
+                                           ArrayRef<Expr*> semantics,
+                                           unsigned resultIndex) {
+  assert(syntax && "no syntactic expression!");
+  assert(semantics.size() && "no semantic expressions!");
+
+  QualType type;
+  ExprValueKind VK;
+  if (resultIndex == NoResult) {
+    type = C.VoidTy;
+    VK = VK_RValue;
+  } else {
+    assert(resultIndex < semantics.size());
+    type = semantics[resultIndex]->getType();
+    VK = semantics[resultIndex]->getValueKind();
+    assert(semantics[resultIndex]->getObjectKind() == OK_Ordinary);
+  }
+
+  void *buffer = C.Allocate(sizeof(PseudoObjectExpr) +
+                              (1 + semantics.size()) * sizeof(Expr*),
+                            llvm::alignOf<PseudoObjectExpr>());
+  return new(buffer) PseudoObjectExpr(type, VK, syntax, semantics,
+                                      resultIndex);
+}
+
+PseudoObjectExpr::PseudoObjectExpr(QualType type, ExprValueKind VK,
+                                   Expr *syntax, ArrayRef<Expr*> semantics,
+                                   unsigned resultIndex)
+  : Expr(PseudoObjectExprClass, type, VK, OK_Ordinary,
+         /*filled in at end of ctor*/ false, false, false, false) {
+  PseudoObjectExprBits.NumSubExprs = semantics.size() + 1;
+  PseudoObjectExprBits.ResultIndex = resultIndex + 1;
+
+  for (unsigned i = 0, e = semantics.size() + 1; i != e; ++i) {
+    Expr *E = (i == 0 ? syntax : semantics[i-1]);
+    getSubExprsBuffer()[i] = E;
+
+    if (E->isTypeDependent())
+      ExprBits.TypeDependent = true;
+    if (E->isValueDependent())
+      ExprBits.ValueDependent = true;
+    if (E->isInstantiationDependent())
+      ExprBits.InstantiationDependent = true;
+    if (E->containsUnexpandedParameterPack())
+      ExprBits.ContainsUnexpandedParameterPack = true;
+
+    if (isa<OpaqueValueExpr>(E))
+      assert(cast<OpaqueValueExpr>(E)->getSourceExpr() != 0 &&
+             "opaque-value semantic expressions for pseudo-object "
+             "operations must have sources");
+  }
 }
 
 //===----------------------------------------------------------------------===//

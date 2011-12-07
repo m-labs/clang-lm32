@@ -675,12 +675,19 @@ void StmtPrinter::VisitIntegerLiteral(IntegerLiteral *Node) {
   // Emit suffixes.  Integer literals are always a builtin integer type.
   switch (Node->getType()->getAs<BuiltinType>()->getKind()) {
   default: llvm_unreachable("Unexpected type for integer literal!");
+  // FIXME: The Short and UShort cases are to handle cases where a short
+  // integeral literal is formed during template instantiation.  They should
+  // be removed when template instantiation no longer needs integer literals.
+  case BuiltinType::Short:
+  case BuiltinType::UShort:
   case BuiltinType::Int:       break; // no suffix.
   case BuiltinType::UInt:      OS << 'U'; break;
   case BuiltinType::Long:      OS << 'L'; break;
   case BuiltinType::ULong:     OS << "UL"; break;
   case BuiltinType::LongLong:  OS << "LL"; break;
   case BuiltinType::ULongLong: OS << "ULL"; break;
+  case BuiltinType::Int128:    OS << "i128"; break;
+  case BuiltinType::UInt128:   OS << "Ui128"; break;
   }
 }
 void StmtPrinter::VisitFloatingLiteral(FloatingLiteral *Node) {
@@ -1025,6 +1032,10 @@ void StmtPrinter::VisitVAArgExpr(VAArgExpr *Node) {
   OS << ", ";
   OS << Node->getType().getAsString(Policy);
   OS << ")";
+}
+
+void StmtPrinter::VisitPseudoObjectExpr(PseudoObjectExpr *Node) {
+  PrintExpr(Node->getSyntacticForm());
 }
 
 void StmtPrinter::VisitAtomicExpr(AtomicExpr *Node) {
@@ -1398,6 +1409,7 @@ static const char *getTypeTraitName(UnaryTypeTrait UTT) {
   case UTT_IsConst:                 return "__is_const";
   case UTT_IsEmpty:               return "__is_empty";
   case UTT_IsEnum:                return "__is_enum";
+  case UTT_IsFinal:                 return "__is_final";
   case UTT_IsFloatingPoint:         return "__is_floating_point";
   case UTT_IsFunction:              return "__is_function";
   case UTT_IsFundamental:           return "__is_fundamental";
@@ -1605,7 +1617,9 @@ void StmtPrinter::VisitBlockDeclRefExpr(BlockDeclRefExpr *Node) {
   OS << *Node->getDecl();
 }
 
-void StmtPrinter::VisitOpaqueValueExpr(OpaqueValueExpr *Node) {}
+void StmtPrinter::VisitOpaqueValueExpr(OpaqueValueExpr *Node) { 
+  PrintExpr(Node->getSourceExpr());
+}
 
 void StmtPrinter::VisitAsTypeExpr(AsTypeExpr *Node) {
   OS << "__builtin_astype(";

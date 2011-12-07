@@ -3342,8 +3342,14 @@ namespace {
 ///
 /// \returns true if deduction succeeded, false if it failed.
 bool
-Sema::DeduceAutoType(TypeSourceInfo *Type, Expr *Init,
+Sema::DeduceAutoType(TypeSourceInfo *Type, Expr *&Init,
                      TypeSourceInfo *&Result) {
+  if (Init->getType()->isNonOverloadPlaceholderType()) {
+    ExprResult result = CheckPlaceholderExpr(Init);
+    if (result.isInvalid()) return false;
+    Init = result.take();
+  }
+
   if (Init->isTypeDependent()) {
     Result = Type;
     return true;
@@ -3777,7 +3783,8 @@ Sema::getMostSpecialized(UnresolvedSetIterator SpecBegin,
                          const PartialDiagnostic &NoneDiag,
                          const PartialDiagnostic &AmbigDiag,
                          const PartialDiagnostic &CandidateDiag,
-                         bool Complain) {
+                         bool Complain,
+                         QualType TargetType) {
   if (SpecBegin == SpecEnd) {
     if (Complain)
       Diag(Loc, NoneDiag);
@@ -3831,11 +3838,16 @@ Sema::getMostSpecialized(UnresolvedSetIterator SpecBegin,
 
   if (Complain)
   // FIXME: Can we order the candidates in some sane way?
-    for (UnresolvedSetIterator I = SpecBegin; I != SpecEnd; ++I)
-      Diag((*I)->getLocation(), CandidateDiag)
-        << getTemplateArgumentBindingsText(
+    for (UnresolvedSetIterator I = SpecBegin; I != SpecEnd; ++I) {
+      PartialDiagnostic PD = CandidateDiag;
+      PD << getTemplateArgumentBindingsText(
           cast<FunctionDecl>(*I)->getPrimaryTemplate()->getTemplateParameters(),
                     *cast<FunctionDecl>(*I)->getTemplateSpecializationArgs());
+      if (!TargetType.isNull())
+        HandleFunctionTypeMismatch(PD, cast<FunctionDecl>(*I)->getType(),
+                                   TargetType);
+      Diag((*I)->getLocation(), PD);
+    }
 
   return SpecEnd;
 }

@@ -1652,6 +1652,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
     DS.SetRangeEnd(Tok.getLocation());
   }
   
+  bool EnteringContext = (DSContext == DSC_class || DSContext == DSC_top_level);
   while (1) {
     bool isInvalid = false;
     const char *PrevSpec = 0;
@@ -1888,6 +1889,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       goto DoneWithDeclSpec;
         
       // typedef-name
+    case tok::kw_decltype:
     case tok::identifier: {
       // In C++, check to see if this is a scope specifier like foo::bar::, if
       // so handle it as such.  This is important for ctor parsing.
@@ -2208,7 +2210,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
     case tok::kw_union: {
       tok::TokenKind Kind = Tok.getKind();
       ConsumeToken();
-      ParseClassSpecifier(Kind, Loc, DS, TemplateInfo, AS);
+      ParseClassSpecifier(Kind, Loc, DS, TemplateInfo, AS, EnteringContext);
       continue;
     }
 
@@ -2247,7 +2249,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       ParseTypeofSpecifier(DS);
       continue;
 
-    case tok::kw_decltype:
+    case tok::annot_decltype:
       ParseDecltypeSpecifier(DS);
       continue;
 
@@ -2369,6 +2371,7 @@ bool Parser::ParseOptionalTypeSpecifier(DeclSpec &DS, bool& isInvalid,
     if (TryAltiVecToken(DS, Loc, PrevSpec, DiagID, isInvalid))
       break;
     // Fall through.
+  case tok::kw_decltype:
   case tok::kw_typename:  // typename foo::bar
     // Annotate typenames and C++ scope specifiers.  If we get one, just
     // recurse to handle whatever we get.
@@ -2500,6 +2503,7 @@ bool Parser::ParseOptionalTypeSpecifier(DeclSpec &DS, bool& isInvalid,
     tok::TokenKind Kind = Tok.getKind();
     ConsumeToken();
     ParseClassSpecifier(Kind, Loc, DS, TemplateInfo, AS_none,
+                        /*EnteringContext=*/false,
                         SuppressDeclarations);
     return true;
   }
@@ -2530,7 +2534,7 @@ bool Parser::ParseOptionalTypeSpecifier(DeclSpec &DS, bool& isInvalid,
     return true;
 
   // C++0x decltype support.
-  case tok::kw_decltype:
+  case tok::annot_decltype:
     ParseDecltypeSpecifier(DS);
     return true;
 
@@ -2862,7 +2866,8 @@ void Parser::ParseEnumSpecifier(SourceLocation StartLoc, DeclSpec &DS,
     // if a fixed underlying type is allowed.
     ColonProtectionRAIIObject X(*this, AllowFixedUnderlyingType);
     
-    if (ParseOptionalCXXScopeSpecifier(SS, ParsedType(), false))
+    if (ParseOptionalCXXScopeSpecifier(SS, ParsedType(), 
+                                       /*EnteringContext=*/false))
       return;
 
     if (SS.isSet() && Tok.isNot(tok::identifier)) {
@@ -3343,6 +3348,7 @@ bool Parser::isDeclarationSpecifier(bool DisambiguatingWithExpression) {
     if (TryAltiVecVectorToken())
       return true;
     // Fall through.
+  case tok::kw_decltype: // decltype(T())::type
   case tok::kw_typename: // typename T::type
     // Annotate typenames and C++ scope specifiers.  If we get one, just
     // recurse to handle whatever we get.
@@ -3438,7 +3444,7 @@ bool Parser::isDeclarationSpecifier(bool DisambiguatingWithExpression) {
     return true;
 
     // C++0x decltype.
-  case tok::kw_decltype:
+  case tok::annot_decltype:
     return true;
 
     // C1x _Atomic()
@@ -3483,7 +3489,8 @@ bool Parser::isConstructorDeclarator() {
 
   // Parse the C++ scope specifier.
   CXXScopeSpec SS;
-  if (ParseOptionalCXXScopeSpecifier(SS, ParsedType(), true)) {
+  if (ParseOptionalCXXScopeSpecifier(SS, ParsedType(), 
+                                     /*EnteringContext=*/true)) {
     TPA.Revert();
     return false;
   }
@@ -3681,8 +3688,10 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
   if (getLang().CPlusPlus &&
       (Tok.is(tok::coloncolon) || Tok.is(tok::identifier) ||
        Tok.is(tok::annot_cxxscope))) {
+    bool EnteringContext = D.getContext() == Declarator::FileContext ||
+                           D.getContext() == Declarator::MemberContext;
     CXXScopeSpec SS;
-    ParseOptionalCXXScopeSpecifier(SS, ParsedType(), true); // ignore fail
+    ParseOptionalCXXScopeSpecifier(SS, ParsedType(), EnteringContext);
 
     if (SS.isNotEmpty()) {
       if (Tok.isNot(tok::star)) {
@@ -3848,7 +3857,10 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
   if (getLang().CPlusPlus && D.mayHaveIdentifier()) {
     // ParseDeclaratorInternal might already have parsed the scope.
     if (D.getCXXScopeSpec().isEmpty()) {
-      ParseOptionalCXXScopeSpecifier(D.getCXXScopeSpec(), ParsedType(), true);
+      bool EnteringContext = D.getContext() == Declarator::FileContext ||
+                             D.getContext() == Declarator::MemberContext;
+      ParseOptionalCXXScopeSpecifier(D.getCXXScopeSpec(), ParsedType(), 
+                                     EnteringContext);
     }
 
     if (D.getCXXScopeSpec().isValid()) {
@@ -3959,6 +3971,10 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
 
   while (1) {
     if (Tok.is(tok::l_paren)) {
+      // Enter function-declaration scope, limiting any declarators to the
+      // function prototype scope, including parameter declarators.
+      ParseScope PrototypeScope(this,
+                                Scope::FunctionPrototypeScope|Scope::DeclScope);
       // The paren may be part of a C++ direct initializer, eg. "int x(1);".
       // In such a case, check if we actually have a function declarator; if it
       // is not, the declarator has been fully parsed.
@@ -3973,13 +3989,14 @@ void Parser::ParseDirectDeclarator(Declarator &D) {
       BalancedDelimiterTracker T(*this, tok::l_paren);
       T.consumeOpen();
       ParseFunctionDeclarator(D, attrs, T);
+      PrototypeScope.Exit();
     } else if (Tok.is(tok::l_square)) {
       ParseBracketDeclarator(D);
     } else {
       break;
     }
   }
-}
+} 
 
 /// ParseParenDeclarator - We parsed the declarator D up to a paren.  This is
 /// only called before the identifier, so these are most likely just grouping
@@ -4075,7 +4092,12 @@ void Parser::ParseParenDeclarator(Declarator &D) {
   // ParseFunctionDeclarator to handle of argument list.
   D.SetIdentifier(0, Tok.getLocation());
 
+  // Enter function-declaration scope, limiting any declarators to the
+  // function prototype scope, including parameter declarators.
+  ParseScope PrototypeScope(this,
+                            Scope::FunctionPrototypeScope|Scope::DeclScope);
   ParseFunctionDeclarator(D, attrs, T, RequiresArg);
+  PrototypeScope.Exit();
 }
 
 /// ParseFunctionDeclarator - We are after the identifier and have parsed the
@@ -4100,6 +4122,8 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
                                      ParsedAttributes &attrs,
                                      BalancedDelimiterTracker &Tracker,
                                      bool RequiresArg) {
+  assert(getCurScope()->isFunctionPrototypeScope() && 
+         "Should call from a Function scope");
   // lparen is already consumed!
   assert(D.isPastIdentifier() && "Should not call before identifier!");
 
@@ -4133,11 +4157,6 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
     Tracker.consumeClose();
     EndLoc = Tracker.getCloseLocation();
   } else {
-    // Enter function-declaration scope, limiting any declarators to the
-    // function prototype scope, including parameter declarators.
-    ParseScope PrototypeScope(this,
-                              Scope::FunctionPrototypeScope|Scope::DeclScope);
-
     if (Tok.isNot(tok::r_paren))
       ParseParameterDeclarationClause(D, attrs, ParamInfo, EllipsisLoc);
     else if (RequiresArg)
@@ -4188,9 +4207,6 @@ void Parser::ParseFunctionDeclarator(Declarator &D,
           EndLoc = Range.getEnd();
       }
     }
-
-    // Leave prototype scope.
-    PrototypeScope.Exit();
   }
 
   // Remember that we parsed a function type, and remember the attributes.

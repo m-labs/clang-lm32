@@ -618,8 +618,9 @@ CXXTemporary *CXXTemporary::Create(ASTContext &C,
 CXXBindTemporaryExpr *CXXBindTemporaryExpr::Create(ASTContext &C,
                                                    CXXTemporary *Temp,
                                                    Expr* SubExpr) {
-  assert(SubExpr->getType()->isRecordType() &&
-         "Expression bound to a temporary must have record type!");
+  assert((SubExpr->getType()->isRecordType() ||
+          SubExpr->getType()->isArrayType()) &&
+         "Expression bound to a temporary must have record or array type!");
 
   return new (C) CXXBindTemporaryExpr(Temp, SubExpr);
 }
@@ -695,35 +696,37 @@ CXXConstructExpr::CXXConstructExpr(ASTContext &C, StmtClass SC, QualType T,
   }
 }
 
-ExprWithCleanups::ExprWithCleanups(ASTContext &C,
-                                   Expr *subexpr,
-                                   CXXTemporary **temps,
-                                   unsigned numtemps)
+ExprWithCleanups::ExprWithCleanups(Expr *subexpr,
+                                   ArrayRef<CleanupObject> objects)
   : Expr(ExprWithCleanupsClass, subexpr->getType(),
          subexpr->getValueKind(), subexpr->getObjectKind(),
          subexpr->isTypeDependent(), subexpr->isValueDependent(),
          subexpr->isInstantiationDependent(),
          subexpr->containsUnexpandedParameterPack()),
-    SubExpr(subexpr), Temps(0), NumTemps(0) {
-  if (numtemps) {
-    setNumTemporaries(C, numtemps);
-    for (unsigned i = 0; i != numtemps; ++i)
-      Temps[i] = temps[i];
-  }
+    SubExpr(subexpr) {
+  ExprWithCleanupsBits.NumObjects = objects.size();
+  for (unsigned i = 0, e = objects.size(); i != e; ++i)
+    getObjectsBuffer()[i] = objects[i];
 }
 
-void ExprWithCleanups::setNumTemporaries(ASTContext &C, unsigned N) {
-  assert(Temps == 0 && "Cannot resize with this");
-  NumTemps = N;
-  Temps = new (C) CXXTemporary*[NumTemps];
+ExprWithCleanups *ExprWithCleanups::Create(ASTContext &C, Expr *subexpr,
+                                           ArrayRef<CleanupObject> objects) {
+  size_t size = sizeof(ExprWithCleanups)
+              + objects.size() * sizeof(CleanupObject);
+  void *buffer = C.Allocate(size, llvm::alignOf<ExprWithCleanups>());
+  return new (buffer) ExprWithCleanups(subexpr, objects);
 }
 
+ExprWithCleanups::ExprWithCleanups(EmptyShell empty, unsigned numObjects)
+  : Expr(ExprWithCleanupsClass, empty) {
+  ExprWithCleanupsBits.NumObjects = numObjects;
+}
 
-ExprWithCleanups *ExprWithCleanups::Create(ASTContext &C,
-                                           Expr *SubExpr,
-                                           CXXTemporary **Temps,
-                                           unsigned NumTemps) {
-  return new (C) ExprWithCleanups(C, SubExpr, Temps, NumTemps);
+ExprWithCleanups *ExprWithCleanups::Create(ASTContext &C, EmptyShell empty,
+                                           unsigned numObjects) {
+  size_t size = sizeof(ExprWithCleanups) + numObjects * sizeof(CleanupObject);
+  void *buffer = C.Allocate(size, llvm::alignOf<ExprWithCleanups>());
+  return new (buffer) ExprWithCleanups(empty, numObjects);
 }
 
 CXXUnresolvedConstructExpr::CXXUnresolvedConstructExpr(TypeSourceInfo *Type,

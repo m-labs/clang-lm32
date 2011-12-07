@@ -26,7 +26,65 @@
 using namespace clang;
 using namespace clang::cxloc;
 using namespace clang::cxstring;
+using namespace clang::cxdiag;
 using namespace llvm;
+
+
+CXDiagnosticSetImpl::~CXDiagnosticSetImpl() {
+  for (std::vector<CXDiagnosticImpl *>::iterator it = Diagnostics.begin(),
+       et = Diagnostics.end();
+       it != et; ++it) {
+    delete *it;
+  }
+}
+
+CXDiagnosticImpl::~CXDiagnosticImpl() {}
+
+CXDiagnosticSetImpl *cxdiag::lazyCreateDiags(CXTranslationUnit TU,
+                                             bool checkIfChanged) {
+  ASTUnit *AU = static_cast<ASTUnit *>(TU->TUData);
+
+  if (TU->Diagnostics && checkIfChanged) {
+    // In normal use, ASTUnit's diagnostics should not change unless we reparse.
+    // Currently they can only change by using the internal testing flag
+    // '-error-on-deserialized-decl' which will error during deserialization of
+    // a declaration. What will happen is:
+    //
+    //  -c-index-test gets a CXTranslationUnit
+    //  -checks the diagnostics, the diagnostics set is lazily created,
+    //     no errors are reported
+    //  -later does an operation, like annotation of tokens, that triggers
+    //     -error-on-deserialized-decl, that will emit a diagnostic error,
+    //     that ASTUnit will catch and add to its stored diagnostics vector.
+    //  -c-index-test wants to check whether an error occurred after performing
+    //     the operation but can only query the lazily created set.
+    //
+    // We check here if a new diagnostic was appended since the last time the
+    // diagnostic set was created, in which case we reset it.
+
+    CXDiagnosticSetImpl *
+      Set = static_cast<CXDiagnosticSetImpl*>(TU->Diagnostics);
+    if (AU->stored_diag_size() != Set->getNumDiagnostics()) {
+      // Diagnostics in the ASTUnit were updated, reset the associated
+      // diagnostics.
+      delete Set;
+      TU->Diagnostics = 0;
+    }
+  }
+
+  if (!TU->Diagnostics) {
+    CXDiagnosticSetImpl *Set = new CXDiagnosticSetImpl();
+    TU->Diagnostics = Set;
+    
+    for (ASTUnit::stored_diag_iterator it = AU->stored_diag_begin(),
+         ei = AU->stored_diag_end(); it != ei; ++it) {
+      CXStoredDiagnostic *D =
+        new CXStoredDiagnostic(*it, AU->getASTContext().getLangOptions());
+      Set->appendDiagnostic(D);
+    }
+  }
+  return static_cast<CXDiagnosticSetImpl*>(TU->Diagnostics);
+}
 
 //-----------------------------------------------------------------------------
 // C Interface Routines
@@ -34,21 +92,25 @@ using namespace llvm;
 extern "C" {
 
 unsigned clang_getNumDiagnostics(CXTranslationUnit Unit) {
-  ASTUnit *CXXUnit = static_cast<ASTUnit *>(Unit->TUData);
-  return CXXUnit? CXXUnit->stored_diag_size() : 0;
+  if (!Unit->TUData)
+    return 0;
+  return lazyCreateDiags(Unit, /*checkIfChanged=*/true)->getNumDiagnostics();
 }
 
 CXDiagnostic clang_getDiagnostic(CXTranslationUnit Unit, unsigned Index) {
-  ASTUnit *CXXUnit = static_cast<ASTUnit *>(Unit->TUData);
-  if (!CXXUnit || Index >= CXXUnit->stored_diag_size())
+  if (!Unit->TUData)
     return 0;
 
-  return new CXStoredDiagnostic(CXXUnit->stored_diag_begin()[Index],
-                                CXXUnit->getASTContext().getLangOptions());
+  CXDiagnosticSetImpl *Diags = lazyCreateDiags(Unit);
+  if (Index >= Diags->getNumDiagnostics())
+    return 0;
+
+  return Diags->getDiagnostic(Index);
 }
 
 void clang_disposeDiagnostic(CXDiagnostic Diagnostic) {
-  delete static_cast<CXDiagnosticImpl *>(Diagnostic);
+  // No-op.  Kept as a legacy API.  CXDiagnostics are now managed
+  // by the enclosing CXDiagnosticSet.
 }
 
 CXString clang_formatDiagnostic(CXDiagnostic Diagnostic, unsigned Options) {
@@ -241,6 +303,34 @@ CXString clang_getDiagnosticFixIt(CXDiagnostic Diag, unsigned FixIt,
     return createCXString("");
   }
   return D->getFixIt(FixIt, ReplacementRange);
+}
+
+void clang_disposeDiagnosticSet(CXDiagnosticSet Diags) {
+  CXDiagnosticSetImpl *D = static_cast<CXDiagnosticSetImpl*>(Diags);
+  if (D->isExternallyManaged())
+    delete D;
+}
+  
+CXDiagnostic clang_getDiagnosticInSet(CXDiagnosticSet Diags,
+                                      unsigned Index) {
+  if (CXDiagnosticSetImpl *D = static_cast<CXDiagnosticSetImpl*>(Diags))
+    if (Index < D->getNumDiagnostics())
+      return D->getDiagnostic(Index);
+  return 0;  
+}
+  
+CXDiagnosticSet clang_getChildDiagnostics(CXDiagnostic Diag) {
+  if (CXDiagnosticImpl *D = static_cast<CXDiagnosticImpl *>(Diag)) {
+    CXDiagnosticSetImpl &ChildDiags = D->getChildDiagnostics();
+    return ChildDiags.empty() ? 0 : (CXDiagnosticSet) &ChildDiags;
+  }
+  return 0;
+}
+
+unsigned clang_getNumDiagnosticsInSet(CXDiagnosticSet Diags) {
+  if (CXDiagnosticSetImpl *D = static_cast<CXDiagnosticSetImpl*>(Diags))
+    return D->getNumDiagnostics();
+  return 0;
 }
 
 } // end extern "C"

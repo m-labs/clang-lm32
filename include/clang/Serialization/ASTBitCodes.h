@@ -127,7 +127,7 @@ namespace clang {
     /// \brief The number of predefined identifier IDs.
     const unsigned int NUM_PREDEF_IDENT_IDS = 1;
     
-    /// \brief An ID number that refers to an ObjC selctor in an AST file.
+    /// \brief An ID number that refers to an ObjC selector in an AST file.
     typedef uint32_t SelectorID;
 
     /// \brief The number of predefined selector IDs.
@@ -140,6 +140,12 @@ namespace clang {
     /// \brief An ID number that refers to an entity in the detailed
     /// preprocessing record.
     typedef uint32_t PreprocessedEntityID;
+
+    /// \brief An ID number that refers to a submodule in a module file.
+    typedef uint32_t SubmoduleID;
+    
+    /// \brief The number of predefined submodule IDs.
+    const unsigned int NUM_PREDEF_SUBMODULE_IDS = 1;
 
     /// \brief Source range/offset of a preprocessed entity.
     struct PPEntityOffset {
@@ -198,7 +204,10 @@ namespace clang {
       DECL_UPDATES_BLOCK_ID,
       
       /// \brief The block containing the detailed preprocessing record.
-      PREPROCESSOR_DETAIL_BLOCK_ID
+      PREPROCESSOR_DETAIL_BLOCK_ID,
+      
+      /// \brief The block containing the submodule structure.
+      SUBMODULE_BLOCK_ID
     };
 
     /// \brief Record types that occur within the AST block itself.
@@ -439,7 +448,11 @@ namespace clang {
       OBJC_CHAINED_CATEGORIES,
 
       /// \brief Record code for a file sorted array of DeclIDs in a module.
-      FILE_SORTED_DECLS
+      FILE_SORTED_DECLS,
+      
+      /// \brief Record code for an array of all of the (sub)modules that were
+      /// imported by the AST file.
+      IMPORTED_MODULES
     };
 
     /// \brief Record types used within a source manager block.
@@ -452,7 +465,8 @@ namespace clang {
       SM_SLOC_BUFFER_ENTRY = 2,
       /// \brief Describes a blob that contains the data for a buffer
       /// entry. This kind of record always directly follows a
-      /// SM_SLOC_BUFFER_ENTRY record.
+      /// SM_SLOC_BUFFER_ENTRY record or a SM_SLOC_FILE_ENTRY with an
+      /// overridden buffer.
       SM_SLOC_BUFFER_BLOB = 3,
       /// \brief Describes a source location entry (SLocEntry) for a
       /// macro expansion.
@@ -489,6 +503,26 @@ namespace clang {
       /// \brief Describes an inclusion directive within the preprocessing
       /// record.
       PPD_INCLUSION_DIRECTIVE = 2
+    };
+    
+    /// \brief Record types used within a submodule description block.
+    enum SubmoduleRecordTypes {
+      /// \brief Defines the major attributes of a submodule, including its
+      /// name and parent.
+      SUBMODULE_DEFINITION = 0,
+      /// \brief Specifies the umbrella header used to create this module,
+      /// if any.
+      SUBMODULE_UMBRELLA = 1,
+      /// \brief Specifies a header that falls into this (sub)module.
+      SUBMODULE_HEADER = 2,
+      /// \brief Metadata for submodules as a whole.
+      SUBMODULE_METADATA = 3,
+      /// \brief Specifies the submodules that are imported by this 
+      /// submodule.
+      SUBMODULE_IMPORTS = 4,
+      /// \brief Specifies the submodules that are re-exported from this 
+      /// submodule.
+      SUBMODULE_EXPORTS = 5
     };
     
     /// \defgroup ASTAST AST file AST constants
@@ -692,15 +726,17 @@ namespace clang {
       /// \brief C FILE typedef type
       SPECIAL_TYPE_FILE                        = 3,
       /// \brief C jmp_buf typedef type
-      SPECIAL_TYPE_jmp_buf                     = 4,
+      SPECIAL_TYPE_JMP_BUF                     = 4,
       /// \brief C sigjmp_buf typedef type
-      SPECIAL_TYPE_sigjmp_buf                  = 5,
+      SPECIAL_TYPE_SIGJMP_BUF                  = 5,
       /// \brief Objective-C "id" redefinition type
       SPECIAL_TYPE_OBJC_ID_REDEFINITION        = 6,
       /// \brief Objective-C "Class" redefinition type
       SPECIAL_TYPE_OBJC_CLASS_REDEFINITION     = 7,
       /// \brief Objective-C "SEL" redefinition type
-      SPECIAL_TYPE_OBJC_SEL_REDEFINITION       = 8
+      SPECIAL_TYPE_OBJC_SEL_REDEFINITION       = 8,
+      /// \brief C ucontext_t typedef type
+      SPECIAL_TYPE_UCONTEXT_T                  = 9
     };
     
     /// \brief The number of special type IDs.
@@ -880,7 +916,9 @@ namespace clang {
       DECL_EXPANDED_NON_TYPE_TEMPLATE_PARM_PACK,
       /// \brief A ClassScopeFunctionSpecializationDecl record a class scope
       /// function specialization. (Microsoft extension).
-      DECL_CLASS_SCOPE_FUNCTION_SPECIALIZATION
+      DECL_CLASS_SCOPE_FUNCTION_SPECIALIZATION,
+      /// \brief An ImportDecl recording a module import.
+      DECL_IMPORT
     };
 
     /// \brief Record codes for each kind of statement or expression.
@@ -1000,6 +1038,8 @@ namespace clang {
       EXPR_BLOCK_DECL_REF,
       /// \brief A GenericSelectionExpr record.
       EXPR_GENERIC_SELECTION,
+      /// \brief A PseudoObjectExpr record.
+      EXPR_PSEUDO_OBJECT,
       /// \brief An AtomicExpr record.
       EXPR_ATOMIC,
 

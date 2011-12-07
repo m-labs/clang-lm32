@@ -736,6 +736,25 @@ void ASTStmtWriter::VisitGenericSelectionExpr(GenericSelectionExpr *E) {
   Code = serialization::EXPR_GENERIC_SELECTION;
 }
 
+void ASTStmtWriter::VisitPseudoObjectExpr(PseudoObjectExpr *E) {
+  VisitExpr(E);
+  Record.push_back(E->getNumSemanticExprs());
+
+  // Push the result index.  Currently, this needs to exactly match
+  // the encoding used internally for ResultIndex.
+  unsigned result = E->getResultExprIndex();
+  result = (result == PseudoObjectExpr::NoResult ? 0 : result + 1);
+  Record.push_back(result);
+
+  Writer.AddStmt(E->getSyntacticForm());
+  for (PseudoObjectExpr::semantics_iterator
+         i = E->semantics_begin(), e = E->semantics_end(); i != e; ++i) {
+    Writer.AddStmt(*i);
+  }
+
+  Code = serialization::EXPR_PSEUDO_OBJECT;
+}
+
 void ASTStmtWriter::VisitAtomicExpr(AtomicExpr *E) {
   VisitExpr(E);
   Record.push_back(E->getOp());
@@ -749,6 +768,8 @@ void ASTStmtWriter::VisitAtomicExpr(AtomicExpr *E) {
   }
   Writer.AddSourceLocation(E->getBuiltinLoc(), Record);
   Writer.AddSourceLocation(E->getRParenLoc(), Record);
+
+  Code = serialization::EXPR_ATOMIC;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1161,9 +1182,9 @@ void ASTStmtWriter::VisitCXXPseudoDestructorExpr(CXXPseudoDestructorExpr *E) {
 
 void ASTStmtWriter::VisitExprWithCleanups(ExprWithCleanups *E) {
   VisitExpr(E);
-  Record.push_back(E->getNumTemporaries());
-  for (unsigned i = 0, e = E->getNumTemporaries(); i != e; ++i)
-    Writer.AddCXXTemporary(E->getTemporary(i), Record);
+  Record.push_back(E->getNumObjects());
+  for (unsigned i = 0, e = E->getNumObjects(); i != e; ++i)
+    Writer.AddDeclRef(E->getObject(i), Record);
   
   Writer.AddStmt(E->getSubExpr());
   Code = serialization::EXPR_EXPR_WITH_CLEANUPS;
@@ -1358,7 +1379,7 @@ void ASTStmtWriter::VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *E) {
 
 void ASTStmtWriter::VisitOpaqueValueExpr(OpaqueValueExpr *E) {
   VisitExpr(E);
-  Record.push_back(Writer.getOpaqueValueID(E));
+  Writer.AddStmt(E->getSourceExpr());
   Writer.AddSourceLocation(E->getLocation(), Record);
   Code = serialization::EXPR_OPAQUE_VALUE;
 }
@@ -1443,12 +1464,6 @@ unsigned ASTWriter::getSwitchCaseID(SwitchCase *S) {
 
 void ASTWriter::ClearSwitchCaseIDs() {
   SwitchCaseIDs.clear();
-}
-
-unsigned ASTWriter::getOpaqueValueID(OpaqueValueExpr *e) {
-  unsigned &entry = OpaqueValues[e];
-  if (!entry) entry = OpaqueValues.size();
-  return entry;
 }
 
 /// \brief Write the given substatement or subexpression to the

@@ -21,6 +21,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   CheckObjCInstMethSignature.cpp
   CheckSecuritySyntaxOnly.cpp
   CheckSizeofPointer.cpp
+  CheckerDocumentation.cpp
   ChrootChecker.cpp
   ClangCheckers.cpp
   DeadStoresChecker.cpp
@@ -28,6 +29,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   DereferenceChecker.cpp
   DivZeroChecker.cpp
   FixedAddressChecker.cpp
+  GenericTaintChecker.cpp
   IdempotentOperationChecker.cpp
   IteratorsChecker.cpp
   LLVMConventionsChecker.cpp
@@ -50,6 +52,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   ReturnUndefChecker.cpp
   StackAddrEscapeChecker.cpp
   StreamChecker.cpp
+  TaintTesterChecker.cpp
   UndefBranchChecker.cpp
   UndefCapturedBlockVarChecker.cpp
   UndefResultChecker.cpp

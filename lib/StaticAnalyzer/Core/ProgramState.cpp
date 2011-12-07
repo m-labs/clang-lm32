@@ -15,6 +15,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SubEngine.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/TaintManager.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -384,53 +385,71 @@ static bool IsEnvLoc(const Stmt *S) {
   return (bool) (((uintptr_t) S) & 0x1);
 }
 
-void ProgramState::print(raw_ostream &Out, CFG &C,
+void ProgramState::print(raw_ostream &Out, CFG *C,
                          const char *NL, const char *Sep) const {
   // Print the store.
   ProgramStateManager &Mgr = getStateManager();
   Mgr.getStoreManager().print(getStore(), Out, NL, Sep);
-
-  // Print Subexpression bindings.
   bool isFirst = true;
 
   // FIXME: All environment printing should be moved inside Environment.
-  for (Environment::iterator I = Env.begin(), E = Env.end(); I != E; ++I) {
-    if (C.isBlkExpr(I.getKey()) || IsEnvLoc(I.getKey()))
-      continue;
+  if (C) {
+    // Print Subexpression bindings.
+    for (Environment::iterator I = Env.begin(), E = Env.end(); I != E; ++I) {
+      if (C->isBlkExpr(I.getKey()) || IsEnvLoc(I.getKey()))
+        continue;
 
-    if (isFirst) {
-      Out << NL << NL << "Sub-Expressions:" << NL;
-      isFirst = false;
-    } else {
-      Out << NL;
+      if (isFirst) {
+        Out << NL << NL << "Sub-Expressions:" << NL;
+        isFirst = false;
+      } else {
+        Out << NL;
+      }
+
+      Out << " (" << (void*) I.getKey() << ") ";
+      LangOptions LO; // FIXME.
+      I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
+      Out << " : " << I.getData();
     }
 
-    Out << " (" << (void*) I.getKey() << ") ";
-    LangOptions LO; // FIXME.
-    I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
-    Out << " : " << I.getData();
-  }
+    // Print block-expression bindings.
+    isFirst = true;
+    for (Environment::iterator I = Env.begin(), E = Env.end(); I != E; ++I) {
+      if (!C->isBlkExpr(I.getKey()))
+        continue;
 
-  // Print block-expression bindings.
-  isFirst = true;
+      if (isFirst) {
+        Out << NL << NL << "Block-level Expressions:" << NL;
+        isFirst = false;
+      } else {
+        Out << NL;
+      }
 
-  for (Environment::iterator I = Env.begin(), E = Env.end(); I != E; ++I) {
-    if (!C.isBlkExpr(I.getKey()))
-      continue;
-
-    if (isFirst) {
-      Out << NL << NL << "Block-level Expressions:" << NL;
-      isFirst = false;
-    } else {
-      Out << NL;
+      Out << " (" << (void*) I.getKey() << ") ";
+      LangOptions LO; // FIXME.
+      I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
+      Out << " : " << I.getData();
     }
+  } else {
+    // Print All bindings - no info to differentiate block from subexpressions.
+    for (Environment::iterator I = Env.begin(), E = Env.end(); I != E; ++I) {
+      if (IsEnvLoc(I.getKey()))
+        continue;
 
-    Out << " (" << (void*) I.getKey() << ") ";
-    LangOptions LO; // FIXME.
-    I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
-    Out << " : " << I.getData();
+      if (isFirst) {
+        Out << NL << NL << "Expressions:" << NL;
+        isFirst = false;
+      } else {
+        Out << NL;
+      }
+
+      Out << " (" << (void*) I.getKey() << ") ";
+      LangOptions LO; // FIXME.
+      I.getKey()->printPretty(Out, 0, PrintingPolicy(LO));
+      Out << " : " << I.getData();
+    }
   }
-  
+
   // Print locations.
   isFirst = true;
   
@@ -460,11 +479,15 @@ void ProgramState::print(raw_ostream &Out, CFG &C,
 }
 
 void ProgramState::printDOT(raw_ostream &Out, CFG &C) const {
-  print(Out, C, "\\l", "\\|");
+  print(Out, &C, "\\l", "\\|");
 }
 
-void ProgramState::printStdErr(CFG &C) const {
-  print(llvm::errs(), C);
+void ProgramState::dump(CFG &C) const {
+  print(llvm::errs(), &C);
+}
+
+void ProgramState::dump() const {
+  print(llvm::errs(), 0);
 }
 
 //===----------------------------------------------------------------------===//
@@ -527,10 +550,10 @@ bool ScanReachableSymbols::scan(const SymExpr *sym) {
     return true;
   isVisited = 1;
   
-  if (const SymbolData *sData = dyn_cast<SymbolData>(sym))
-    if (!visitor.VisitSymbol(sData))
-      return false;
+  if (!visitor.VisitSymbol(sym))
+    return false;
   
+  // TODO: should be rewritten using SymExpr::symbol_iterator.
   switch (sym->getKind()) {
     case SymExpr::RegionValueKind:
     case SymExpr::ConjuredKind:
@@ -538,6 +561,8 @@ bool ScanReachableSymbols::scan(const SymExpr *sym) {
     case SymExpr::ExtentKind:
     case SymExpr::MetadataKind:
       break;
+    case SymExpr::CastSymbolKind:
+      return scan(cast<SymbolCast>(sym)->getOperand());
     case SymExpr::SymIntKind:
       return scan(cast<SymIntExpr>(sym)->getLHS());
     case SymExpr::SymSymKind: {
@@ -622,4 +647,71 @@ bool ProgramState::scanReachableSymbols(const MemRegion * const *I,
       return false;
   }
   return true;
+}
+
+const ProgramState* ProgramState::addTaint(const Stmt *S,
+                                           TaintTagType Kind) const {
+  SymbolRef Sym = getSVal(S).getAsSymbol();
+  assert(Sym && "Cannot add taint to statements whose value is not a symbol");
+  return addTaint(Sym, Kind);
+}
+
+const ProgramState* ProgramState::addTaint(SymbolRef Sym,
+                                           TaintTagType Kind) const {
+  const ProgramState *NewState = set<TaintMap>(Sym, Kind);
+  assert(NewState);
+  return NewState;
+}
+
+bool ProgramState::isTainted(const Stmt *S, TaintTagType Kind) const {
+  SVal val = getSVal(S);
+  return isTainted(val, Kind);
+}
+
+bool ProgramState::isTainted(SVal V, TaintTagType Kind) const {
+  if (const SymExpr *Sym = V.getAsSymExpr())
+    return isTainted(Sym, Kind);
+  if (loc::MemRegionVal *RegVal = dyn_cast<loc::MemRegionVal>(&V))
+    return isTainted(RegVal->getRegion(), Kind);
+  return false;
+}
+
+bool ProgramState::isTainted(const MemRegion *Reg, TaintTagType K) const {
+  if (!Reg)
+    return false;
+
+  // Element region (array element) is tainted if either the base or the offset
+  // are tainted.
+  if (const ElementRegion *ER = dyn_cast<ElementRegion>(Reg))
+    return isTainted(ER->getSuperRegion(), K) || isTainted(ER->getIndex(), K);
+
+  if (const SymbolicRegion *SR = dyn_cast<SymbolicRegion>(Reg))
+    return isTainted(SR->getSymbol(), K);
+
+  if (const SubRegion *ER = dyn_cast<SubRegion>(Reg))
+    return isTainted(ER->getSuperRegion(), K);
+
+  return false;
+}
+
+bool ProgramState::isTainted(const SymExpr* Sym, TaintTagType Kind) const {
+  if (!Sym)
+    return false;
+  
+  // Traverse all the symbols this symbol depends on to see if any are tainted.
+  bool Tainted = false;
+  for (SymExpr::symbol_iterator SI = Sym->symbol_begin(), SE =Sym->symbol_end();
+       SI != SE; ++SI) {
+    assert(isa<SymbolData>(*SI));
+    const TaintTagType *Tag = get<TaintMap>(*SI);
+    Tainted = (Tag && *Tag == Kind);
+
+    // If this is a SymbolDerived with a tainted parent, it's also tainted.
+    if (const SymbolDerived *SD = dyn_cast<SymbolDerived>(*SI))
+      Tainted = Tainted || isTainted(SD->getParentSymbol(), Kind);
+    if (Tainted)
+      return true;
+  }
+  
+  return Tainted;
 }

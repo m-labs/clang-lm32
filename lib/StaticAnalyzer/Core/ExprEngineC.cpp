@@ -43,8 +43,7 @@ void ExprEngine::VisitBinaryOperator(const BinaryOperator* B,
     if (Op == BO_Assign) {
       // EXPERIMENTAL: "Conjured" symbols.
       // FIXME: Handle structs.
-      if (RightV.isUnknown() ||
-          !getConstraintManager().canReasonAbout(RightV)) {
+      if (RightV.isUnknown()) {
         unsigned Count = currentBuilderContext->getCurrentBlockCount();
         RightV = svalBuilder.getConjuredSymbolVal(NULL, B->getRHS(), Count);
       }
@@ -122,8 +121,7 @@ void ExprEngine::VisitBinaryOperator(const BinaryOperator* B,
       
       SVal LHSVal;
       
-      if (Result.isUnknown() ||
-          !getConstraintManager().canReasonAbout(Result)) {
+      if (Result.isUnknown()) {
         
         unsigned Count = currentBuilderContext->getCurrentBlockCount();
         
@@ -179,8 +177,7 @@ void ExprEngine::VisitCast(const CastExpr *CastE, const Expr *Ex,
   ExplodedNodeSet dstPreStmt;
   getCheckerManager().runCheckersForPreStmt(dstPreStmt, Pred, CastE, *this);
   
-  if (CastE->getCastKind() == CK_LValueToRValue ||
-      CastE->getCastKind() == CK_GetObjCProperty) {
+  if (CastE->getCastKind() == CK_LValueToRValue) {
     for (ExplodedNodeSet::iterator I = dstPreStmt.begin(), E = dstPreStmt.end();
          I!=E; ++I) {
       ExplodedNode *subExprNode = *I;
@@ -206,8 +203,6 @@ void ExprEngine::VisitCast(const CastExpr *CastE, const Expr *Ex,
     switch (CastE->getCastKind()) {
       case CK_LValueToRValue:
         llvm_unreachable("LValueToRValue casts handled earlier.");
-      case CK_GetObjCProperty:
-        llvm_unreachable("GetObjCProperty casts handled earlier.");
       case CK_ToVoid:
         continue;
         // The analyzer doesn't do anything special with these casts,
@@ -362,9 +357,7 @@ void ExprEngine::VisitDeclStmt(const DeclStmt *DS, ExplodedNode *Pred,
       
       // Recover some path-sensitivity if a scalar value evaluated to
       // UnknownVal.
-      if ((InitVal.isUnknown() ||
-           !getConstraintManager().canReasonAbout(InitVal)) &&
-          !VD->getType()->isReferenceType()) {
+      if (InitVal.isUnknown()) {
         InitVal = svalBuilder.getConjuredSymbolVal(NULL, InitEx,
                                  currentBuilderContext->getCurrentBlockCount());
       }
@@ -540,11 +533,9 @@ void ExprEngine::VisitUnaryOperator(const UnaryOperator* U,
                                     ExplodedNode *Pred,
                                     ExplodedNodeSet &Dst) {
   StmtNodeBuilder Bldr(Pred, Dst, *currentBuilderContext);
-  bool IncDec = false;
   switch (U->getOpcode()) {
     default: {
       Bldr.takeNodes(Pred);
-      IncDec = true;
       ExplodedNodeSet Tmp;
       VisitIncrementDecrementOperator(U, Pred, Tmp);
       Bldr.addNodes(Tmp);
@@ -731,7 +722,7 @@ void ExprEngine::VisitIncrementDecrementOperator(const UnaryOperator* U,
       SVal Result = evalBinOp(state, Op, V2, RHS, U->getType());
       
       // Conjure a new symbol if necessary to recover precision.
-      if (Result.isUnknown() || !getConstraintManager().canReasonAbout(Result)){
+      if (Result.isUnknown()){
         DefinedOrUnknownSVal SymVal =
         svalBuilder.getConjuredSymbolVal(NULL, Ex,
                                  currentBuilderContext->getCurrentBlockCount());

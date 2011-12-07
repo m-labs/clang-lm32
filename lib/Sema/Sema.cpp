@@ -33,6 +33,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/PartialDiagnostic.h"
@@ -97,7 +98,7 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
     CollectStats(false), ExternalSource(0), CodeCompleter(CodeCompleter),
     CurContext(0), OriginalLexicalContext(0),
     PackContext(0), MSStructPragmaOn(false), VisContext(0),
-    ExprNeedsCleanups(0), LateTemplateParser(0), OpaqueParser(0),
+    ExprNeedsCleanups(false), LateTemplateParser(0), OpaqueParser(0),
     IdResolver(pp), CXXTypeInfoDecl(0), MSVCGuidDecl(0),
     GlobalNewDeleteDeclared(false), 
     ObjCShouldCallSuperDealloc(false),
@@ -252,6 +253,7 @@ ExprResult Sema::ImpCastExprToType(Expr *E, QualType Ty,
       break;
     }
   }
+  assert((VK == VK_RValue || !E->isRValue()) && "can't cast rvalue to lvalue");
 #endif
 
   QualType ExprTy = Context.getCanonicalType(E->getType());
@@ -482,6 +484,32 @@ void Sema::ActOnEndOfTranslationUnit() {
   }
 
   if (TUKind == TU_Module) {
+    // If we are building a module, resolve all of the exported declarations
+    // now.
+    if (Module *CurrentModule = PP.getCurrentModule()) {
+      ModuleMap &ModMap = PP.getHeaderSearchInfo().getModuleMap();
+      
+      llvm::SmallVector<Module *, 2> Stack;
+      Stack.push_back(CurrentModule);
+      while (!Stack.empty()) {
+        Module *Mod = Stack.back();
+        Stack.pop_back();
+        
+        // Resolve the exported declarations.
+        // FIXME: Actually complain, once we figure out how to teach the
+        // diagnostic client to deal with complains in the module map at this
+        // point.
+        ModMap.resolveExports(Mod, /*Complain=*/false);
+        
+        // Queue the submodules, so their exports will also be resolved.
+        for (llvm::StringMap<Module *>::iterator Sub = Mod->SubModules.begin(),
+             SubEnd = Mod->SubModules.end();
+             Sub != SubEnd; ++Sub) {
+          Stack.push_back(Sub->getValue());
+        }
+      }
+    }
+    
     // Modules don't need any of the checking below.
     TUScope = 0;
     return;
@@ -967,7 +995,7 @@ static void noteOverloads(Sema &S, const UnresolvedSetImpl &Overloads,
     }
 
     NamedDecl *Fn = (*It)->getUnderlyingDecl();
-    S.Diag(Fn->getLocStart(), diag::note_possible_target_of_call);
+    S.Diag(Fn->getLocation(), diag::note_possible_target_of_call);
     ++ShownOverloads;
   }
 

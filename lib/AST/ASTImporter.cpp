@@ -100,6 +100,7 @@ namespace clang {
     bool IsStructuralMatch(EnumDecl *FromEnum, EnumDecl *ToRecord);
     bool IsStructuralMatch(ClassTemplateDecl *From, ClassTemplateDecl *To);
     Decl *VisitDecl(Decl *D);
+    Decl *VisitTranslationUnitDecl(TranslationUnitDecl *D);
     Decl *VisitNamespaceDecl(NamespaceDecl *D);
     Decl *VisitTypedefNameDecl(TypedefNameDecl *D, bool IsAlias);
     Decl *VisitTypedefDecl(TypedefDecl *D);
@@ -2030,6 +2031,15 @@ Decl *ASTNodeImporter::VisitDecl(Decl *D) {
   return 0;
 }
 
+Decl *ASTNodeImporter::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
+  TranslationUnitDecl *ToD = 
+    Importer.getToContext().getTranslationUnitDecl();
+    
+  Importer.Imported(D, ToD);
+    
+  return ToD;
+}
+
 Decl *ASTNodeImporter::VisitNamespaceDecl(NamespaceDecl *D) {
   // Import the major distinguishing characteristics of this namespace.
   DeclContext *DC, *LexicalDC;
@@ -3111,9 +3121,10 @@ Decl *ASTNodeImporter::VisitObjCProtocolDecl(ObjCProtocolDecl *D) {
                                          Name.getAsIdentifierInfo(), Loc,
                                          Importer.Import(D->getAtStartLoc()),
                                          D->isInitiallyForwardDecl());
-      ToProto->setForwardDecl(D->isForwardDecl());
       ToProto->setLexicalDeclContext(LexicalDC);
       LexicalDC->addDeclInternal(ToProto);
+      if (D->isInitiallyForwardDecl() && !D->isForwardDecl())
+        ToProto->completedForwardDecl();
     }
     Importer.Imported(D, ToProto);
 
@@ -3172,11 +3183,12 @@ Decl *ASTNodeImporter::VisitObjCInterfaceDecl(ObjCInterfaceDecl *D) {
       ToIface = ObjCInterfaceDecl::Create(Importer.getToContext(), DC,
                                           Importer.Import(D->getAtStartLoc()),
                                           Name.getAsIdentifierInfo(), Loc,
-                                          D->isForwardDecl(),
+                                          D->isInitiallyForwardDecl(),
                                           D->isImplicitInterfaceDecl());
-      ToIface->setForwardDecl(D->isForwardDecl());
       ToIface->setLexicalDeclContext(LexicalDC);
       LexicalDC->addDeclInternal(ToIface);
+      if (D->isInitiallyForwardDecl() && !D->isForwardDecl())
+        ToIface->completedForwardDecl();
     }
     Importer.Imported(D, ToIface);
 
@@ -3220,6 +3232,17 @@ Decl *ASTNodeImporter::VisitObjCInterfaceDecl(ObjCInterfaceDecl *D) {
 
     // Check for consistency of superclasses.
     DeclarationName FromSuperName, ToSuperName;
+    
+    // If the superclass hasn't been imported yet, do so before checking.
+    ObjCInterfaceDecl *DSuperClass = D->getSuperClass();
+    ObjCInterfaceDecl *ToIfaceSuperClass = ToIface->getSuperClass();
+    
+    if (DSuperClass && !ToIfaceSuperClass) {
+      Decl *ImportedSuperClass = Importer.Import(DSuperClass);
+      ObjCInterfaceDecl *ImportedSuperIface = cast<ObjCInterfaceDecl>(ImportedSuperClass);
+      ToIface->setSuperClass(ImportedSuperIface);
+    }
+
     if (D->getSuperClass())
       FromSuperName = Importer.Import(D->getSuperClass()->getDeclName());
     if (ToIface->getSuperClass())

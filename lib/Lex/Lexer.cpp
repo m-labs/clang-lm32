@@ -1916,11 +1916,18 @@ bool Lexer::SkipBlockComment(Token &Result, const char *CurPtr) {
       if (C == '/') goto FoundSlash;
 
 #ifdef __SSE2__
-      __m128i Slashes = _mm_set_epi8('/', '/', '/', '/', '/', '/', '/', '/',
-                                     '/', '/', '/', '/', '/', '/', '/', '/');
-      while (CurPtr+16 <= BufferEnd &&
-             _mm_movemask_epi8(_mm_cmpeq_epi8(*(__m128i*)CurPtr, Slashes)) == 0)
+      __m128i Slashes = _mm_set1_epi8('/');
+      while (CurPtr+16 <= BufferEnd) {
+        int cmp = _mm_movemask_epi8(_mm_cmpeq_epi8(*(__m128i*)CurPtr, Slashes));
+        if (cmp != 0) {
+          // Adjust the pointer to point directly after the first slash. It's
+          // not necessary to set C here, it will be overwritten at the end of
+          // the outer loop.
+          CurPtr += llvm::CountTrailingZeros_32(cmp) + 1;
+          goto FoundSlash;
+        }
         CurPtr += 16;
+      }
 #elif __ALTIVEC__
       __vector unsigned char Slashes = {
         '/', '/', '/', '/',  '/', '/', '/', '/',
@@ -1948,8 +1955,8 @@ bool Lexer::SkipBlockComment(Token &Result, const char *CurPtr) {
     while (C != '/' && C != '\0')
       C = *CurPtr++;
 
-  FoundSlash:
     if (C == '/') {
+  FoundSlash:
       if (CurPtr[-2] == '*')  // We found the final */.  We're done!
         break;
 

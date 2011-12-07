@@ -18,6 +18,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Analysis/DomainSpecific/CocoaConventions.h"
+#include "clang/AST/ParentMap.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -1815,6 +1816,20 @@ static inline bool contains(const SmallVectorImpl<ArgEffect>& V,
   return false;
 }
 
+static bool isPropertyAccess(const Stmt *S, ParentMap &PM) {
+  unsigned maxDepth = 4;
+  while (S && maxDepth) {
+    if (const PseudoObjectExpr *PO = dyn_cast<PseudoObjectExpr>(S)) {
+      if (!isa<ObjCMessageExpr>(PO->getSyntacticForm()))
+        return true;
+      return false;
+    }
+    S = PM.getParent(S);
+    --maxDepth;
+  }
+  return false;
+}
+
 PathDiagnosticPiece *CFRefReportVisitor::VisitNode(const ExplodedNode *N,
                                                    const ExplodedNode *PrevN,
                                                    BugReporterContext &BRC,
@@ -1851,10 +1866,11 @@ PathDiagnosticPiece *CFRefReportVisitor::VisitNode(const ExplodedNode *N,
       else
         os << "function call";
     }
-    else if (isa<ObjCMessageExpr>(S)) {
-      os << "Method";
-    } else {
-      os << "Property";
+    else {
+      assert(isa<ObjCMessageExpr>(S));      
+      // The message expression may have between written directly or as
+      // a property access.  Lazily determine which case we are looking at.
+      os << (isPropertyAccess(S, N->getParentMap()) ? "Property" : "Method");
     }
 
     if (CurrV.getObjKind() == RetEffect::CF) {
@@ -2974,10 +2990,7 @@ void RetainCountChecker::processNonLeakError(const ProgramState *St,
 bool RetainCountChecker::evalCall(const CallExpr *CE, CheckerContext &C) const {
   // Get the callee. We're only interested in simple C functions.
   const ProgramState *state = C.getState();
-  const Expr *Callee = CE->getCallee();
-  SVal L = state->getSVal(Callee);
-
-  const FunctionDecl *FD = L.getAsFunctionDecl();
+  const FunctionDecl *FD = C.getCalleeDecl(CE);
   if (!FD)
     return false;
 
@@ -2999,7 +3012,7 @@ bool RetainCountChecker::evalCall(const CallExpr *CE, CheckerContext &C) const {
   // See if it's one of the specific functions we know how to eval.
   bool canEval = false;
 
-  QualType ResultTy = FD->getResultType();
+  QualType ResultTy = CE->getCallReturnType();
   if (ResultTy->isObjCIdType()) {
     // Handle: id NSMakeCollectable(CFTypeRef)
     canEval = II->isStr("NSMakeCollectable");
@@ -3454,7 +3467,8 @@ RetainCountChecker::getDeadSymbolTag(SymbolRef sym) const {
   if (!tag) {
     llvm::SmallString<64> buf;
     llvm::raw_svector_ostream out(buf);
-    out << "RetainCountChecker : Dead Symbol : " << sym->getSymbolID();
+    out << "RetainCountChecker : Dead Symbol : ";
+    sym->dumpToStream(out);
     tag = new SimpleProgramPointTag(out.str());
   }
   return tag;  
@@ -3519,7 +3533,7 @@ static void PrintPool(raw_ostream &Out, SymbolRef Sym,
                       const ProgramState *State) {
   Out << ' ';
   if (Sym)
-    Out << Sym->getSymbolID();
+    Sym->dumpToStream(Out);
   else
     Out << "<pool>";
   Out << ":{";

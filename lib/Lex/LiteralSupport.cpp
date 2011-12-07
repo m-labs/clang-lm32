@@ -1095,13 +1095,13 @@ void StringLiteralParser::init(const Token *StringToks, unsigned NumStringToks){
           // FIXME: Make the type of the result buffer correct instead of
           // using reinterpret_cast.
           UTF32 *ResultWidePtr = reinterpret_cast<UTF32*>(ResultPtr);
-          *ResultWidePtr = ResultChar & 0xFF;
+          *ResultWidePtr = ResultChar;
           ResultPtr += 4;
         } else if (CharByteWidth == 2) {
           // FIXME: Make the type of the result buffer correct instead of
           // using reinterpret_cast.
           UTF16 *ResultWidePtr = reinterpret_cast<UTF16*>(ResultPtr);
-          *ResultWidePtr = ResultChar & 0xFF;
+          *ResultWidePtr = ResultChar & 0xFFFF;
           ResultPtr += 2;
         } else {
           assert(CharByteWidth == 1 && "Unexpected char width");
@@ -1112,8 +1112,20 @@ void StringLiteralParser::init(const Token *StringToks, unsigned NumStringToks){
   }
 
   if (Pascal) {
-    ResultBuf[0] = ResultPtr-&ResultBuf[0]-1;
-    ResultBuf[0] /= CharByteWidth;
+    if (CharByteWidth == 4) {
+      // FIXME: Make the type of the result buffer correct instead of
+      // using reinterpret_cast.
+      UTF32 *ResultWidePtr = reinterpret_cast<UTF32*>(ResultBuf.data());
+      ResultWidePtr[0] = GetNumStringChars() - 1;
+    } else if (CharByteWidth == 2) {
+      // FIXME: Make the type of the result buffer correct instead of
+      // using reinterpret_cast.
+      UTF16 *ResultWidePtr = reinterpret_cast<UTF16*>(ResultBuf.data());
+      ResultWidePtr[0] = GetNumStringChars() - 1;
+    } else {
+      assert(CharByteWidth == 1 && "Unexpected char width");
+      ResultBuf[0] = GetNumStringChars() - 1;
+    }
 
     // Verify that pascal strings aren't too large.
     if (GetStringLength() > 256) {

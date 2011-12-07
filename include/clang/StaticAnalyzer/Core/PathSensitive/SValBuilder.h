@@ -48,11 +48,13 @@ protected:
   /// The width of the scalar type used for array indices.
   const unsigned ArrayIndexWidth;
 
+  virtual SVal evalCastFromNonLoc(NonLoc val, QualType castTy) = 0;
+  virtual SVal evalCastFromLoc(Loc val, QualType castTy) = 0;
+
 public:
   // FIXME: Make these protected again once RegionStoreManager correctly
   // handles loads from different bound value types.
-  virtual SVal evalCastFromNonLoc(NonLoc val, QualType castTy) = 0;
-  virtual SVal evalCastFromLoc(Loc val, QualType castTy) = 0;
+  virtual SVal dispatchCast(SVal val, QualType castTy) = 0;
 
 public:
   SValBuilder(llvm::BumpPtrAllocator &alloc, ASTContext &context,
@@ -72,19 +74,33 @@ public:
 
   virtual SVal evalComplement(NonLoc val) = 0;
 
+  /// Create a new value which represents a binary expression with two non
+  /// location operands.
   virtual SVal evalBinOpNN(const ProgramState *state, BinaryOperator::Opcode op,
                            NonLoc lhs, NonLoc rhs, QualType resultTy) = 0;
 
+  /// Create a new value which represents a binary expression with two memory
+  /// location operands.
   virtual SVal evalBinOpLL(const ProgramState *state, BinaryOperator::Opcode op,
                            Loc lhs, Loc rhs, QualType resultTy) = 0;
 
+  /// Create a new value which represents a binary expression with a memory
+  /// location and non location operands. For example, this would be used to
+  /// evaluate a pointer arithmetic operation.
   virtual SVal evalBinOpLN(const ProgramState *state, BinaryOperator::Opcode op,
                            Loc lhs, NonLoc rhs, QualType resultTy) = 0;
 
-  /// getKnownValue - evaluates a given SVal. If the SVal has only one possible
-  ///  (integer) value, that value is returned. Otherwise, returns NULL.
+  /// Evaluates a given SVal. If the SVal has only one possible (integer) value,
+  /// that value is returned. Otherwise, returns NULL.
   virtual const llvm::APSInt *getKnownValue(const ProgramState *state, SVal val) = 0;
   
+  /// Handles generation of the value in case the builder is not smart enough to
+  /// handle the given binary expression. Depending on the state, decides to
+  /// either keep the expression or forget the history and generate an
+  /// UnknownVal.
+  SVal generateUnknownVal(const ProgramState *state, BinaryOperator::Opcode op,
+                          NonLoc lhs, NonLoc rhs, QualType resultTy);
+
   SVal evalBinOp(const ProgramState *state, BinaryOperator::Opcode op,
                  SVal lhs, SVal rhs, QualType type);
   
@@ -126,12 +142,18 @@ public:
     return SymMgr.getConjuredSymbol(expr, visitCount, symbolTag);
   }
 
-  /// makeZeroVal - Construct an SVal representing '0' for the specified type.
+  /// Construct an SVal representing '0' for the specified type.
   DefinedOrUnknownSVal makeZeroVal(QualType type);
 
-  /// getRegionValueSymbolVal - make a unique symbol for value of region.
+  /// Make a unique symbol for value of region.
   DefinedOrUnknownSVal getRegionValueSymbolVal(const TypedValueRegion *region);
 
+  /// \brief Create a new symbol with a unique 'name'.
+  ///
+  /// We resort to conjured symbols when we cannot construct a derived symbol.
+  /// The advantage of symbols derived/built from other symbols is that we
+  /// preserve the relation between related(or even equivalent) expressions, so
+  /// conjured symbols should be used sparingly.
   DefinedOrUnknownSVal getConjuredSymbolVal(const void *symbolTag,
                                             const Expr *expr, unsigned count);
   DefinedOrUnknownSVal getConjuredSymbolVal(const void *symbolTag,
@@ -222,6 +244,9 @@ public:
 
   NonLoc makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
                     const SymExpr *rhs, QualType type);
+
+  /// \brief Create a NonLoc value for cast.
+  NonLoc makeNonLoc(const SymExpr *operand, QualType fromTy, QualType toTy);
 
   nonloc::ConcreteInt makeTruthVal(bool b, QualType type) {
     return nonloc::ConcreteInt(BasicVals.getTruthValue(b, type));

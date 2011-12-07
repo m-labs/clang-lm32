@@ -2633,6 +2633,19 @@ struct BaseAndFieldInfo {
     else
       IIK = IIK_Default;
   }
+  
+  bool isImplicitCopyOrMove() const {
+    switch (IIK) {
+    case IIK_Copy:
+    case IIK_Move:
+      return true;
+      
+    case IIK_Default:
+      return false;
+    }
+    
+    return false;
+  }
 };
 }
 
@@ -2678,7 +2691,7 @@ static bool CollectFieldInitializer(Sema &SemaRef, BaseAndFieldInfo &Info,
   // C++0x [class.base.init]p8: if the entity is a non-static data member that
   // has a brace-or-equal-initializer, the entity is initialized as specified
   // in [dcl.init].
-  if (Field->hasInClassInitializer()) {
+  if (Field->hasInClassInitializer() && !Info.isImplicitCopyOrMove()) {
     CXXCtorInitializer *Init;
     if (Indirect)
       Init = new (SemaRef.Context) CXXCtorInitializer(SemaRef.Context, Indirect,
@@ -3065,11 +3078,9 @@ bool CheckRedundantUnionInit(Sema &S,
                              RedundantUnionMap &Unions) {
   FieldDecl *Field = Init->getAnyMember();
   RecordDecl *Parent = Field->getParent();
-  if (!Parent->isAnonymousStructOrUnion())
-    return false;
-
   NamedDecl *Child = Field;
-  do {
+
+  while (Parent->isAnonymousStructOrUnion() || Parent->isUnion()) {
     if (Parent->isUnion()) {
       UnionEntry &En = Unions[Parent];
       if (En.first && En.first != Child) {
@@ -3080,15 +3091,18 @@ bool CheckRedundantUnionInit(Sema &S,
         S.Diag(En.second->getSourceLocation(), diag::note_previous_initializer)
           << 0 << En.second->getSourceRange();
         return true;
-      } else if (!En.first) {
+      } 
+      if (!En.first) {
         En.first = Child;
         En.second = Init;
       }
+      if (!Parent->isAnonymousStructOrUnion())
+        return false;
     }
 
     Child = Parent;
     Parent = cast<RecordDecl>(Parent->getDeclContext());
-  } while (Parent->isAnonymousStructOrUnion());
+  }
 
   return false;
 }
@@ -8582,12 +8596,7 @@ Sema::ComputeDefaultedMoveCtorExceptionSpec(CXXRecordDecl *ClassDecl) {
   for (RecordDecl::field_iterator F = ClassDecl->field_begin(),
                                FEnd = ClassDecl->field_end();
        F != FEnd; ++F) {
-    if (F->hasInClassInitializer()) {
-      if (Expr *E = F->getInClassInitializer())
-        ExceptSpec.CalledExpr(E);
-      else if (!F->isInvalidDecl())
-        ExceptSpec.SetDelayed();
-    } else if (const RecordType *RecordTy
+    if (const RecordType *RecordTy
               = Context.getBaseElementType(F->getType())->getAs<RecordType>()) {
       CXXRecordDecl *FieldRecDecl = cast<CXXRecordDecl>(RecordTy->getDecl());
       CXXConstructorDecl *Constructor = LookupMovingConstructor(FieldRecDecl);
@@ -8972,16 +8981,6 @@ void Sema::AddCXXDirectInitializerToDecl(Decl *RealDecl,
   
   Expr *Init = Result.get();
   CheckImplicitConversions(Init, LParenLoc);
-  
-  if (VDecl->isConstexpr() && !VDecl->isInvalidDecl() &&
-      !Init->isValueDependent() &&
-      !Init->isConstantInitializer(Context,
-                                   VDecl->getType()->isReferenceType())) {
-    // FIXME: Improve this diagnostic to explain why the initializer is not
-    // a constant expression.
-    Diag(VDecl->getLocation(), diag::err_constexpr_var_requires_const_init)
-      << VDecl << Init->getSourceRange();
-  }
 
   Init = MaybeCreateExprWithCleanups(Init);
   VDecl->setInit(Init);

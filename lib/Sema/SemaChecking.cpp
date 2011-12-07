@@ -183,20 +183,95 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
     TheCall->setType(Context.IntTy);
     break;
   case Builtin::BI__sync_fetch_and_add:
+  case Builtin::BI__sync_fetch_and_add_1:
+  case Builtin::BI__sync_fetch_and_add_2:
+  case Builtin::BI__sync_fetch_and_add_4:
+  case Builtin::BI__sync_fetch_and_add_8:
+  case Builtin::BI__sync_fetch_and_add_16:
   case Builtin::BI__sync_fetch_and_sub:
+  case Builtin::BI__sync_fetch_and_sub_1:
+  case Builtin::BI__sync_fetch_and_sub_2:
+  case Builtin::BI__sync_fetch_and_sub_4:
+  case Builtin::BI__sync_fetch_and_sub_8:
+  case Builtin::BI__sync_fetch_and_sub_16:
   case Builtin::BI__sync_fetch_and_or:
+  case Builtin::BI__sync_fetch_and_or_1:
+  case Builtin::BI__sync_fetch_and_or_2:
+  case Builtin::BI__sync_fetch_and_or_4:
+  case Builtin::BI__sync_fetch_and_or_8:
+  case Builtin::BI__sync_fetch_and_or_16:
   case Builtin::BI__sync_fetch_and_and:
+  case Builtin::BI__sync_fetch_and_and_1:
+  case Builtin::BI__sync_fetch_and_and_2:
+  case Builtin::BI__sync_fetch_and_and_4:
+  case Builtin::BI__sync_fetch_and_and_8:
+  case Builtin::BI__sync_fetch_and_and_16:
   case Builtin::BI__sync_fetch_and_xor:
+  case Builtin::BI__sync_fetch_and_xor_1:
+  case Builtin::BI__sync_fetch_and_xor_2:
+  case Builtin::BI__sync_fetch_and_xor_4:
+  case Builtin::BI__sync_fetch_and_xor_8:
+  case Builtin::BI__sync_fetch_and_xor_16:
   case Builtin::BI__sync_add_and_fetch:
+  case Builtin::BI__sync_add_and_fetch_1:
+  case Builtin::BI__sync_add_and_fetch_2:
+  case Builtin::BI__sync_add_and_fetch_4:
+  case Builtin::BI__sync_add_and_fetch_8:
+  case Builtin::BI__sync_add_and_fetch_16:
   case Builtin::BI__sync_sub_and_fetch:
+  case Builtin::BI__sync_sub_and_fetch_1:
+  case Builtin::BI__sync_sub_and_fetch_2:
+  case Builtin::BI__sync_sub_and_fetch_4:
+  case Builtin::BI__sync_sub_and_fetch_8:
+  case Builtin::BI__sync_sub_and_fetch_16:
   case Builtin::BI__sync_and_and_fetch:
+  case Builtin::BI__sync_and_and_fetch_1:
+  case Builtin::BI__sync_and_and_fetch_2:
+  case Builtin::BI__sync_and_and_fetch_4:
+  case Builtin::BI__sync_and_and_fetch_8:
+  case Builtin::BI__sync_and_and_fetch_16:
   case Builtin::BI__sync_or_and_fetch:
+  case Builtin::BI__sync_or_and_fetch_1:
+  case Builtin::BI__sync_or_and_fetch_2:
+  case Builtin::BI__sync_or_and_fetch_4:
+  case Builtin::BI__sync_or_and_fetch_8:
+  case Builtin::BI__sync_or_and_fetch_16:
   case Builtin::BI__sync_xor_and_fetch:
+  case Builtin::BI__sync_xor_and_fetch_1:
+  case Builtin::BI__sync_xor_and_fetch_2:
+  case Builtin::BI__sync_xor_and_fetch_4:
+  case Builtin::BI__sync_xor_and_fetch_8:
+  case Builtin::BI__sync_xor_and_fetch_16:
   case Builtin::BI__sync_val_compare_and_swap:
+  case Builtin::BI__sync_val_compare_and_swap_1:
+  case Builtin::BI__sync_val_compare_and_swap_2:
+  case Builtin::BI__sync_val_compare_and_swap_4:
+  case Builtin::BI__sync_val_compare_and_swap_8:
+  case Builtin::BI__sync_val_compare_and_swap_16:
   case Builtin::BI__sync_bool_compare_and_swap:
+  case Builtin::BI__sync_bool_compare_and_swap_1:
+  case Builtin::BI__sync_bool_compare_and_swap_2:
+  case Builtin::BI__sync_bool_compare_and_swap_4:
+  case Builtin::BI__sync_bool_compare_and_swap_8:
+  case Builtin::BI__sync_bool_compare_and_swap_16:
   case Builtin::BI__sync_lock_test_and_set:
+  case Builtin::BI__sync_lock_test_and_set_1:
+  case Builtin::BI__sync_lock_test_and_set_2:
+  case Builtin::BI__sync_lock_test_and_set_4:
+  case Builtin::BI__sync_lock_test_and_set_8:
+  case Builtin::BI__sync_lock_test_and_set_16:
   case Builtin::BI__sync_lock_release:
+  case Builtin::BI__sync_lock_release_1:
+  case Builtin::BI__sync_lock_release_2:
+  case Builtin::BI__sync_lock_release_4:
+  case Builtin::BI__sync_lock_release_8:
+  case Builtin::BI__sync_lock_release_16:
   case Builtin::BI__sync_swap:
+  case Builtin::BI__sync_swap_1:
+  case Builtin::BI__sync_swap_2:
+  case Builtin::BI__sync_swap_4:
+  case Builtin::BI__sync_swap_8:
+  case Builtin::BI__sync_swap_16:
     return SemaBuiltinAtomicOverloaded(move(TheCallResult));
   case Builtin::BI__atomic_load:
     return SemaAtomicOpsOverloaded(move(TheCallResult), AtomicExpr::Load);
@@ -245,29 +320,52 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
 
 // Get the valid immediate range for the specified NEON type code.
 static unsigned RFT(unsigned t, bool shift = false) {
-  bool quad = t & 0x10;
-  
-  switch (t & 0x7) {
-    case 0: // i8
-      return shift ? 7 : (8 << (int)quad) - 1;
-    case 1: // i16
-      return shift ? 15 : (4 << (int)quad) - 1;
-    case 2: // i32
-      return shift ? 31 : (2 << (int)quad) - 1;
-    case 3: // i64
-      return shift ? 63 : (1 << (int)quad) - 1;
-    case 4: // f32
-      assert(!shift && "cannot shift float types!");
-      return (2 << (int)quad) - 1;
-    case 5: // poly8
-      return shift ? 7 : (8 << (int)quad) - 1;
-    case 6: // poly16
-      return shift ? 15 : (4 << (int)quad) - 1;
-    case 7: // float16
-      assert(!shift && "cannot shift float types!");
-      return (4 << (int)quad) - 1;
+  NeonTypeFlags Type(t);
+  int IsQuad = Type.isQuad();
+  switch (Type.getEltType()) {
+  case NeonTypeFlags::Int8:
+  case NeonTypeFlags::Poly8:
+    return shift ? 7 : (8 << IsQuad) - 1;
+  case NeonTypeFlags::Int16:
+  case NeonTypeFlags::Poly16:
+    return shift ? 15 : (4 << IsQuad) - 1;
+  case NeonTypeFlags::Int32:
+    return shift ? 31 : (2 << IsQuad) - 1;
+  case NeonTypeFlags::Int64:
+    return shift ? 63 : (1 << IsQuad) - 1;
+  case NeonTypeFlags::Float16:
+    assert(!shift && "cannot shift float types!");
+    return (4 << IsQuad) - 1;
+  case NeonTypeFlags::Float32:
+    assert(!shift && "cannot shift float types!");
+    return (2 << IsQuad) - 1;
   }
   return 0;
+}
+
+/// getNeonEltType - Return the QualType corresponding to the elements of
+/// the vector type specified by the NeonTypeFlags.  This is used to check
+/// the pointer arguments for Neon load/store intrinsics.
+static QualType getNeonEltType(NeonTypeFlags Flags, ASTContext &Context) {
+  switch (Flags.getEltType()) {
+  case NeonTypeFlags::Int8:
+    return Flags.isUnsigned() ? Context.UnsignedCharTy : Context.SignedCharTy;
+  case NeonTypeFlags::Int16:
+    return Flags.isUnsigned() ? Context.UnsignedShortTy : Context.ShortTy;
+  case NeonTypeFlags::Int32:
+    return Flags.isUnsigned() ? Context.UnsignedIntTy : Context.IntTy;
+  case NeonTypeFlags::Int64:
+    return Flags.isUnsigned() ? Context.UnsignedLongLongTy : Context.LongLongTy;
+  case NeonTypeFlags::Poly8:
+    return Context.SignedCharTy;
+  case NeonTypeFlags::Poly16:
+    return Context.ShortTy;
+  case NeonTypeFlags::Float16:
+    return Context.UnsignedShortTy;
+  case NeonTypeFlags::Float32:
+    return Context.FloatTy;
+  }
+  return QualType();
 }
 
 bool Sema::CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
@@ -275,6 +373,8 @@ bool Sema::CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
 
   unsigned mask = 0;
   unsigned TV = 0;
+  int PtrArgNum = -1;
+  bool HasConstPtr = false;
   switch (BuiltinID) {
 #define GET_NEON_OVERLOAD_CHECK
 #include "clang/Basic/arm_neon.inc"
@@ -283,15 +383,35 @@ bool Sema::CheckARMBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   
   // For NEON intrinsics which are overloaded on vector element type, validate
   // the immediate which specifies which variant to emit.
+  unsigned ImmArg = TheCall->getNumArgs()-1;
   if (mask) {
-    unsigned ArgNo = TheCall->getNumArgs()-1;
-    if (SemaBuiltinConstantArg(TheCall, ArgNo, Result))
+    if (SemaBuiltinConstantArg(TheCall, ImmArg, Result))
       return true;
     
-    TV = Result.getLimitedValue(32);
-    if ((TV > 31) || (mask & (1 << TV)) == 0)
+    TV = Result.getLimitedValue(64);
+    if ((TV > 63) || (mask & (1 << TV)) == 0)
       return Diag(TheCall->getLocStart(), diag::err_invalid_neon_type_code)
-        << TheCall->getArg(ArgNo)->getSourceRange();
+        << TheCall->getArg(ImmArg)->getSourceRange();
+  }
+
+  if (PtrArgNum >= 0) {
+    // Check that pointer arguments have the specified type.
+    Expr *Arg = TheCall->getArg(PtrArgNum);
+    if (ImplicitCastExpr *ICE = dyn_cast<ImplicitCastExpr>(Arg))
+      Arg = ICE->getSubExpr();
+    ExprResult RHS = DefaultFunctionArrayLvalueConversion(Arg);
+    QualType RHSTy = RHS.get()->getType();
+    QualType EltTy = getNeonEltType(NeonTypeFlags(TV), Context);
+    if (HasConstPtr)
+      EltTy = EltTy.withConst();
+    QualType LHSTy = Context.getPointerType(EltTy);
+    AssignConvertType ConvTy;
+    ConvTy = CheckSingleAssignmentConstraints(LHSTy, RHS);
+    if (RHS.isInvalid())
+      return true;
+    if (DiagnoseAssignmentResult(ConvTy, Arg->getLocStart(), LHSTy, RHSTy,
+                                 RHS.get(), AA_Assigning))
+      return true;
   }
   
   // For NEON intrinsics which take an immediate value as part of the 
@@ -749,34 +869,145 @@ Sema::SemaBuiltinAtomicOverloaded(ExprResult TheCallResult) {
   unsigned BuiltinIndex, NumFixed = 1;
   switch (BuiltinID) {
   default: llvm_unreachable("Unknown overloaded atomic builtin!");
-  case Builtin::BI__sync_fetch_and_add: BuiltinIndex = 0; break;
-  case Builtin::BI__sync_fetch_and_sub: BuiltinIndex = 1; break;
-  case Builtin::BI__sync_fetch_and_or:  BuiltinIndex = 2; break;
-  case Builtin::BI__sync_fetch_and_and: BuiltinIndex = 3; break;
-  case Builtin::BI__sync_fetch_and_xor: BuiltinIndex = 4; break;
+  case Builtin::BI__sync_fetch_and_add: 
+  case Builtin::BI__sync_fetch_and_add_1:
+  case Builtin::BI__sync_fetch_and_add_2:
+  case Builtin::BI__sync_fetch_and_add_4:
+  case Builtin::BI__sync_fetch_and_add_8:
+  case Builtin::BI__sync_fetch_and_add_16:
+    BuiltinIndex = 0; 
+    break;
+      
+  case Builtin::BI__sync_fetch_and_sub: 
+  case Builtin::BI__sync_fetch_and_sub_1:
+  case Builtin::BI__sync_fetch_and_sub_2:
+  case Builtin::BI__sync_fetch_and_sub_4:
+  case Builtin::BI__sync_fetch_and_sub_8:
+  case Builtin::BI__sync_fetch_and_sub_16:
+    BuiltinIndex = 1; 
+    break;
+      
+  case Builtin::BI__sync_fetch_and_or:  
+  case Builtin::BI__sync_fetch_and_or_1:
+  case Builtin::BI__sync_fetch_and_or_2:
+  case Builtin::BI__sync_fetch_and_or_4:
+  case Builtin::BI__sync_fetch_and_or_8:
+  case Builtin::BI__sync_fetch_and_or_16:
+    BuiltinIndex = 2; 
+    break;
+      
+  case Builtin::BI__sync_fetch_and_and: 
+  case Builtin::BI__sync_fetch_and_and_1:
+  case Builtin::BI__sync_fetch_and_and_2:
+  case Builtin::BI__sync_fetch_and_and_4:
+  case Builtin::BI__sync_fetch_and_and_8:
+  case Builtin::BI__sync_fetch_and_and_16:
+    BuiltinIndex = 3; 
+    break;
 
-  case Builtin::BI__sync_add_and_fetch: BuiltinIndex = 5; break;
-  case Builtin::BI__sync_sub_and_fetch: BuiltinIndex = 6; break;
-  case Builtin::BI__sync_and_and_fetch: BuiltinIndex = 7; break;
-  case Builtin::BI__sync_or_and_fetch:  BuiltinIndex = 8; break;
-  case Builtin::BI__sync_xor_and_fetch: BuiltinIndex = 9; break;
+  case Builtin::BI__sync_fetch_and_xor: 
+  case Builtin::BI__sync_fetch_and_xor_1:
+  case Builtin::BI__sync_fetch_and_xor_2:
+  case Builtin::BI__sync_fetch_and_xor_4:
+  case Builtin::BI__sync_fetch_and_xor_8:
+  case Builtin::BI__sync_fetch_and_xor_16:
+    BuiltinIndex = 4; 
+    break;
+
+  case Builtin::BI__sync_add_and_fetch: 
+  case Builtin::BI__sync_add_and_fetch_1:
+  case Builtin::BI__sync_add_and_fetch_2:
+  case Builtin::BI__sync_add_and_fetch_4:
+  case Builtin::BI__sync_add_and_fetch_8:
+  case Builtin::BI__sync_add_and_fetch_16:
+    BuiltinIndex = 5; 
+    break;
+      
+  case Builtin::BI__sync_sub_and_fetch: 
+  case Builtin::BI__sync_sub_and_fetch_1:
+  case Builtin::BI__sync_sub_and_fetch_2:
+  case Builtin::BI__sync_sub_and_fetch_4:
+  case Builtin::BI__sync_sub_and_fetch_8:
+  case Builtin::BI__sync_sub_and_fetch_16:
+    BuiltinIndex = 6; 
+    break;
+      
+  case Builtin::BI__sync_and_and_fetch: 
+  case Builtin::BI__sync_and_and_fetch_1:
+  case Builtin::BI__sync_and_and_fetch_2:
+  case Builtin::BI__sync_and_and_fetch_4:
+  case Builtin::BI__sync_and_and_fetch_8:
+  case Builtin::BI__sync_and_and_fetch_16:
+    BuiltinIndex = 7; 
+    break;
+      
+  case Builtin::BI__sync_or_and_fetch:  
+  case Builtin::BI__sync_or_and_fetch_1:
+  case Builtin::BI__sync_or_and_fetch_2:
+  case Builtin::BI__sync_or_and_fetch_4:
+  case Builtin::BI__sync_or_and_fetch_8:
+  case Builtin::BI__sync_or_and_fetch_16:
+    BuiltinIndex = 8; 
+    break;
+      
+  case Builtin::BI__sync_xor_and_fetch: 
+  case Builtin::BI__sync_xor_and_fetch_1:
+  case Builtin::BI__sync_xor_and_fetch_2:
+  case Builtin::BI__sync_xor_and_fetch_4:
+  case Builtin::BI__sync_xor_and_fetch_8:
+  case Builtin::BI__sync_xor_and_fetch_16:
+    BuiltinIndex = 9; 
+    break;
 
   case Builtin::BI__sync_val_compare_and_swap:
+  case Builtin::BI__sync_val_compare_and_swap_1:
+  case Builtin::BI__sync_val_compare_and_swap_2:
+  case Builtin::BI__sync_val_compare_and_swap_4:
+  case Builtin::BI__sync_val_compare_and_swap_8:
+  case Builtin::BI__sync_val_compare_and_swap_16:
     BuiltinIndex = 10;
     NumFixed = 2;
     break;
+      
   case Builtin::BI__sync_bool_compare_and_swap:
+  case Builtin::BI__sync_bool_compare_and_swap_1:
+  case Builtin::BI__sync_bool_compare_and_swap_2:
+  case Builtin::BI__sync_bool_compare_and_swap_4:
+  case Builtin::BI__sync_bool_compare_and_swap_8:
+  case Builtin::BI__sync_bool_compare_and_swap_16:
     BuiltinIndex = 11;
     NumFixed = 2;
     ResultType = Context.BoolTy;
     break;
-  case Builtin::BI__sync_lock_test_and_set: BuiltinIndex = 12; break;
+      
+  case Builtin::BI__sync_lock_test_and_set: 
+  case Builtin::BI__sync_lock_test_and_set_1:
+  case Builtin::BI__sync_lock_test_and_set_2:
+  case Builtin::BI__sync_lock_test_and_set_4:
+  case Builtin::BI__sync_lock_test_and_set_8:
+  case Builtin::BI__sync_lock_test_and_set_16:
+    BuiltinIndex = 12; 
+    break;
+      
   case Builtin::BI__sync_lock_release:
+  case Builtin::BI__sync_lock_release_1:
+  case Builtin::BI__sync_lock_release_2:
+  case Builtin::BI__sync_lock_release_4:
+  case Builtin::BI__sync_lock_release_8:
+  case Builtin::BI__sync_lock_release_16:
     BuiltinIndex = 13;
     NumFixed = 0;
     ResultType = Context.VoidTy;
     break;
-  case Builtin::BI__sync_swap: BuiltinIndex = 14; break;
+      
+  case Builtin::BI__sync_swap: 
+  case Builtin::BI__sync_swap_1:
+  case Builtin::BI__sync_swap_2:
+  case Builtin::BI__sync_swap_4:
+  case Builtin::BI__sync_swap_8:
+  case Builtin::BI__sync_swap_16:
+    BuiltinIndex = 14; 
+    break;
   }
 
   // Now that we know how many fixed arguments we expect, first check that we
@@ -802,14 +1033,6 @@ Sema::SemaBuiltinAtomicOverloaded(ExprResult TheCallResult) {
   // the remaining arguments, converting them to the deduced value type.
   for (unsigned i = 0; i != NumFixed; ++i) {
     ExprResult Arg = TheCall->getArg(i+1);
-
-    // If the argument is an implicit cast, then there was a promotion due to
-    // "...", just remove it now.
-    if (ImplicitCastExpr *ICE = dyn_cast<ImplicitCastExpr>(Arg.get())) {
-      Arg = ICE->getSubExpr();
-      ICE->setSubExpr(0);
-      TheCall->setArg(i+1, Arg.get());
-    }
 
     // GCC does an implicit conversion to the pointer or integer ValType.  This
     // can fail in some cases (1i -> int**), check for this error case now.
@@ -1791,7 +2014,7 @@ bool CheckPrintfHandler::HandleAmount(
 
       if (!ATR.matchesType(S.Context, T)) {
         EmitFormatDiagnostic(S.PDiag(diag::warn_printf_asterisk_wrong_type)
-                               << k << ATR.getRepresentativeType(S.Context)
+                               << k << ATR.getRepresentativeTypeName(S.Context)
                                << T << Arg->getSourceRange(),
                              getLocationOfByte(Amt.getStart()),
                              /*IsStringLocation*/true,
@@ -2011,7 +2234,7 @@ CheckPrintfHandler::HandlePrintfSpecifier(const analyze_printf::PrintfSpecifier
       // type is 'wint_t' (which is defined in the system headers).
       EmitFormatDiagnostic(
         S.PDiag(diag::warn_printf_conversion_argument_type_mismatch)
-          << ATR.getRepresentativeType(S.Context) << Ex->getType()
+          << ATR.getRepresentativeTypeName(S.Context) << Ex->getType()
           << Ex->getSourceRange(),
         getLocationOfByte(CS.getStart()),
         /*IsStringLocation*/true,
@@ -2023,7 +2246,7 @@ CheckPrintfHandler::HandlePrintfSpecifier(const analyze_printf::PrintfSpecifier
     else {
       S.Diag(getLocationOfByte(CS.getStart()),
              diag::warn_printf_conversion_argument_type_mismatch)
-        << ATR.getRepresentativeType(S.Context) << Ex->getType()
+        << ATR.getRepresentativeTypeName(S.Context) << Ex->getType()
         << getSpecifierRange(startSpecifier, specifierLen)
         << Ex->getSourceRange();
     }
@@ -2398,7 +2621,7 @@ void Sema::CheckStrlcpycatArguments(const CallExpr *Call,
   else {
     // Look for 'strlcpy(dst, x, strlen(x))'
     if (const CallExpr *SizeCall = dyn_cast<CallExpr>(SizeArg)) {
-      if (SizeCall->isBuiltinCall(Context) == Builtin::BIstrlen
+      if (SizeCall->isBuiltinCall() == Builtin::BIstrlen
           && SizeCall->getNumArgs() == 1)
         CompareWithSrc = ignoreLiteralAdditions(SizeCall->getArg(0), Context);
     }
@@ -2635,6 +2858,9 @@ static Expr *EvalAddr(Expr *E, SmallVectorImpl<DeclRefExpr *> &refVars) {
   case Stmt::AddrLabelExprClass:
     return E; // address of label.
 
+  case Stmt::ExprWithCleanupsClass:
+    return EvalAddr(cast<ExprWithCleanups>(E)->getSubExpr(), refVars);
+
   // For casts, we need to handle conversions from arrays to
   // pointer values, and pointer-to-pointer conversions.
   case Stmt::ImplicitCastExprClass:
@@ -2710,6 +2936,9 @@ do {
     }
     return NULL;
   }
+
+  case Stmt::ExprWithCleanupsClass:
+    return EvalVal(cast<ExprWithCleanups>(E)->getSubExpr(), refVars);
 
   case Stmt::DeclRefExprClass: {
     // When we hit a DeclRefExpr we are looking at code that refers to a
@@ -2840,12 +3069,12 @@ void Sema::CheckFloatComparison(SourceLocation Loc, Expr* LHS, Expr *RHS) {
   // Check for comparisons with builtin types.
   if (EmitWarning)
     if (CallExpr* CL = dyn_cast<CallExpr>(LeftExprSansParen))
-      if (CL->isBuiltinCall(Context))
+      if (CL->isBuiltinCall())
         EmitWarning = false;
 
   if (EmitWarning)
     if (CallExpr* CR = dyn_cast<CallExpr>(RightExprSansParen))
-      if (CR->isBuiltinCall(Context))
+      if (CR->isBuiltinCall())
         EmitWarning = false;
 
   // Emit the diagnostic.
@@ -3529,6 +3758,26 @@ void CheckImplicitConversion(Sema &S, Expr *E, QualType T,
       // by a check in AnalyzeImplicitConversions().
       return DiagnoseImpCast(S, E, T, CC,
                              diag::warn_impcast_string_literal_to_bool);
+    if (Source->isFunctionType()) {
+      // Warn on function to bool. Checks free functions and static member
+      // functions. Weakly imported functions are excluded from the check,
+      // since it's common to test their value to check whether the linker
+      // found a definition for them.
+      ValueDecl *D = 0;
+      if (DeclRefExpr* R = dyn_cast<DeclRefExpr>(E)) {
+        D = R->getDecl();
+      } else if (MemberExpr *M = dyn_cast<MemberExpr>(E)) {
+        D = M->getMemberDecl();
+      }
+
+      if (D && !D->isWeak()) {
+        if (FunctionDecl* F = dyn_cast<FunctionDecl>(D)) {
+          S.Diag(E->getExprLoc(), diag::warn_impcast_function_to_bool)
+            << F << E->getSourceRange() << SourceRange(CC);
+          return;
+        }
+      }
+    }
     return; // Other casts to bool are not checked.
   }
 
@@ -3973,8 +4222,11 @@ static bool IsTailPaddedMemberArray(Sema &S, llvm::APInt Size,
     return false;
 
   const RecordDecl *RD = dyn_cast<RecordDecl>(FD->getDeclContext());
-  if (!RD || !RD->isStruct())
-    return false;
+  if (!RD) return false;
+  if (RD->isUnion()) return false;
+  if (const CXXRecordDecl *CRD = dyn_cast<CXXRecordDecl>(RD)) {
+    if (!CRD->isStandardLayout()) return false;
+  }
 
   // See if this is the last field decl in the record.
   const Decl *D = FD;
@@ -4068,6 +4320,17 @@ void Sema::CheckArrayAccess(const Expr *BaseExpr, const Expr *IndexExpr,
                           << IndexExpr->getSourceRange());
   }
 
+  if (!ND) {
+    // Try harder to find a NamedDecl to point at in the note.
+    while (const ArraySubscriptExpr *ASE =
+           dyn_cast<ArraySubscriptExpr>(BaseExpr))
+      BaseExpr = ASE->getBase()->IgnoreParenCasts();
+    if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(BaseExpr))
+      ND = dyn_cast<NamedDecl>(DRE->getDecl());
+    if (const MemberExpr *ME = dyn_cast<MemberExpr>(BaseExpr))
+      ND = dyn_cast<NamedDecl>(ME->getMemberDecl());
+  }
+
   if (ND)
     DiagRuntimeBehavior(ND->getLocStart(), BaseExpr,
                         PDiag(diag::note_array_index_out_of_bounds)
@@ -4158,22 +4421,6 @@ static bool findRetainCycleOwner(Expr *e, RetainCycleOwner &owner) {
         e = cast->getSubExpr();
         continue;
 
-      case CK_GetObjCProperty: {
-        // Bail out if this isn't a strong explicit property.
-        const ObjCPropertyRefExpr *pre = cast->getSubExpr()->getObjCProperty();
-        if (pre->isImplicitProperty()) return false;
-        ObjCPropertyDecl *property = pre->getExplicitProperty();
-        if (!property->isRetaining() &&
-            !(property->getPropertyIvarDecl() &&
-              property->getPropertyIvarDecl()->getType()
-                .getObjCLifetime() == Qualifiers::OCL_Strong))
-          return false;
-
-        owner.Indirect = true;
-        e = const_cast<Expr*>(pre->getBase());
-        continue;
-      }
-        
       default:
         return false;
       }
@@ -4210,6 +4457,26 @@ static bool findRetainCycleOwner(Expr *e, RetainCycleOwner &owner) {
 
       // Don't count this as an indirect ownership.
       e = member->getBase();
+      continue;
+    }
+
+    if (PseudoObjectExpr *pseudo = dyn_cast<PseudoObjectExpr>(e)) {
+      // Only pay attention to pseudo-objects on property references.
+      ObjCPropertyRefExpr *pre
+        = dyn_cast<ObjCPropertyRefExpr>(pseudo->getSyntacticForm()
+                                              ->IgnoreParens());
+      if (!pre) return false;
+      if (pre->isImplicitProperty()) return false;
+      ObjCPropertyDecl *property = pre->getExplicitProperty();
+      if (!property->isRetaining() &&
+          !(property->getPropertyIvarDecl() &&
+            property->getPropertyIvarDecl()->getType()
+              .getObjCLifetime() == Qualifiers::OCL_Strong))
+          return false;
+
+      owner.Indirect = true;
+      e = const_cast<Expr*>(cast<OpaqueValueExpr>(pre->getBase())
+                              ->getSourceExpr());
       continue;
     }
 
@@ -4286,8 +4553,14 @@ static bool isSetterLikeSelector(Selector sel) {
 
   StringRef str = sel.getNameForSlot(0);
   while (!str.empty() && str.front() == '_') str = str.substr(1);
-  if (str.startswith("set") || str.startswith("add"))
+  if (str.startswith("set"))
     str = str.substr(3);
+  else if (str.startswith("add")) {
+    // Specially whitelist 'addOperationWithBlock:'.
+    if (sel.getNumArgs() == 1 && str.startswith("addOperationWithBlock"))
+      return false;
+    str = str.substr(3);
+  }
   else
     return false;
 

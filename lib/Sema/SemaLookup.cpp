@@ -1123,6 +1123,11 @@ bool Sema::LookupName(LookupResult &R, Scope *S, bool AllowBuiltinCreation) {
                  !isa<ImplicitParamDecl>(*I))
           continue;
         
+        // If this declaration is module-private and it came from an AST
+        // file, we can't see it.
+        if ((*I)->isModulePrivate() && (*I)->isFromASTFile())
+          continue;
+            
         R.addDecl(*I);
 
         if ((*I)->getAttr<OverloadableAttr>()) {
@@ -3549,6 +3554,13 @@ TypoCorrection Sema::CorrectTypo(const DeclarationNameInfo &TypoName,
                                  CorrectTypoContext CTC,
                                  const ObjCObjectPointerType *OPT) {
   if (Diags.hasFatalErrorOccurred() || !getLangOptions().SpellChecking)
+    return TypoCorrection();
+
+  // In Microsoft mode, don't perform typo correction in a template member
+  // function dependent context because it interferes with the "lookup into
+  // dependent bases of class templates" feature.
+  if (getLangOptions().MicrosoftMode && CurContext->isDependentContext() &&
+      isa<CXXMethodDecl>(CurContext))
     return TypoCorrection();
 
   // We only attempt to correct typos for identifiers.

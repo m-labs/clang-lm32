@@ -565,6 +565,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
 ///                   '__is_class'
 ///                   '__is_empty'                            [TODO]
 ///                   '__is_enum'
+///                   '__is_final'
 ///                   '__is_pod'
 ///                   '__is_polymorphic'
 ///                   '__is_trivial'
@@ -663,6 +664,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
     ConsumeToken();
     break;
       
+  case tok::kw_decltype:
   case tok::identifier: {      // primary-expression: identifier
                                // unqualified-id: identifier
                                // constant: enumeration-constant
@@ -974,7 +976,8 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
         // type, translate it into a type and continue parsing as a
         // cast expression.
         CXXScopeSpec SS;
-        ParseOptionalCXXScopeSpecifier(SS, ParsedType(), false);
+        ParseOptionalCXXScopeSpecifier(SS, ParsedType(), 
+                                       /*EnteringContext=*/false);
         AnnotateTemplateIdTokenAsType();
         return ParseCastExpression(isUnaryExpression, isAddressOfOperand,
                                    NotCastExpr, isTypeCast);
@@ -1086,6 +1089,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
   case tok::kw___is_trivial:
   case tok::kw___is_trivially_copyable:
   case tok::kw___is_union:
+  case tok::kw___is_final:
   case tok::kw___has_trivial_constructor:
   case tok::kw___has_trivial_copy:
   case tok::kw___has_trivial_assign:
@@ -1333,7 +1337,8 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         if (LHS.isInvalid())
           break;
 
-        ParseOptionalCXXScopeSpecifier(SS, ObjectType, false,
+        ParseOptionalCXXScopeSpecifier(SS, ObjectType, 
+                                       /*EnteringContext=*/false,
                                        &MayBePseudoDestructor);
         if (SS.isNotEmpty())
           ObjectType = ParsedType();
@@ -1582,7 +1587,7 @@ ExprResult Parser::ParseUnaryExprOrTypeTraitExpression() {
 /// [GNU]   '__builtin_choose_expr' '(' assign-expr ',' assign-expr ','
 ///                                     assign-expr ')'
 /// [GNU]   '__builtin_types_compatible_p' '(' type-name ',' type-name ')'
-/// [OCL]   '__builtin_astype' '(' type-name expr ')'
+/// [OCL]   '__builtin_astype' '(' assignment-expression ',' type-name ')'
 ///
 /// [GNU] offsetof-member-designator:
 /// [GNU]   identifier

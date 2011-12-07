@@ -2257,6 +2257,7 @@ recurse:
   case Expr::CXXNoexceptExprClass:
   case Expr::CUDAKernelCallExprClass:
   case Expr::AsTypeExprClass:
+  case Expr::PseudoObjectExprClass:
   case Expr::AtomicExprClass:
   {
     // As bad as this diagnostic is, it's better than crashing.
@@ -2983,8 +2984,15 @@ bool CXXNameMangler::mangleSubstitution(const NamedDecl *ND) {
   return mangleSubstitution(reinterpret_cast<uintptr_t>(ND));
 }
 
+/// \brief Determine whether the given type has any qualifiers that are
+/// relevant for substitutions.
+static bool hasMangledSubstitutionQualifiers(QualType T) {
+  Qualifiers Qs = T.getQualifiers();
+  return Qs.getCVRQualifiers() || Qs.hasAddressSpace();
+}
+
 bool CXXNameMangler::mangleSubstitution(QualType T) {
-  if (!T.getCVRQualifiers()) {
+  if (!hasMangledSubstitutionQualifiers(T)) {
     if (const RecordType *RT = T->getAs<RecordType>())
       return mangleSubstitution(RT->getDecl());
   }
@@ -3170,7 +3178,7 @@ bool CXXNameMangler::mangleStandardSubstitution(const NamedDecl *ND) {
 }
 
 void CXXNameMangler::addSubstitution(QualType T) {
-  if (!T.getCVRQualifiers()) {
+  if (!hasMangledSubstitutionQualifiers(T)) {
     if (const RecordType *RT = T->getAs<RecordType>()) {
       addSubstitution(RT->getDecl());
       return;

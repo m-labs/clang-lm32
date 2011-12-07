@@ -553,7 +553,7 @@ DiagnosticIDs::getDiagnosticLevel(unsigned DiagID, unsigned DiagClass,
   // Ignore -pedantic diagnostics inside __extension__ blocks.
   // (The diagnostics controlled by -pedantic are the extension diagnostics
   // that are not enabled by default.)
-  bool EnabledByDefault;
+  bool EnabledByDefault = false;
   bool IsExtensionDiag = isBuiltinExtensionDiag(DiagID, EnabledByDefault);
   if (Diag.AllExtensionsSilenced && IsExtensionDiag && !EnabledByDefault)
     return DiagnosticIDs::Ignored;
@@ -679,6 +679,29 @@ bool DiagnosticIDs::getDiagnosticsInGroup(
 
   getDiagnosticsInGroup(Found, Diags);
   return false;
+}
+
+StringRef DiagnosticIDs::getNearestWarningOption(StringRef Group) {
+  StringRef Best;
+  unsigned BestDistance = Group.size() + 1; // Sanity threshold.
+  for (const WarningOption *i = OptionTable, *e = OptionTable + OptionTableSize;
+       i != e; ++i) {
+    // Don't suggest ignored warning flags.
+    if (!i->Members && !i->SubGroups)
+      continue;
+
+    unsigned Distance = i->getName().edit_distance(Group, true, BestDistance);
+    if (Distance == BestDistance) {
+      // Two matches with the same distance, don't prefer one over the other.
+      Best = "";
+    } else if (Distance < BestDistance) {
+      // This is a better match.
+      Best = i->getName();
+      BestDistance = Distance;
+    }
+  }
+
+  return Best;
 }
 
 /// ProcessDiag - This is the method used to report a diagnostic that is

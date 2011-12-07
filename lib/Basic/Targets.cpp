@@ -1269,6 +1269,8 @@ static const char* const GCCRegNames[] = {
   "mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6", "mm7",
   "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
   "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+  "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
+  "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
 };
 
 const TargetInfo::AddlRegName AddlRegNames[] = {
@@ -1407,6 +1409,12 @@ class X86TargetInfo : public TargetInfo {
     CK_OpteronSSE3,
     CK_AMDFAM10,
 
+    /// \name K10
+    /// K10 architecture processors.
+    //@{
+    CK_BDVER1,
+    CK_BDVER2,
+
     /// This specification is deprecated and will be removed in the future.
     /// Users should prefer \see CK_K8.
     // FIXME: Warn on this when the CPU is set to it.
@@ -1460,7 +1468,11 @@ public:
   virtual void getDefaultFeatures(llvm::StringMap<bool> &Features) const;
   virtual void HandleTargetFeatures(std::vector<std::string> &Features);
   virtual const char* getABI() const {
-    return MMX3DNowLevel == NoMMX3DNow ? "no-mmx" : "";
+    if (PointerWidth == 64 && HasAVX)
+      return "avx";
+    else if (PointerWidth == 32 && MMX3DNowLevel == NoMMX3DNow)
+      return "no-mmx";
+    return "";
   }
   virtual bool setCPU(const std::string &Name) {
     CPU = llvm::StringSwitch<CPUKind>(Name)
@@ -1506,6 +1518,8 @@ public:
       .Case("opteron", CK_Opteron)
       .Case("opteron-sse3", CK_OpteronSSE3)
       .Case("amdfam10", CK_AMDFAM10)
+      .Case("bdver1", CK_BDVER1)
+      .Case("bdver2", CK_BDVER2)
       .Case("x86-64", CK_x86_64)
       .Case("geode", CK_Geode)
       .Default(CK_Generic);
@@ -1567,6 +1581,8 @@ public:
     case CK_Opteron:
     case CK_OpteronSSE3:
     case CK_AMDFAM10:
+    case CK_BDVER1:
+    case CK_BDVER2:
     case CK_x86_64:
       return true;
     }
@@ -1690,6 +1706,12 @@ void X86TargetInfo::getDefaultFeatures(llvm::StringMap<bool> &Features) const {
     setFeatureEnabled(Features, "sse4a", true);
     setFeatureEnabled(Features, "3dnowa", true);
     break;
+  case CK_BDVER1:
+  case CK_BDVER2:
+    setFeatureEnabled(Features, "sse4", true);
+    setFeatureEnabled(Features, "sse4a", true);
+    setFeatureEnabled(Features, "aes", true);
+    break;
   case CK_C3_2:
     setFeatureEnabled(Features, "mmx", true);
     setFeatureEnabled(Features, "sse", true);
@@ -1706,23 +1728,26 @@ bool X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
       (Name != "sse4" && Name != "sse4.2" && Name != "sse4.1"))
     return false;
 
+  // FIXME: this should probably use a switch with fall through.
+
   if (Enabled) {
     if (Name == "mmx")
       Features["mmx"] = true;
     else if (Name == "sse")
-      Features["sse"] = true;
+      Features["mmx"] = Features["sse"] = true;
     else if (Name == "sse2")
-      Features["sse"] = Features["sse2"] = true;
+      Features["mmx"] = Features["sse"] = Features["sse2"] = true;
     else if (Name == "sse3")
-      Features["sse"] = Features["sse2"] = Features["sse3"] = true;
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
+        true;
     else if (Name == "ssse3")
-      Features["sse"] = Features["sse2"] = Features["sse3"] =
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = true;
     else if (Name == "sse4" || Name == "sse4.2")
-      Features["sse"] = Features["sse2"] = Features["sse3"] =
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = Features["sse41"] = Features["sse42"] = true;
     else if (Name == "sse4.1")
-      Features["sse"] = Features["sse2"] = Features["sse3"] =
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
         Features["ssse3"] = Features["sse41"] = true;
     else if (Name == "3dnow")
       Features["mmx"] = Features["3dnow"] = true;
@@ -1731,10 +1756,11 @@ bool X86TargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
     else if (Name == "aes")
       Features["aes"] = true;
     else if (Name == "avx")
-      Features["avx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
-        Features["ssse3"] = Features["sse41"] = Features["sse42"] = true;
+      Features["mmx"] = Features["sse"] = Features["sse2"] = Features["sse3"] =
+        Features["ssse3"] = Features["sse41"] = Features["sse42"] =
+        Features["avx"] = true;
     else if (Name == "sse4a")
-      Features["sse4a"] = true;
+      Features["mmx"] = Features["sse4a"] = true;
   } else {
     if (Name == "mmx")
       Features["mmx"] = Features["3dnow"] = Features["3dnowa"] = false;
@@ -1963,6 +1989,16 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__amdfam10");
     Builder.defineMacro("__amdfam10__");
     Builder.defineMacro("__tune_amdfam10__");
+    break;
+  case CK_BDVER1:
+    Builder.defineMacro("__bdver1");
+    Builder.defineMacro("__bdver1__");
+    Builder.defineMacro("__tune__bdver1__");
+    break;
+  case CK_BDVER2:
+    Builder.defineMacro("__bdver2");
+    Builder.defineMacro("__bdver2__");
+    Builder.defineMacro("__tune__bdver2__");
     break;
   case CK_Geode:
     Builder.defineMacro("__geode");
@@ -2523,6 +2559,8 @@ public:
   {
     SizeType = UnsignedInt;
     PtrDiffType = SignedInt;
+    // AAPCS 7.1.1, ARM-Linux ABI 2.4: type of wchar_t is unsigned int.
+    WCharType = UnsignedInt;
 
     // {} in inline assembly are neon specifiers, not assembly variant
     // specifiers.
@@ -2560,6 +2598,9 @@ public:
     if (Name == "apcs-gnu") {
       DoubleAlign = LongLongAlign = LongDoubleAlign = 32;
       SizeType = UnsignedLong;
+
+      // Revert to using SignedInt on apcs-gnu to comply with existing behaviour.
+      WCharType = SignedInt;
 
       // Do not respect the alignment of bit-field types when laying out
       // structures. This corresponds to PCC_BITFIELD_TYPE_MATTERS in gcc.
@@ -3148,10 +3189,7 @@ protected:
   std::string ABI;
 public:
   MipsTargetInfoBase(const std::string& triple, const std::string& ABIStr)
-    : TargetInfo(triple), ABI(ABIStr) {
-    SizeType = UnsignedInt;
-    PtrDiffType = SignedInt;
-  }
+    : TargetInfo(triple), ABI(ABIStr) {}
   virtual const char *getABI() const { return ABI.c_str(); }
   virtual bool setABI(const std::string &Name) = 0;
   virtual bool setCPU(const std::string &Name) {
@@ -3217,7 +3255,10 @@ public:
 class Mips32TargetInfoBase : public MipsTargetInfoBase {
 public:
   Mips32TargetInfoBase(const std::string& triple) :
-    MipsTargetInfoBase(triple, "o32") {}
+    MipsTargetInfoBase(triple, "o32") {
+    SizeType = UnsignedInt;
+    PtrDiffType = SignedInt;
+  }
   virtual bool setABI(const std::string &Name) {
     if ((Name == "o32") || (Name == "eabi")) {
       ABI = Name;
@@ -3227,6 +3268,10 @@ public:
   }
   virtual void getArchDefines(const LangOptions &Opts,
                               MacroBuilder &Builder) const {
+    Builder.defineMacro("_MIPS_SZPTR", Twine(getPointerWidth(0)));
+    Builder.defineMacro("_MIPS_SZINT", Twine(getIntWidth()));
+    Builder.defineMacro("_MIPS_SZLONG", Twine(getLongWidth()));
+
     if (ABI == "o32") {
       Builder.defineMacro("__mips_o32");
       Builder.defineMacro("_ABIO32", "1");
@@ -3784,13 +3829,32 @@ TargetInfo *TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
   Target->getDefaultFeatures(Features);
 
   // Apply the user specified deltas.
+  // First the enables.
   for (std::vector<std::string>::const_iterator it = Opts.Features.begin(),
          ie = Opts.Features.end(); it != ie; ++it) {
     const char *Name = it->c_str();
 
+    if (Name[0] != '+')
+      continue;
+
     // Apply the feature via the target.
-    if ((Name[0] != '-' && Name[0] != '+') ||
-        !Target->setFeatureEnabled(Features, Name + 1, (Name[0] == '+'))) {
+    if (!Target->setFeatureEnabled(Features, Name + 1, true)) {
+      Diags.Report(diag::err_target_invalid_feature) << Name;
+      return 0;
+    }
+  }
+
+  // Then the disables.
+  for (std::vector<std::string>::const_iterator it = Opts.Features.begin(),
+         ie = Opts.Features.end(); it != ie; ++it) {
+    const char *Name = it->c_str();
+
+    if (Name[0] == '+')
+      continue;
+
+    // Apply the feature via the target.
+    if (Name[0] != '-' ||
+        !Target->setFeatureEnabled(Features, Name + 1, false)) {
       Diags.Report(diag::err_target_invalid_feature) << Name;
       return 0;
     }

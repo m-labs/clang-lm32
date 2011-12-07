@@ -35,7 +35,7 @@ namespace clang {
       DIAG_START_FRONTEND = DIAG_START_DRIVER   +  100,
       DIAG_START_LEX      = DIAG_START_FRONTEND +  120,
       DIAG_START_PARSE    = DIAG_START_LEX      +  300,
-      DIAG_START_AST      = DIAG_START_PARSE    +  300,
+      DIAG_START_AST      = DIAG_START_PARSE    +  350,
       DIAG_START_SEMA     = DIAG_START_AST      +  100,
       DIAG_START_ANALYSIS = DIAG_START_SEMA     + 3000,
       DIAG_UPPER_LIMIT    = DIAG_START_ANALYSIS +  100
@@ -261,6 +261,10 @@ public:
   /// \returns True if the given group is unknown, false otherwise.
   bool getDiagnosticsInGroup(StringRef Group,
                              llvm::SmallVectorImpl<diag::kind> &Diags) const;
+
+  /// \brief Get the warning option with the closest edit distance to the given
+  /// group name.
+  static StringRef getNearestWarningOption(StringRef Group);
 
 private:
   /// \brief Get the set of all diagnostic IDs in the given group.

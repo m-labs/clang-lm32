@@ -52,11 +52,11 @@ public:
   /// the state of the program before the checker ran. Note, checkers should
   /// not retain the node in their state since the nodes might get invalidated.
   ExplodedNode *getPredecessor() { return Pred; }
-  const ProgramState *getState() { return Pred->getState(); }
+  const ProgramState *getState() const { return Pred->getState(); }
 
   /// \brief Returns the number of times the current block has been visited
   /// along the analyzed path.
-  unsigned getCurrentBlockCount() {
+  unsigned getCurrentBlockCount() const {
     return NB.getContext().getCurrentBlockCount();
   }
 
@@ -64,7 +64,7 @@ public:
     return Eng.getContext();
   }
   
-  const LocationContext *getLocationContext() {
+  const LocationContext *getLocationContext() const {
     return Pred->getLocationContext();
   }
 
@@ -84,7 +84,7 @@ public:
     return getSValBuilder().getSymbolManager();
   }
 
-  bool isObjCGCEnabled() {
+  bool isObjCGCEnabled() const {
     return Eng.isObjCGCEnabled();
   }
 
@@ -141,6 +141,12 @@ public:
   void EmitReport(BugReport *R) {
     Eng.getBugReporter().EmitReport(R);
   }
+
+  /// \brief Get the declaration of the called function (path-sensitive).
+  const FunctionDecl *getCalleeDecl(const CallExpr *CE) const;
+
+  /// \brief Get the name of the called function (path-sensitive).
+  StringRef getCalleeName(const CallExpr *CE) const;
 
 private:
   ExplodedNode *addTransitionImpl(const ProgramState *State,

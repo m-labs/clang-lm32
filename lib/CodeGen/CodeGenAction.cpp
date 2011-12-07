@@ -86,7 +86,7 @@ namespace clang {
         LLVMIRGeneration.stopTimer();
     }
 
-    virtual void HandleTopLevelDecl(DeclGroupRef D) {
+    virtual bool HandleTopLevelDecl(DeclGroupRef D) {
       PrettyStackTraceDecl CrashInfo(*D.begin(), SourceLocation(),
                                      Context->getSourceManager(),
                                      "LLVM IR generation of declaration");
@@ -98,6 +98,8 @@ namespace clang {
 
       if (llvm::TimePassesIsEnabled)
         LLVMIRGeneration.stopTimer();
+
+      return true;
     }
 
     virtual void HandleTranslationUnit(ASTContext &C) {
@@ -118,7 +120,7 @@ namespace clang {
 
       // Make sure IR generation is happy with the module. This is released by
       // the module provider.
-      Module *M = Gen->ReleaseModule();
+      llvm::Module *M = Gen->ReleaseModule();
       if (!M) {
         // The module has been released by IR gen on failures, do not double
         // free.

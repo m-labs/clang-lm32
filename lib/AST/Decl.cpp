@@ -24,6 +24,7 @@
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/IdentifierTable.h"
+#include "clang/Basic/Module.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -721,6 +722,8 @@ static LinkageInfo getLVForDecl(const NamedDecl *D, LVFlags Flags) {
   switch (D->getKind()) {
     default:
       break;
+    case Decl::ParmVar:
+      return LinkageInfo::none();
     case Decl::TemplateTemplateParm: // count these as external
     case Decl::NonTypeTemplateParm:
     case Decl::ObjCAtDefsField:
@@ -1412,21 +1415,6 @@ Expr *ParmVarDecl::getDefaultArg() {
   return Arg;
 }
 
-unsigned ParmVarDecl::getNumDefaultArgTemporaries() const {
-  if (const ExprWithCleanups *E = dyn_cast<ExprWithCleanups>(getInit()))
-    return E->getNumTemporaries();
-
-  return 0;
-}
-
-CXXTemporary *ParmVarDecl::getDefaultArgTemporary(unsigned i) {
-  assert(getNumDefaultArgTemporaries() && 
-         "Default arguments does not have any temporaries!");
-
-  ExprWithCleanups *E = cast<ExprWithCleanups>(getInit());
-  return E->getTemporary(i);
-}
-
 SourceRange ParmVarDecl::getDefaultArgRange() const {
   if (const Expr *E = getInit())
     return E->getSourceRange();
@@ -1622,7 +1610,7 @@ FunctionDecl::setPreviousDeclaration(FunctionDecl *PrevDecl) {
     FunTmpl->setPreviousDeclaration(PrevFunTmpl);
   }
   
-  if (PrevDecl->IsInline)
+  if (PrevDecl && PrevDecl->IsInline)
     IsInline = true;
 }
 
@@ -1966,7 +1954,20 @@ bool FunctionDecl::isImplicitlyInstantiable() const {
     return true;
 
   return PatternDecl->isInlined();
-}                      
+}
+
+bool FunctionDecl::isTemplateInstantiation() const {
+  switch (getTemplateSpecializationKind()) {
+    case TSK_Undeclared:
+    case TSK_ExplicitSpecialization:
+      return false;      
+    case TSK_ImplicitInstantiation:
+    case TSK_ExplicitInstantiationDeclaration:
+    case TSK_ExplicitInstantiationDefinition:
+      return true;
+  }
+  llvm_unreachable("All TSK values handled.");
+}
    
 FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
   // Handle class scope explicit specialization special case.
@@ -2201,31 +2202,27 @@ unsigned FieldDecl::getBitWidthValue(const ASTContext &Ctx) const {
 unsigned FieldDecl::getFieldIndex() const {
   if (CachedFieldIndex) return CachedFieldIndex - 1;
 
-  unsigned index = 0;
+  unsigned Index = 0;
   const RecordDecl *RD = getParent();
   const FieldDecl *LastFD = 0;
   bool IsMsStruct = RD->hasAttr<MsStructAttr>();
-  
-  RecordDecl::field_iterator i = RD->field_begin(), e = RD->field_end();
-  while (true) {
-    assert(i != e && "failed to find field in parent!");
-    if (*i == this)
-      break;
+
+  for (RecordDecl::field_iterator I = RD->field_begin(), E = RD->field_end();
+       I != E; ++I, ++Index) {
+    (*I)->CachedFieldIndex = Index + 1;
 
     if (IsMsStruct) {
       // Zero-length bitfields following non-bitfield members are ignored.
-      if (getASTContext().ZeroBitfieldFollowsNonBitfield((*i), LastFD)) {
-        ++i;
+      if (getASTContext().ZeroBitfieldFollowsNonBitfield((*I), LastFD)) {
+        --Index;
         continue;
       }
-      LastFD = (*i);
+      LastFD = (*I);
     }
-    ++i;
-    ++index;
   }
 
-  CachedFieldIndex = index + 1;
-  return index;
+  assert(CachedFieldIndex && "failed to find field in parent");
+  return CachedFieldIndex - 1;
 }
 
 SourceRange FieldDecl::getSourceRange() const {
@@ -2613,3 +2610,81 @@ FileScopeAsmDecl *FileScopeAsmDecl::Create(ASTContext &C, DeclContext *DC,
                                            SourceLocation RParenLoc) {
   return new (C) FileScopeAsmDecl(DC, Str, AsmLoc, RParenLoc);
 }
+
+//===----------------------------------------------------------------------===//
+// ImportDecl Implementation
+//===----------------------------------------------------------------------===//
+
+/// \brief Retrieve the number of module identifiers needed to name the given
+/// module.
+static unsigned getNumModuleIdentifiers(Module *Mod) {
+  unsigned Result = 1;
+  while (Mod->Parent) {
+    Mod = Mod->Parent;
+    ++Result;
+  }
+  return Result;
+}
+
+ImportDecl::ImportDecl(DeclContext *DC, SourceLocation ImportLoc, 
+                       Module *Imported,
+                       ArrayRef<SourceLocation> IdentifierLocs)
+  : Decl(Import, DC, ImportLoc), ImportedAndComplete(Imported, true),
+    NextLocalImport()
+{
+  assert(getNumModuleIdentifiers(Imported) == IdentifierLocs.size());
+  SourceLocation *StoredLocs = reinterpret_cast<SourceLocation *>(this + 1);
+  memcpy(StoredLocs, IdentifierLocs.data(), 
+         IdentifierLocs.size() * sizeof(SourceLocation));
+}
+
+ImportDecl::ImportDecl(DeclContext *DC, SourceLocation ImportLoc, 
+                       Module *Imported, SourceLocation EndLoc)
+  : Decl(Import, DC, ImportLoc), ImportedAndComplete(Imported, false),
+    NextLocalImport()
+{
+  *reinterpret_cast<SourceLocation *>(this + 1) = EndLoc;
+}
+
+ImportDecl *ImportDecl::Create(ASTContext &C, DeclContext *DC, 
+                               SourceLocation ImportLoc, Module *Imported,
+                               ArrayRef<SourceLocation> IdentifierLocs) {
+  void *Mem = C.Allocate(sizeof(ImportDecl) + 
+                         IdentifierLocs.size() * sizeof(SourceLocation));
+  return new (Mem) ImportDecl(DC, ImportLoc, Imported, IdentifierLocs);
+}
+
+ImportDecl *ImportDecl::CreateImplicit(ASTContext &C, DeclContext *DC, 
+                                       SourceLocation ImportLoc,
+                                       Module *Imported, 
+                                       SourceLocation EndLoc) {
+  void *Mem = C.Allocate(sizeof(ImportDecl) + sizeof(SourceLocation));
+  ImportDecl *Import = new (Mem) ImportDecl(DC, ImportLoc, Imported, EndLoc);
+  Import->setImplicit();
+  return Import;
+}
+
+ImportDecl *ImportDecl::CreateEmpty(ASTContext &C, unsigned NumLocations) {
+  void *Mem = C.Allocate(sizeof(ImportDecl) + 
+                         NumLocations * sizeof(SourceLocation));
+  return new (Mem) ImportDecl(EmptyShell());  
+}
+
+ArrayRef<SourceLocation> ImportDecl::getIdentifierLocs() const {
+  if (!ImportedAndComplete.getInt())
+    return ArrayRef<SourceLocation>();
+
+  const SourceLocation *StoredLocs
+    = reinterpret_cast<const SourceLocation *>(this + 1);
+  return ArrayRef<SourceLocation>(StoredLocs, 
+                                  getNumModuleIdentifiers(getImportedModule()));
+}
+
+SourceRange ImportDecl::getSourceRange() const {
+  if (!ImportedAndComplete.getInt())
+    return SourceRange(getLocation(), 
+                       *reinterpret_cast<const SourceLocation *>(this + 1));
+  
+  return SourceRange(getLocation(), getIdentifierLocs().back());
+}
+

@@ -262,6 +262,8 @@ def faccess_control : Flag<"-faccess-control">, Group<f_Group>;
 def fallow_unsupported : Flag<"-fallow-unsupported">, Group<f_Group>;
 def fapple_kext : Flag<"-fapple-kext">, Group<f_Group>;
 def fapple_pragma_pack : Flag<"-fapple-pragma-pack">, Group<f_Group>;
+def faddress_sanitizer : Flag<"-faddress-sanitizer">, Group<f_Group>;
+def fno_address_sanitizer : Flag<"-fno-address-sanitizer">, Group<f_Group>;
 def fasm : Flag<"-fasm">, Group<f_Group>;
 
 def fasm_blocks : Flag<"-fasm-blocks">, Group<f_Group>;
@@ -384,6 +386,8 @@ def fno_inline_functions : Flag<"-fno-inline-functions">, Group<clang_ignored_f_
 def fno_inline : Flag<"-fno-inline">, Group<clang_ignored_f_Group>;
 def fno_keep_inline_functions : Flag<"-fno-keep-inline-functions">, Group<clang_ignored_f_Group>;
 def fno_lax_vector_conversions : Flag<"-fno-lax-vector-conversions">, Group<f_Group>;
+def fno_limit_debug_info : Flag<"-fno-limit-debug-info">, Group<f_Group>,
+  HelpText<"Do not limit debug information produced to reduce size of debug binary">;
 def fno_math_errno : Flag<"-fno-math-errno">, Group<f_Group>;
 def fno_merge_all_constants : Flag<"-fno-merge-all-constants">, Group<f_Group>;
 def fno_ms_extensions : Flag<"-fno-ms-extensions">, Group<f_Group>;
@@ -474,7 +478,9 @@ def fstrict_aliasing : Flag<"-fstrict-aliasing">, Group<f_Group>;
 def fstrict_overflow : Flag<"-fstrict-overflow">, Group<f_Group>;
 def fsyntax_only : Flag<"-fsyntax-only">, Flags<[DriverOption]>;
 def ftabstop_EQ : Joined<"-ftabstop=">, Group<f_Group>;
+def ftemplate_depth_EQ : Joined<"-ftemplate-depth=">, Group<f_Group>;
 def ftemplate_depth_ : Joined<"-ftemplate-depth-">, Group<f_Group>;
+def fconstexpr_depth_EQ : Joined<"-fconstexpr-depth=">, Group<f_Group>;
 def ftemplate_backtrace_limit_EQ : Joined<"-ftemplate-backtrace-limit=">,
                                    Group<f_Group>;
 def ftest_coverage : Flag<"-ftest-coverage">, Group<f_Group>;
@@ -510,13 +516,16 @@ def fzero_initialized_in_bss : Flag<"-fzero-initialized-in-bss">, Group<f_Group>
 def ffunction_sections: Flag <"-ffunction-sections">, Group<f_Group>;
 def fdata_sections : Flag <"-fdata-sections">, Group<f_Group>;
 def f : Joined<"-f">, Group<f_Group>;
-def g0 : Joined<"-g0">, Group<g_Group>;
-def g3 : Joined<"-g3">, Group<g_Group>;
-def gfull : Joined<"-gfull">, Group<g_Group>;
-def gstabs : Joined<"-gstabs">, Group<g_Group>;
-def gused : Joined<"-gused">, Group<g_Group>;
+def g0 : Flag<"-g0">, Group<g_Group>;
+def g3 : Flag<"-g3">, Group<g_Group>;
+def gdwarf2 : Flag<"-gdwarf-2">, Group<g_Group>;
+def gfull : Flag<"-gfull">, Group<g_Group>;
+def gstabs : Flag<"-gstabs">, Group<g_Group>;
+def gstabsplus : Flag<"-gstabs+">, Group<g_Group>;
+def gstabs1 : Flag<"-gstabs1">, Group<g_Group>;
+def gstabs2 : Flag<"-gstabs2">, Group<g_Group>;
+def gused : Flag<"-gused">, Group<g_Group>;
 def g_Flag : Flag<"-g">, Group<g_Group>;
-def g_Joined : Joined<"-g">, Group<g_Group>;
 def headerpad__max__install__names : Joined<"-headerpad_max_install_names">;
 def index_header_map : Flag<"-index-header-map">;
 def idirafter : JoinedOrSeparate<"-idirafter">, Group<clang_i_Group>;
@@ -562,6 +571,7 @@ def mllvm : Separate<"-mllvm">;
 def mmacosx_version_min_EQ : Joined<"-mmacosx-version-min=">, Group<m_Group>;
 def mms_bitfields : Flag<"-mms-bitfields">, Group<m_Group>;
 def mstackrealign : Flag<"-mstackrealign">, Group<m_Group>;
+def mstack_alignment : Joined<"-mstack-alignment=">, Group<m_Group>;
 def mmmx : Flag<"-mmmx">, Group<m_x86_Features_Group>;
 def mno_3dnowa : Flag<"-mno-3dnowa">, Group<m_x86_Features_Group>;
 def mno_3dnow : Flag<"-mno-3dnow">, Group<m_x86_Features_Group>;
@@ -573,6 +583,7 @@ def mno_red_zone : Flag<"-mno-red-zone">, Group<m_Group>;
 def mno_relax_all : Flag<"-mno-relax-all">, Group<m_Group>;
 def mno_rtd: Flag<"-mno-rtd">, Group<m_Group>;
 def mno_soft_float : Flag<"-mno-soft-float">, Group<m_Group>;
+def mno_stackrealign : Flag<"-mno-stackrealign">, Group<m_Group>;
 def mno_sse2 : Flag<"-mno-sse2">, Group<m_x86_Features_Group>;
 def mno_sse3 : Flag<"-mno-sse3">, Group<m_x86_Features_Group>;
 def mno_sse4a : Flag<"-mno-sse4a">, Group<m_x86_Features_Group>;
@@ -841,6 +852,8 @@ def _relocatable_pch : Flag<"--relocatable-pch">,
 def _resource_EQ : Joined<"--resource=">, Alias<fcompile_resource_EQ>;
 def _resource : Separate<"--resource">, Alias<fcompile_resource_EQ>;
 def _save_temps : Flag<"--save-temps">, Alias<save_temps>;
+def _serialize_diags : Separate<"--serialize-diagnostics">, Flags<[DriverOption]>,
+  HelpText<"Serialize compiler diagnostics to a file">;
 def _shared : Flag<"--shared">, Alias<shared>;
 def _signed_char : Flag<"--signed-char">, Alias<fsigned_char>;
 def _specs_EQ : Joined<"--specs=">, Alias<specs_EQ>;

@@ -168,6 +168,22 @@ bool Parser::ParseOptionalCXXScopeSpecifier(CXXScopeSpec &SS,
     *MayBePseudoDestructor = false;
   }
 
+  if (Tok.is(tok::kw_decltype) || Tok.is(tok::annot_decltype)) {
+    DeclSpec DS(AttrFactory);
+    SourceLocation DeclLoc = Tok.getLocation();
+    SourceLocation EndLoc  = ParseDecltypeSpecifier(DS);
+    if (Tok.isNot(tok::coloncolon)) {
+      AnnotateExistingDecltypeSpecifier(DS, DeclLoc, EndLoc);
+      return false;
+    }
+    
+    SourceLocation CCLoc = ConsumeToken();
+    if (Actions.ActOnCXXNestedNameSpecifierDecltype(SS, DS, CCLoc))
+      SS.SetInvalid(SourceRange(DeclLoc, CCLoc));
+
+    HasScopeSpecifier = true;
+  }
+
   while (true) {
     if (HasScopeSpecifier) {
       // C++ [basic.lookup.classref]p5:
@@ -283,8 +299,7 @@ bool Parser::ParseOptionalCXXScopeSpecifier(CXXScopeSpec &SS,
       assert(Tok.is(tok::coloncolon) && "NextToken() not working properly!");
       SourceLocation CCLoc = ConsumeToken();
 
-      if (!HasScopeSpecifier)
-        HasScopeSpecifier = true;
+      HasScopeSpecifier = true;
       
       ASTTemplateArgsPtr TemplateArgsPtr(Actions,
                                          TemplateId->getTemplateArgs(),
@@ -381,7 +396,7 @@ bool Parser::ParseOptionalCXXScopeSpecifier(CXXScopeSpec &SS,
                                                         EnteringContext,
                                                         Template,
                                               MemberOfUnknownSpecialization)) {
-        // We have found a template name, so annotate this this token
+        // We have found a template name, so annotate this token
         // with a template-id annotation. We do not permit the
         // template-id to be translated into a type annotation,
         // because some clients (e.g., the parsing of class template
@@ -488,7 +503,7 @@ ExprResult Parser::ParseCXXIdExpression(bool isAddressOfOperand) {
   //   '::' unqualified-id
   //
   CXXScopeSpec SS;
-  ParseOptionalCXXScopeSpecifier(SS, ParsedType(), false);
+  ParseOptionalCXXScopeSpecifier(SS, ParsedType(), /*EnteringContext=*/false);
   
   UnqualifiedId Name;
   if (ParseUnqualifiedId(SS, 
@@ -2242,6 +2257,7 @@ static UnaryTypeTrait UnaryTypeTraitFromTokKind(tok::TokenKind kind) {
   case tok::kw___is_const:                   return UTT_IsConst;
   case tok::kw___is_empty:                return UTT_IsEmpty;
   case tok::kw___is_enum:                 return UTT_IsEnum;
+  case tok::kw___is_final:                 return UTT_IsFinal;
   case tok::kw___is_floating_point:          return UTT_IsFloatingPoint;
   case tok::kw___is_function:                return UTT_IsFunction;
   case tok::kw___is_fundamental:             return UTT_IsFundamental;
