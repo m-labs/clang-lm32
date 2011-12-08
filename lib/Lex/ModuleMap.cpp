@@ -106,9 +106,9 @@ Module *ModuleMap::findModuleForHeader(const FileEntry *File) {
       Module *Result = KnownDir->second;
       
       // Search up the module stack until we find a module with an umbrella
-      // header.
+      // directory.
       Module *UmbrellaModule = Result;
-      while (!UmbrellaModule->UmbrellaHeader && UmbrellaModule->Parent)
+      while (!UmbrellaModule->getUmbrellaDir() && UmbrellaModule->Parent)
         UmbrellaModule = UmbrellaModule->Parent;
       
       if (UmbrellaModule->InferSubmodules) {
@@ -118,17 +118,28 @@ Module *ModuleMap::findModuleForHeader(const FileEntry *File) {
         
         // For a framework module, the umbrella directory is the framework 
         // directory, so strip off the "Headers" or "PrivateHeaders".
-        // FIXME: Should we tack on an "explicit" for PrivateHeaders? That
-        // might be what we want, but it feels like a hack.
+        bool Explicit = UmbrellaModule->InferExplicitSubmodules;
         unsigned LastSkippedDir = SkippedDirs.size();
-        if (LastSkippedDir && UmbrellaModule->IsFramework)
+        if (LastSkippedDir && UmbrellaModule->IsFramework) {
+          if (llvm::sys::path::filename(SkippedDirs.back()->getName())
+                == "PrivateHeaders") {
+            // For private headers, add an explicit "Private" module.
+            // FIXME: This feels somewhat hackish. Do we want to introduce
+            // some kind of "umbrella directory" here?
+            Result = findOrCreateModule("Private", Result, 
+                                        /*IsFramework=*/false,
+                                        /*IsExplicit=*/true).first;
+            Explicit = true;
+          }
+          
           --LastSkippedDir;
+        }
         
         for (unsigned I = LastSkippedDir; I != 0; --I) {
           // Find or create the module that corresponds to this directory name.
           StringRef Name = llvm::sys::path::stem(SkippedDirs[I-1]->getName());
           Result = findOrCreateModule(Name, Result, /*IsFramework=*/false,
-                                      UmbrellaModule->InferExplicitSubmodules).first;
+                                      Explicit).first;
           
           // Associate the module and the directory.
           UmbrellaDirs[SkippedDirs[I-1]] = Result;
@@ -142,7 +153,7 @@ Module *ModuleMap::findModuleForHeader(const FileEntry *File) {
         // Infer a submodule with the same name as this header file.
         StringRef Name = llvm::sys::path::stem(File->getName());
         Result = findOrCreateModule(Name, Result, /*IsFramework=*/false,
-                                    UmbrellaModule->InferExplicitSubmodules).first;
+                                    Explicit).first;
         
         // If inferred submodules export everything they import, add a 
         // wildcard to the set of exports.
@@ -248,8 +259,8 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
   else
     Modules[ModuleName] = Result;
 
-  // umbrella "umbrella-header-name"
-  Result->UmbrellaHeader = UmbrellaHeader;
+  // umbrella header "umbrella-header-name"
+  Result->Umbrella = UmbrellaHeader;
   Headers[UmbrellaHeader] = Result;
   UmbrellaDirs[FrameworkDir] = Result;
   
@@ -262,10 +273,14 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
   
   // Look for subframeworks.
   llvm::error_code EC;
-  llvm::SmallString<128> SubframeworksDirName = StringRef(FrameworkDir->getName());
+  llvm::SmallString<128> SubframeworksDirName
+    = StringRef(FrameworkDir->getName());
   llvm::sys::path::append(SubframeworksDirName, "Frameworks");
-  for (llvm::sys::fs::directory_iterator Dir(SubframeworksDirName.str(), EC),
-                                         DirEnd;
+  llvm::SmallString<128> SubframeworksDirNameNative;
+  llvm::sys::path::native(SubframeworksDirName.str(),
+                          SubframeworksDirNameNative);
+  for (llvm::sys::fs::directory_iterator 
+         Dir(SubframeworksDirNameNative.str(), EC), DirEnd;
        Dir != DirEnd && !EC; Dir.increment(EC)) {
     if (!StringRef(Dir->path()).endswith(".framework"))
       continue;
@@ -278,18 +293,61 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
     }
   }
   
+  // Look for private headers.
+  Module *ModulePrivate = 0;
+  llvm::SmallString<128> PrivateHeadersDirName(FrameworkDir->getName());
+  llvm::sys::path::append(PrivateHeadersDirName, "PrivateHeaders");
+  llvm::SmallString<128> PrivateHeadersDirNameNative;
+  llvm::sys::path::native(PrivateHeadersDirName.str(),
+                          PrivateHeadersDirNameNative);
+  for (llvm::sys::fs::directory_iterator 
+         Dir(PrivateHeadersDirNameNative.str(), EC), DirEnd;
+       Dir != DirEnd && !EC; Dir.increment(EC)) {
+    // Check whether this entry has an extension typically associated with 
+    // headers.
+    if (!llvm::StringSwitch<bool>(llvm::sys::path::extension(Dir->path()))
+           .Cases(".h", ".H", ".hh", ".hpp", true)
+           .Default(false))
+      continue;
+
+    if (const FileEntry *PrivateHeader = FileMgr.getFile(Dir->path())) {
+      // Create the "private" submodule, if we haven't done so already.
+      if (!ModulePrivate) {
+        ModulePrivate = findOrCreateModule("Private", Result, 
+                                           /*IsFramework=*/false, 
+                                           /*IsExplicit=*/true).first;
+      }
+      
+      Module *Sub = findOrCreateModule(llvm::sys::path::stem(Dir->path()),
+                                       ModulePrivate, /*IsFramework=*/false,
+                                       /*IsExplicit=*/true).first;
+      // header "the private header"
+      Sub->Headers.push_back(PrivateHeader);
+      
+      // export *
+      Sub->Exports.push_back(Module::ExportDecl(0, true));
+      
+      Headers[PrivateHeader] = Sub;
+    }
+  }
+  
   return Result;
 }
 
 void ModuleMap::setUmbrellaHeader(Module *Mod, const FileEntry *UmbrellaHeader){
   Headers[UmbrellaHeader] = Mod;
-  Mod->UmbrellaHeader = UmbrellaHeader;
+  Mod->Umbrella = UmbrellaHeader;
   
   const DirectoryEntry *UmbrellaDir = UmbrellaHeader->getDir();
   if (Mod->IsFramework)
     UmbrellaDir = SourceMgr->getFileManager().getDirectory(
                     llvm::sys::path::parent_path(UmbrellaDir->getName()));
     
+  UmbrellaDirs[UmbrellaDir] = Mod;
+}
+
+void ModuleMap::setUmbrellaDir(Module *Mod, const DirectoryEntry *UmbrellaDir) {
+  Mod->Umbrella = UmbrellaDir;
   UmbrellaDirs[UmbrellaDir] = Mod;
 }
 
@@ -440,8 +498,8 @@ namespace clang {
       ModuleId;
     bool parseModuleId(ModuleId &Id);
     void parseModuleDecl();
-    void parseUmbrellaDecl();
-    void parseHeaderDecl();
+    void parseHeaderDecl(SourceLocation UmbrellaLoc);
+    void parseUmbrellaDirDecl(SourceLocation UmbrellaLoc);
     void parseExportDecl();
     void parseInferredSubmoduleDecl(bool Explicit);
     
@@ -603,7 +661,6 @@ bool ModuleMapParser::parseModuleId(ModuleId &Id) {
 ///     'explicit'[opt] 'framework'[opt] 'module' module-id { module-member* }
 ///
 ///   module-member:
-///     umbrella-declaration
 ///     header-declaration
 ///     submodule-declaration
 ///     export-declaration
@@ -745,14 +802,19 @@ void ModuleMapParser::parseModuleDecl() {
       parseExportDecl();
       break;
         
+    case MMToken::UmbrellaKeyword: {
+      SourceLocation UmbrellaLoc = consumeToken();
+      if (Tok.is(MMToken::HeaderKeyword))
+        parseHeaderDecl(UmbrellaLoc);
+      else
+        parseUmbrellaDirDecl(UmbrellaLoc);
+      break;
+    }
+        
     case MMToken::HeaderKeyword:
-      parseHeaderDecl();
+      parseHeaderDecl(SourceLocation());
       break;
         
-    case MMToken::UmbrellaKeyword:
-      parseUmbrellaDecl();
-      break;
-
     default:
       Diags.Report(Tok.getLocation(), diag::err_mmap_expected_member);
       consumeToken();
@@ -792,105 +854,16 @@ void appendSubframeworkPaths(Module *Mod, llvm::SmallVectorImpl<char> &Path) {
   }
 }
 
-/// \brief Parse an umbrella header declaration.
-///
-///   umbrella-declaration:
-///     'umbrella' string-literal
-void ModuleMapParser::parseUmbrellaDecl() {
-  assert(Tok.is(MMToken::UmbrellaKeyword));
-  SourceLocation UmbrellaLoc = consumeToken();
-  
-  // Parse the header name.
-  if (!Tok.is(MMToken::StringLiteral)) {
-    Diags.Report(Tok.getLocation(), diag::err_mmap_expected_header) 
-      << "umbrella";
-    HadError = true;
-    return;
-  }
-  std::string FileName = Tok.getString();
-  SourceLocation FileNameLoc = consumeToken();
-
-  // Check whether we already have an umbrella header.
-  if (ActiveModule->UmbrellaHeader) {
-    Diags.Report(FileNameLoc, diag::err_mmap_umbrella_header_conflict)
-      << ActiveModule->getFullModuleName() 
-      << ActiveModule->UmbrellaHeader->getName();
-    HadError = true;
-    return;
-  }
-  
-  // Look for this file.
-  llvm::SmallString<128> PathName;
-  const FileEntry *File = 0;
-  
-  if (llvm::sys::path::is_absolute(FileName)) {
-    PathName = FileName;
-    File = SourceMgr.getFileManager().getFile(PathName);
-  } else {
-    // Search for the header file within the search directory.
-    PathName += Directory->getName();
-    unsigned PathLength = PathName.size();
-    
-    if (ActiveModule->isPartOfFramework()) {
-      appendSubframeworkPaths(ActiveModule, PathName);
-      
-      // Check whether this file is in the public headers.
-      llvm::sys::path::append(PathName, "Headers");
-      llvm::sys::path::append(PathName, FileName);
-      File = SourceMgr.getFileManager().getFile(PathName);
-
-      if (!File) {
-        // Check whether this file is in the private headers.
-        PathName.resize(PathLength);
-        llvm::sys::path::append(PathName, "PrivateHeaders");
-        llvm::sys::path::append(PathName, FileName);
-        File = SourceMgr.getFileManager().getFile(PathName);
-      }
-    } else {
-      // Lookup for normal headers.
-      llvm::sys::path::append(PathName, FileName);
-      File = SourceMgr.getFileManager().getFile(PathName);
-    }
-  }
-  
-  // FIXME: We shouldn't be eagerly stat'ing every file named in a module map.
-  // Come up with a lazy way to do this.
-  if (File) {
-    const DirectoryEntry *UmbrellaDir = File->getDir();
-    if (ActiveModule->IsFramework) {
-      // For framework modules, use the framework directory as the umbrella
-      // directory.
-      UmbrellaDir = SourceMgr.getFileManager().getDirectory(
-                      llvm::sys::path::parent_path(UmbrellaDir->getName()));
-    }
-    
-    if (const Module *OwningModule = Map.Headers[File]) {
-      Diags.Report(FileNameLoc, diag::err_mmap_header_conflict)
-        << FileName << OwningModule->getFullModuleName();
-      HadError = true;
-    } else if ((OwningModule = Map.UmbrellaDirs[UmbrellaDir])) {
-      Diags.Report(UmbrellaLoc, diag::err_mmap_umbrella_clash)
-        << OwningModule->getFullModuleName();
-      HadError = true;
-    } else {
-      // Record this umbrella header.
-      Map.setUmbrellaHeader(ActiveModule, File);
-    }
-  } else {
-    Diags.Report(FileNameLoc, diag::err_mmap_header_not_found)
-      << true << FileName;
-    HadError = true;    
-  }
-}
-
 /// \brief Parse a header declaration.
 ///
 ///   header-declaration:
-///     'header' string-literal
-void ModuleMapParser::parseHeaderDecl() {
+///     'umbrella'[opt] 'header' string-literal
+void ModuleMapParser::parseHeaderDecl(SourceLocation UmbrellaLoc) {
   assert(Tok.is(MMToken::HeaderKeyword));
   consumeToken();
 
+  bool Umbrella = UmbrellaLoc.isValid();
+  
   // Parse the header name.
   if (!Tok.is(MMToken::StringLiteral)) {
     Diags.Report(Tok.getLocation(), diag::err_mmap_expected_header) 
@@ -901,6 +874,14 @@ void ModuleMapParser::parseHeaderDecl() {
   std::string FileName = Tok.getString();
   SourceLocation FileNameLoc = consumeToken();
   
+  // Check whether we already have an umbrella.
+  if (Umbrella && ActiveModule->Umbrella) {
+    Diags.Report(FileNameLoc, diag::err_mmap_umbrella_clash)
+      << ActiveModule->getFullModuleName();
+    HadError = true;
+    return;
+  }
+
   // Look for this file.
   const FileEntry *File = 0;
   llvm::SmallString<128> PathName;
@@ -941,15 +922,85 @@ void ModuleMapParser::parseHeaderDecl() {
       Diags.Report(FileNameLoc, diag::err_mmap_header_conflict)
         << FileName << OwningModule->getFullModuleName();
       HadError = true;
+    } else if (Umbrella) {
+      const DirectoryEntry *UmbrellaDir = File->getDir();
+      if (ActiveModule->IsFramework) {
+        // For framework modules, use the framework directory as the umbrella
+        // directory.
+        UmbrellaDir = SourceMgr.getFileManager().getDirectory(
+                        llvm::sys::path::parent_path(UmbrellaDir->getName()));
+      } 
+      
+      if ((OwningModule = Map.UmbrellaDirs[UmbrellaDir])) {
+        Diags.Report(UmbrellaLoc, diag::err_mmap_umbrella_clash)
+          << OwningModule->getFullModuleName();
+        HadError = true;
+      } else {
+        // Record this umbrella header.
+        Map.setUmbrellaHeader(ActiveModule, File);
+      }
     } else {
-      // Record this file.
+      // Record this header.
       Map.addHeader(ActiveModule, File);
     }
   } else {
     Diags.Report(FileNameLoc, diag::err_mmap_header_not_found)
-      << false << FileName;
+      << Umbrella << FileName;
     HadError = true;
   }
+}
+
+/// \brief Parse an umbrella directory declaration.
+///
+///   umbrella-dir-declaration:
+///     umbrella string-literal
+void ModuleMapParser::parseUmbrellaDirDecl(SourceLocation UmbrellaLoc) {
+  // Parse the directory name.
+  if (!Tok.is(MMToken::StringLiteral)) {
+    Diags.Report(Tok.getLocation(), diag::err_mmap_expected_header) 
+      << "umbrella";
+    HadError = true;
+    return;
+  }
+
+  std::string DirName = Tok.getString();
+  SourceLocation DirNameLoc = consumeToken();
+  
+  // Check whether we already have an umbrella.
+  if (ActiveModule->Umbrella) {
+    Diags.Report(DirNameLoc, diag::err_mmap_umbrella_clash)
+      << ActiveModule->getFullModuleName();
+    HadError = true;
+    return;
+  }
+
+  // Look for this file.
+  const DirectoryEntry *Dir = 0;
+  if (llvm::sys::path::is_absolute(DirName))
+    Dir = SourceMgr.getFileManager().getDirectory(DirName);
+  else {
+    llvm::SmallString<128> PathName;
+    PathName = Directory->getName();
+    llvm::sys::path::append(PathName, DirName);
+    Dir = SourceMgr.getFileManager().getDirectory(PathName);
+  }
+  
+  if (!Dir) {
+    Diags.Report(DirNameLoc, diag::err_mmap_umbrella_dir_not_found)
+      << DirName;
+    HadError = true;
+    return;
+  }
+  
+  if (Module *OwningModule = Map.UmbrellaDirs[Dir]) {
+    Diags.Report(UmbrellaLoc, diag::err_mmap_umbrella_clash)
+      << OwningModule->getFullModuleName();
+    HadError = true;
+    return;
+  } 
+  
+  // Record this umbrella directory.
+  Map.setUmbrellaDir(ActiveModule, Dir);
 }
 
 /// \brief Parse a module export declaration.
@@ -1010,8 +1061,8 @@ void ModuleMapParser::parseInferredSubmoduleDecl(bool Explicit) {
     Failed = true;
   }
   
-  // Inferred modules must have umbrella headers.
-  if (!Failed && !ActiveModule->UmbrellaHeader) {
+  // Inferred modules must have umbrella directories.
+  if (!Failed && !ActiveModule->getUmbrellaDir()) {
     Diags.Report(StarLoc, diag::err_mmap_inferred_no_umbrella);
     Failed = true;
   }

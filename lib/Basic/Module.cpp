@@ -65,6 +65,13 @@ std::string Module::getFullModuleName() const {
   return Result;
 }
 
+const DirectoryEntry *Module::getUmbrellaDir() const {
+  if (const FileEntry *Header = getUmbrellaHeader())
+    return Header->getDir();
+  
+  return Umbrella.dyn_cast<const DirectoryEntry *>();
+}
+
 static void printModuleId(llvm::raw_ostream &OS, const ModuleId &Id) {
   for (unsigned I = 0, N = Id.size(); I != N; ++I) {
     if (I)
@@ -81,11 +88,16 @@ void Module::print(llvm::raw_ostream &OS, unsigned Indent) const {
     OS << "explicit ";
   OS << "module " << Name << " {\n";
   
-  if (UmbrellaHeader) {
+  if (const FileEntry *UmbrellaHeader = getUmbrellaHeader()) {
     OS.indent(Indent + 2);
-    OS << "umbrella \"";
+    OS << "umbrella header \"";
     OS.write_escaped(UmbrellaHeader->getName());
     OS << "\"\n";
+  } else if (const DirectoryEntry *UmbrellaDir = getUmbrellaDir()) {
+    OS.indent(Indent + 2);
+    OS << "umbrella \"";
+    OS.write_escaped(UmbrellaDir->getName());
+    OS << "\"\n";    
   }
   
   for (unsigned I = 0, N = Headers.size(); I != N; ++I) {

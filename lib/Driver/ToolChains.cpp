@@ -440,6 +440,16 @@ void DarwinClang::AddLinkRuntimeLib(const ArgList &Args,
 
 void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
                                         ArgStringList &CmdArgs) const {
+  // Darwin only supports the compiler-rt based runtime libraries.
+  switch (GetRuntimeLibType(Args)) {
+  case ToolChain::RLT_CompilerRT:
+    break;
+  default:
+    getDriver().Diag(diag::err_drv_unsupported_rtlib_for_platform)
+      << Args.getLastArg(options::OPT_rtlib_EQ)->getValue(Args) << "darwin";
+    return;
+  }
+
   // Darwin doesn't support real static executables, don't link any runtime
   // libraries with -static.
   if (Args.hasArg(options::OPT_static))
@@ -1246,7 +1256,8 @@ Generic_GCC::GCCInstallationDetector::GCCInstallationDetector(const Driver &D)
     static const char *const PPCLibDirs[] = { "/lib32", "/lib" };
     static const char *const PPCTriples[] = {
       "powerpc-linux-gnu",
-      "powerpc-unknown-linux-gnu"
+      "powerpc-unknown-linux-gnu",
+      "powerpc-suse-linux"
     };
     LibDirs.append(PPCLibDirs, PPCLibDirs + llvm::array_lengthof(PPCLibDirs));
     Triples.append(PPCTriples, PPCTriples + llvm::array_lengthof(PPCTriples));
@@ -1254,6 +1265,7 @@ Generic_GCC::GCCInstallationDetector::GCCInstallationDetector(const Driver &D)
     static const char *const PPC64LibDirs[] = { "/lib64", "/lib" };
     static const char *const PPC64Triples[] = {
       "powerpc64-unknown-linux-gnu",
+      "powerpc64-suse-linux",
       "ppc64-redhat-linux"
     };
     LibDirs.append(PPC64LibDirs,
@@ -1299,6 +1311,16 @@ void Generic_GCC::GCCInstallationDetector::ScanLibDirForGCCTriple(
         continue;
       if (CandidateVersion <= Version)
         continue;
+
+      // Some versions of SUSE and Fedora on ppc64 put 32-bit libs
+      // in what would normally be GccInstallPath and put the 64-bit
+      // libs in a subdirectory named 64. We need the 64-bit libs
+      // for linking.
+      bool UseSlash64 = false;
+      if (HostArch == llvm::Triple::ppc64 &&
+            llvm::sys::fs::exists(LI->path() + "/64/crtbegin.o"))
+        UseSlash64 = true;
+
       if (!llvm::sys::fs::exists(LI->path() + "/crtbegin.o"))
         continue;
 
@@ -1309,6 +1331,7 @@ void Generic_GCC::GCCInstallationDetector::ScanLibDirForGCCTriple(
       // Linux.
       GccInstallPath = LibDir + Suffixes[i] + "/" + VersionText.str();
       GccParentLibPath = GccInstallPath + InstallSuffixes[i];
+      if (UseSlash64) GccInstallPath = GccInstallPath + "/64";
       IsValid = true;
     }
   }

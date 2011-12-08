@@ -21,6 +21,7 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/Serialization/ASTWriter.h"
 #include "llvm/ADT/OwningPtr.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/system_error.h"
@@ -145,14 +146,38 @@ static void collectModuleHeaderIncludes(const LangOptions &LangOpts,
     Includes += "\"\n";
   }
 
-  if (Module->UmbrellaHeader && Module->Parent) {
-    // Include the umbrella header for submodules.
-    if (LangOpts.ObjC1)
-      Includes += "#import \"";
-    else
-      Includes += "#include \"";
-    Includes += Module->UmbrellaHeader->getName();
-    Includes += "\"\n";    
+  if (const FileEntry *UmbrellaHeader = Module->getUmbrellaHeader()) {
+    if (Module->Parent) {
+      // Include the umbrella header for submodules.
+      if (LangOpts.ObjC1)
+        Includes += "#import \"";
+      else
+        Includes += "#include \"";
+      Includes += UmbrellaHeader->getName();
+      Includes += "\"\n";
+    }
+  } else if (const DirectoryEntry *UmbrellaDir = Module->getUmbrellaDir()) {
+    // Add all of the headers we find in this subdirectory (FIXME: recursively!).
+    llvm::error_code EC;
+    llvm::SmallString<128> DirNative;
+    llvm::sys::path::native(UmbrellaDir->getName(), DirNative);
+    for (llvm::sys::fs::directory_iterator Dir(DirNative.str(), EC), DirEnd;
+         Dir != DirEnd && !EC; Dir.increment(EC)) {
+      // Check whether this entry has an extension typically associated with 
+      // headers.
+      if (!llvm::StringSwitch<bool>(llvm::sys::path::extension(Dir->path()))
+          .Cases(".h", ".H", ".hh", ".hpp", true)
+          .Default(false))
+        continue;
+      
+      // Include this header umbrella header for submodules.
+      if (LangOpts.ObjC1)
+        Includes += "#import \"";
+      else
+        Includes += "#include \"";
+      Includes += Dir->path();
+      Includes += "\"\n";
+    }
   }
   
   // Recurse into submodules.
@@ -197,29 +222,32 @@ bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI,
     return false;
   }
   
+  // Do we have an umbrella header for this module?
+  const FileEntry *UmbrellaHeader = Module->getUmbrellaHeader();
+  
   // Collect the set of #includes we need to build the module.
   llvm::SmallString<256> HeaderContents;
   collectModuleHeaderIncludes(CI.getLangOpts(), Module, HeaderContents);
-  if (Module->UmbrellaHeader && HeaderContents.empty()) {
+  if (UmbrellaHeader && HeaderContents.empty()) {
     // Simple case: we have an umbrella header and there are no additional
     // includes, we can just parse the umbrella header directly.
-    setCurrentFile(Module->UmbrellaHeader->getName(), getCurrentFileKind());
+    setCurrentFile(UmbrellaHeader->getName(), getCurrentFileKind());
     return true;
   }
   
   FileManager &FileMgr = CI.getFileManager();
   llvm::SmallString<128> HeaderName;
   time_t ModTime;
-  if (Module->UmbrellaHeader) {
+  if (UmbrellaHeader) {
     // Read in the umbrella header.
     // FIXME: Go through the source manager; the umbrella header may have
     // been overridden.
     std::string ErrorStr;
     llvm::MemoryBuffer *UmbrellaContents
-      = FileMgr.getBufferForFile(Module->UmbrellaHeader, &ErrorStr);
+      = FileMgr.getBufferForFile(UmbrellaHeader, &ErrorStr);
     if (!UmbrellaContents) {
       CI.getDiagnostics().Report(diag::err_missing_umbrella_header)
-        << Module->UmbrellaHeader->getName() << ErrorStr;
+        << UmbrellaHeader->getName() << ErrorStr;
       return false;
     }
     
@@ -232,8 +260,8 @@ bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI,
     HeaderContents += OldContents;
 
     // Pretend that we're parsing the umbrella header.
-    HeaderName = Module->UmbrellaHeader->getName();
-    ModTime = Module->UmbrellaHeader->getModificationTime();
+    HeaderName = UmbrellaHeader->getName();
+    ModTime = UmbrellaHeader->getModificationTime();
     
     delete UmbrellaContents;
   } else {
