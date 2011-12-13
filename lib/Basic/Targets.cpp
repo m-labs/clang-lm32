@@ -1225,8 +1225,10 @@ void Mico32TargetInfo::getTargetDefines(const LangOptions &Opts,
                                      MacroBuilder &Builder) const {
   // Target identification.
   Builder.defineMacro("__mico32__");
+  Builder.defineMacro("__lm32__");
   Builder.defineMacro("_ARCH_MICO32");
   Builder.defineMacro("__MICO32__");
+  Builder.defineMacro("__LM32__");
 
   // Target properties.
   Builder.defineMacro("_BIG_ENDIAN");
