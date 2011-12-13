@@ -3203,6 +3203,16 @@ Decl *Sema::HandleDeclarator(Scope *S, Declarator &D,
          (S->getFlags() & Scope::TemplateParamScope) != 0)
     S = S->getParent();
 
+  if (NestedNameSpecifierLoc SpecLoc = 
+        D.getCXXScopeSpec().getWithLocInContext(Context)) {
+    while (SpecLoc.getPrefix())
+      SpecLoc = SpecLoc.getPrefix();
+    if (dyn_cast_or_null<DecltypeType>(
+          SpecLoc.getNestedNameSpecifier()->getAsType()))
+      Diag(SpecLoc.getBeginLoc(), diag::err_decltype_in_declarator)
+        << SpecLoc.getTypeLoc().getSourceRange();
+  }
+
   DeclContext *DC = CurContext;
   if (D.getCXXScopeSpec().isInvalid())
     D.setInvalidType();
@@ -9206,7 +9216,8 @@ void Sema::ActOnFields(Scope* S,
                                 "this system field has retaining ownership"));
             }
           } else {
-            Diag(FD->getLocation(), diag::err_arc_objc_object_in_struct);
+            Diag(FD->getLocation(), diag::err_arc_objc_object_in_struct) 
+              << T->isBlockPointerType();
           }
           ARCErrReported = true;
         }

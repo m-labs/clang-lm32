@@ -147,6 +147,9 @@ class Parser : public CodeCompletionHandler {
 
   /// \brief Identifier for "unavailable".
   IdentifierInfo *Ident_unavailable;
+  
+  /// \brief Identifier for "message".
+  IdentifierInfo *Ident_message;
 
   /// C++0x contextual keywords.
   mutable IdentifierInfo *Ident_final;
@@ -1545,6 +1548,8 @@ private:
   void ParseMicrosoftIfExistsExternalDeclaration();
   void ParseMicrosoftIfExistsClassDeclaration(DeclSpec::TST TagType,
                                               AccessSpecifier& CurAS);
+  bool ParseMicrosoftIfExistsBraceInitializer(ExprVector &InitExprs,
+                                              bool &InitExprsOk);
   bool ParseAsmOperandsOpt(SmallVectorImpl<IdentifierInfo *> &Names,
                            SmallVectorImpl<Expr *> &Constraints,
                            SmallVectorImpl<Expr *> &Exprs);

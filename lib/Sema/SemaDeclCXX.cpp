@@ -9528,6 +9528,10 @@ VarDecl *Sema::BuildExceptionDeclaration(Scope *S,
                                     ExDeclType, TInfo, SC_None, SC_None);
   ExDecl->setExceptionVariable(true);
   
+  // In ARC, infer 'retaining' for variables of retainable type.
+  if (getLangOptions().ObjCAutoRefCount && inferObjCARCLifetime(ExDecl))
+    Invalid = true;
+
   if (!Invalid && !ExDeclType->isDependentType()) {
     if (const RecordType *recordType = ExDeclType->getAs<RecordType>()) {
       // C++ [except.handle]p16:
@@ -10617,7 +10621,10 @@ bool Sema::DefineUsedVTables() {
       if (!KeyFunction || 
           (KeyFunction->hasBody(KeyFunctionDef) && 
            KeyFunctionDef->isInlined()))
-        Diag(Class->getLocation(), diag::warn_weak_vtable) << Class;
+        Diag(Class->getLocation(), Class->getTemplateSpecializationKind() ==
+             TSK_ExplicitInstantiationDefinition 
+             ? diag::warn_weak_template_vtable : diag::warn_weak_vtable) 
+          << Class;
     }
   }
   VTableUses.clear();

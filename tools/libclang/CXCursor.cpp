@@ -746,8 +746,10 @@ ASTContext &cxcursor::getCursorContext(CXCursor Cursor) {
 }
 
 ASTUnit *cxcursor::getCursorASTUnit(CXCursor Cursor) {
-  return static_cast<ASTUnit *>(static_cast<CXTranslationUnit>(Cursor.data[2])
-                                  ->TUData);
+  CXTranslationUnit TU = static_cast<CXTranslationUnit>(Cursor.data[2]);
+  if (!TU)
+    return 0;
+  return static_cast<ASTUnit *>(TU->TUData);
 }
 
 CXTranslationUnit cxcursor::getCursorTU(CXCursor Cursor) {
@@ -1017,8 +1019,7 @@ CXCompletionString clang_getCursorCompletionString(CXCursor cursor) {
   enum CXCursorKind kind = clang_getCursorKind(cursor);
   if (clang_isDeclaration(kind)) {
     Decl *decl = getCursorDecl(cursor);
-    if (isa<NamedDecl>(decl)) {
-      NamedDecl *namedDecl = (NamedDecl *)decl;
+    if (NamedDecl *namedDecl = dyn_cast_or_null<NamedDecl>(decl)) {
       ASTUnit *unit = getCursorASTUnit(cursor);
       if (unit->hasSema()) {
         Sema &S = unit->getSema();

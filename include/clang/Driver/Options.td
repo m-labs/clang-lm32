@@ -145,6 +145,7 @@ def D : JoinedOrSeparate<"-D">, Group<CompileOnly_Group>;
 def E : Flag<"-E">, Flags<[DriverOption]>,
   HelpText<"Only run the preprocessor">;
 def F : JoinedOrSeparate<"-F">, Flags<[RenderJoined]>;
+def G : Separate<"-G">, Flags<[DriverOption]>;
 def H : Flag<"-H">;
 def I_ : Flag<"-I-">, Group<I_Group>;
 def I : JoinedOrSeparate<"-I">, Group<I_Group>;
@@ -315,7 +316,16 @@ def fexceptions : Flag<"-fexceptions">, Group<f_Group>;
 def fextdirs_EQ : Joined<"-fextdirs=">, Group<f_Group>;
 def fhosted : Flag<"-fhosted">, Group<f_Group>;
 def ffast_math : Flag<"-ffast-math">, Group<clang_ignored_f_Group>;
-def ffinite_math_only : Flag<"-ffinite-math-only">, Group<clang_ignored_f_Group>;
+def ffinite_math_only : Flag<"-ffinite-math-only">, Group<f_Group>;
+def fhonor_nans : Flag<"-fhonor-nans">, Group<f_Group>;
+def fno_honor_nans : Flag<"-fno-honor-nans">, Group<f_Group>;
+def fhonor_infinities : Flag<"-fhonor-infinities">, Group<f_Group>;
+def fno_honor_infinities : Flag<"-fno-honor-infinities">, Group<f_Group>;
+// Sic. This option was misspelled originally.
+def fhonor_infinites : Flag<"-fhonor-infinites">, Group<f_Group>,
+    Alias<fhonor_infinities>;
+def fno_honor_infinites : Flag<"-fno-honor-infinites">, Group<f_Group>,
+    Alias<fno_honor_infinities>;
 
 def ffor_scope : Flag<"-ffor-scope">, Group<f_Group>;
 def fno_for_scope : Flag<"-fno-for-scope">, Group<f_Group>;
@@ -548,6 +558,10 @@ def i : Joined<"-i">, Group<i_Group>;
 def keep__private__externs : Flag<"-keep_private_externs">;
 def l : JoinedOrSeparate<"-l">, Flags<[LinkerInput, RenderJoined]>;
 def m32 : Flag<"-m32">, Group<m_Group>, Flags<[DriverOption]>;
+def mv2 : Flag<"-mv2">, Group<m_Group>, Flags<[DriverOption]>;
+def mv3 : Flag<"-mv3">, Group<m_Group>, Flags<[DriverOption]>;
+def mv4 : Flag<"-mv4">, Group<m_Group>, Flags<[DriverOption]>;
+def mqdsp6_compat : Flag<"-mqdsp6-compat">, Group<m_Group>, Flags<[DriverOption]>;
 def m3dnowa : Flag<"-m3dnowa">, Group<m_x86_Features_Group>;
 def m3dnow : Flag<"-m3dnow">, Group<m_x86_Features_Group>;
 def m64 : Flag<"-m64">, Group<m_Group>, Flags<[DriverOption]>;
@@ -606,6 +620,7 @@ def mred_zone : Flag<"-mred-zone">, Group<m_Group>;
 def mregparm_EQ : Joined<"-mregparm=">, Group<m_Group>;
 def mrelax_all : Flag<"-mrelax-all">, Group<m_Group>;
 def mrtd: Flag<"-mrtd">, Group<m_Group>;
+def msmall_data_threshold_EQ : Joined <"-msmall-data-threshold=">, Group<m_Group>;
 def msoft_float : Flag<"-msoft-float">, Group<m_Group>;
 def msse2 : Flag<"-msse2">, Group<m_x86_Features_Group>;
 def msse3 : Flag<"-msse3">, Group<m_x86_Features_Group>;

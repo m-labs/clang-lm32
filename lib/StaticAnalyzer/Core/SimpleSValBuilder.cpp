@@ -80,16 +80,14 @@ SVal SimpleSValBuilder::evalCastFromNonLoc(NonLoc val, QualType castTy) {
 
   if (const SymExpr *se = val.getAsSymbolicExpression()) {
     QualType T = Context.getCanonicalType(se->getType(Context));
-    if (T == Context.getCanonicalType(castTy))
-      return val;
-    
+    // If types are the same or both are integers, ignore the cast.
     // FIXME: Remove this hack when we support symbolic truncation/extension.
     // HACK: If both castTy and T are integers, ignore the cast.  This is
     // not a permanent solution.  Eventually we want to precisely handle
     // extension/truncation of symbolic integers.  This prevents us from losing
     // precision when we assign 'x = y' and 'y' is symbolic and x and y are
     // different integer types.
-    if (T->isIntegerType() && castTy->isIntegerType())
+   if (haveSameType(T, castTy))
       return val;
 
     if (!isLocType)
@@ -97,10 +95,12 @@ SVal SimpleSValBuilder::evalCastFromNonLoc(NonLoc val, QualType castTy) {
     return UnknownVal();
   }
 
+  // If value is a non integer constant, produce unknown.
   if (!isa<nonloc::ConcreteInt>(val))
     return UnknownVal();
 
-  // Only handle casts from integers to integers.
+  // Only handle casts from integers to integers - if val is an integer constant
+  // being cast to a non integer type, produce unknown.
   if (!isLocType && !castTy->isIntegerType())
     return UnknownVal();
 
@@ -303,7 +303,7 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
   while (1) {
     switch (lhs.getSubKind()) {
     default:
-      return generateUnknownVal(state, op, lhs, rhs, resultTy);
+      return makeGenericVal(state, op, lhs, rhs, resultTy);
     case nonloc::LocAsIntegerKind: {
       Loc lhsL = cast<nonloc::LocAsInteger>(lhs).getLoc();
       switch (rhs.getSubKind()) {
@@ -326,7 +326,7 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
               return makeTruthVal(true, resultTy);
             default:
               // This case also handles pointer arithmetic.
-              return generateUnknownVal(state, op, lhs, rhs, resultTy);
+              return makeGenericVal(state, op, lhs, rhs, resultTy);
           }
       }
     }
@@ -388,9 +388,9 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
             if (lhsValue == 0)
               // At this point lhs and rhs have been swapped.
               return rhs;
-            return generateUnknownVal(state, op, lhs, rhs, resultTy);
+            return makeGenericVal(state, op, rhs, lhs, resultTy);
           default:
-            return generateUnknownVal(state, op, lhs, rhs, resultTy);
+            return makeGenericVal(state, op, rhs, lhs, resultTy);
         }
       }
     }
@@ -405,7 +405,7 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
             dyn_cast<SymIntExpr>(selhs->getSymbol());
 
         if (!symIntExpr)
-          return generateUnknownVal(state, op, lhs, rhs, resultTy);
+          return makeGenericVal(state, op, lhs, rhs, resultTy);
 
         // Is this a logical not? (!x is represented as x == 0.)
         if (op == BO_EQ && rhs.isZeroConstant()) {
@@ -453,7 +453,7 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
         // For now, only handle expressions whose RHS is a constant.
         const nonloc::ConcreteInt *rhsInt = dyn_cast<nonloc::ConcreteInt>(&rhs);
         if (!rhsInt)
-          return generateUnknownVal(state, op, lhs, rhs, resultTy);
+          return makeGenericVal(state, op, lhs, rhs, resultTy);
 
         // If both the LHS and the current expression are additive,
         // fold their constants.
@@ -481,7 +481,7 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
         // Otherwise, make a SymbolVal out of the expression.
         return MakeSymIntVal(symIntExpr, op, rhsInt->getValue(), resultTy);
 
-      // LHS is a simple symbol.
+      // LHS is a simple symbol (not a symbolic expression).
       } else {
         nonloc::SymbolVal *slhs = cast<nonloc::SymbolVal>(&lhs);
         SymbolRef Sym = slhs->getSymbol();
@@ -538,7 +538,7 @@ SVal SimpleSValBuilder::evalBinOpNN(const ProgramState *state,
               resultTy);
         }
 
-        return generateUnknownVal(state, op, lhs, rhs, resultTy);
+        return makeGenericVal(state, op, lhs, rhs, resultTy);
       }
     }
     }

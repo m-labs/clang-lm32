@@ -235,46 +235,6 @@ bool clang::analyze_format_string::ParsePrintfString(FormatStringHandler &H,
 }
 
 //===----------------------------------------------------------------------===//
-// Methods on ConversionSpecifier.
-//===----------------------------------------------------------------------===//
-const char *ConversionSpecifier::toString() const {
-  switch (kind) {
-  case dArg: return "d";
-  case iArg: return "i";
-  case oArg: return "o";
-  case uArg: return "u";
-  case xArg: return "x";
-  case XArg: return "X";
-  case fArg: return "f";
-  case FArg: return "F";
-  case eArg: return "e";
-  case EArg: return "E";
-  case gArg: return "g";
-  case GArg: return "G";
-  case aArg: return "a";
-  case AArg: return "A";
-  case cArg: return "c";
-  case sArg: return "s";
-  case pArg: return "p";
-  case nArg: return "n";
-  case PercentArg:  return "%";
-  case ScanListArg: return "[";
-  case InvalidSpecifier: return NULL;
-
-  // MacOS X unicode extensions.
-  case CArg: return "C";
-  case SArg: return "S";
-
-  // Objective-C specific specifiers.
-  case ObjCObjArg: return "@";
-
-  // GlibC specific specifiers.
-  case PrintErrno: return "m";
-  }
-  return NULL;
-}
-
-//===----------------------------------------------------------------------===//
 // Methods on PrintfSpecifier.
 //===----------------------------------------------------------------------===//
 
@@ -287,7 +247,8 @@ ArgTypeResult PrintfSpecifier::getArgType(ASTContext &Ctx) const {
   if (CS.getKind() == ConversionSpecifier::cArg)
     switch (LM.getKind()) {
       case LengthModifier::None: return Ctx.IntTy;
-      case LengthModifier::AsLong: return ArgTypeResult::WIntTy;
+      case LengthModifier::AsLong:
+        return ArgTypeResult(ArgTypeResult::WIntTy, "wint_t");
       default:
         return ArgTypeResult::Invalid();
     }
@@ -337,13 +298,14 @@ ArgTypeResult PrintfSpecifier::getArgType(ASTContext &Ctx) const {
 
   switch (CS.getKind()) {
     case ConversionSpecifier::sArg:
-      return ArgTypeResult(LM.getKind() == LengthModifier::AsWideChar ?
-          ArgTypeResult::WCStrTy : ArgTypeResult::CStrTy);
+      if (LM.getKind() == LengthModifier::AsWideChar)
+        return ArgTypeResult(ArgTypeResult::WCStrTy, "wchar_t *");
+      return ArgTypeResult::CStrTy;
     case ConversionSpecifier::SArg:
       // FIXME: This appears to be Mac OS X specific.
-      return ArgTypeResult::WCStrTy;
+      return ArgTypeResult(ArgTypeResult::WCStrTy, "wchar_t *");
     case ConversionSpecifier::CArg:
-      return Ctx.WCharTy;
+      return ArgTypeResult(Ctx.WCharTy, "wchar_t");
     case ConversionSpecifier::pArg:
       return ArgTypeResult::CPointerTy;
     default:
@@ -366,6 +328,8 @@ bool PrintfSpecifier::fixType(QualType QT, const LangOptions &LangOpt) {
     // Set the long length modifier for wide characters
     if (QT->getPointeeType()->isWideCharType())
       LM.setKind(LengthModifier::AsWideChar);
+    else
+      LM.setKind(LengthModifier::None);
 
     return true;
   }

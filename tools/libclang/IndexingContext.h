@@ -149,6 +149,7 @@ struct ObjCProtocolDeclInfo : public ObjCContainerDeclInfo {
 
 struct ObjCCategoryDeclInfo : public ObjCContainerDeclInfo {
   CXIdxObjCCategoryDeclInfo ObjCCatDeclInfo;
+  CXIdxObjCProtocolRefListInfo ObjCProtoListInfo;
 
   explicit ObjCCategoryDeclInfo(bool isImplementation)
     : ObjCContainerDeclInfo(Info_ObjCCategory,
@@ -334,11 +335,16 @@ public:
                            const DeclContext *DC = 0);
 
   void indexTypeLoc(TypeLoc TL, const NamedDecl *Parent,
-                           const DeclContext *DC);
+                    const DeclContext *DC = 0);
+
+  void indexNestedNameSpecifierLoc(NestedNameSpecifierLoc NNS,
+                                   const NamedDecl *Parent,
+                                   const DeclContext *DC = 0);
 
   void indexDeclContext(const DeclContext *DC);
   
-  void indexBody(const Stmt *S, const DeclContext *DC);
+  void indexBody(const Stmt *S, const NamedDecl *Parent,
+                 const DeclContext *DC = 0);
 
   void handleDiagnosticSet(CXDiagnosticSet CXDiagSet);
 

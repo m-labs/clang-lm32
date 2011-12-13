@@ -183,6 +183,10 @@ static void CodeGenOptsToArgs(const CodeGenOptions &Opts,
     Res.push_back("-main-file-name");
     Res.push_back(Opts.MainFileName);
   }
+  if (Opts.NoInfsFPMath)
+    Res.push_back("-menable-no-infinities");
+  if (Opts.NoNaNsFPMath)
+    Res.push_back("-menable-no-nans");
   // SimplifyLibCalls is only derived.
   // TimePasses is only derived.
   // UnitAtATime is unused.
@@ -402,6 +406,7 @@ static const char *getActionName(frontend::ActionKind Kind) {
   case frontend::DumpTokens:             return "-dump-tokens";
   case frontend::EmitAssembly:           return "-S";
   case frontend::EmitBC:                 return "-emit-llvm-bc";
+  case frontend::EmitBCVerify:           return "-emit-llvm-bc-verify";
   case frontend::EmitHTML:               return "-emit-html";
   case frontend::EmitLLVM:               return "-emit-llvm";
   case frontend::EmitLLVMOnly:           return "-emit-llvm-only";
@@ -1083,8 +1088,12 @@ static void ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.HiddenWeakVTables = Args.hasArg(OPT_fhidden_weak_vtables);
   Opts.LessPreciseFPMAD = Args.hasArg(OPT_cl_mad_enable);
   Opts.LimitFloatPrecision = Args.getLastArgValue(OPT_mlimit_float_precision);
-  Opts.NoInfsFPMath = Opts.NoNaNsFPMath = Args.hasArg(OPT_cl_finite_math_only)||
-                                          Args.hasArg(OPT_cl_fast_relaxed_math);
+  Opts.NoInfsFPMath = (Args.hasArg(OPT_menable_no_infinities) ||
+                       Args.hasArg(OPT_cl_finite_math_only)||
+                       Args.hasArg(OPT_cl_fast_relaxed_math));
+  Opts.NoNaNsFPMath = (Args.hasArg(OPT_menable_no_nans) ||
+                       Args.hasArg(OPT_cl_finite_math_only)||
+                       Args.hasArg(OPT_cl_fast_relaxed_math));
   Opts.NoZeroInitializedInBSS = Args.hasArg(OPT_mno_zero_initialized_in_bss);
   Opts.BackendOptions = Args.getAllArgValues(OPT_backend_option);
   Opts.NumRegisterParameters = Args.getLastArgIntValue(OPT_mregparm, 0, Diags);
@@ -1261,6 +1270,8 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Opts.ProgramAction = frontend::EmitAssembly; break;
     case OPT_emit_llvm_bc:
       Opts.ProgramAction = frontend::EmitBC; break;
+    case OPT_emit_llvm_bc_verify:
+      Opts.ProgramAction = frontend::EmitBCVerify; break;
     case OPT_emit_html:
       Opts.ProgramAction = frontend::EmitHTML; break;
     case OPT_emit_llvm:
@@ -1810,6 +1821,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.SinglePrecisionConstants = Args.hasArg(OPT_cl_single_precision_constant);
   Opts.FastRelaxedMath = Args.hasArg(OPT_cl_fast_relaxed_math);
   Opts.MRTD = Args.hasArg(OPT_mrtd);
+  Opts.HexagonQdsp6Compat = Args.hasArg(OPT_mqdsp6_compat);
   Opts.FakeAddressSpaceMap = Args.hasArg(OPT_ffake_address_space_map);
   Opts.ParseUnknownAnytype = Args.hasArg(OPT_funknown_anytype);
   Opts.DebuggerSupport = Args.hasArg(OPT_fdebugger_support);

@@ -37,7 +37,6 @@ DefinedOrUnknownSVal SValBuilder::makeZeroVal(QualType type) {
   return UnknownVal();
 }
 
-
 NonLoc SValBuilder::makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
                                 const llvm::APSInt& rhs, QualType type) {
   // The Environment ensures we always get a persistent APSInt in
@@ -48,10 +47,18 @@ NonLoc SValBuilder::makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
   return nonloc::SymbolVal(SymMgr.getSymIntExpr(lhs, op, rhs, type));
 }
 
+NonLoc SValBuilder::makeNonLoc(const llvm::APSInt& lhs,
+                               BinaryOperator::Opcode op, const SymExpr *rhs,
+                               QualType type) {
+  assert(rhs);
+  assert(!Loc::isLocType(type));
+  return nonloc::SymbolVal(SymMgr.getIntSymExpr(lhs, op, rhs, type));
+}
+
 NonLoc SValBuilder::makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
                                const SymExpr *rhs, QualType type) {
   assert(lhs && rhs);
-  assert(SymMgr.getType(lhs) == SymMgr.getType(rhs));
+  assert(haveSameType(lhs->getType(Context), rhs->getType(Context)) == true);
   assert(!Loc::isLocType(type));
   return nonloc::SymbolVal(SymMgr.getSymSymExpr(lhs, op, rhs, type));
 }
@@ -160,7 +167,7 @@ DefinedSVal SValBuilder::getBlockPointer(const BlockDecl *block,
 
 //===----------------------------------------------------------------------===//
 
-SVal SValBuilder::generateUnknownVal(const ProgramState *State,
+SVal SValBuilder::makeGenericVal(const ProgramState *State,
                                      BinaryOperator::Opcode Op,
                                      NonLoc LHS, NonLoc RHS,
                                      QualType ResultTy) {
@@ -172,6 +179,11 @@ SVal SValBuilder::generateUnknownVal(const ProgramState *State,
     if (const nonloc::ConcreteInt *rInt = dyn_cast<nonloc::ConcreteInt>(&RHS)) {
       symLHS = LHS.getAsSymExpr();
       return makeNonLoc(symLHS, Op, rInt->getValue(), ResultTy);
+    }
+
+    if (const nonloc::ConcreteInt *lInt = dyn_cast<nonloc::ConcreteInt>(&LHS)) {
+      symRHS = RHS.getAsSymExpr();
+      return makeNonLoc(lInt->getValue(), Op, symRHS, ResultTy);
     }
 
     symLHS = LHS.getAsSymExpr();

@@ -417,10 +417,7 @@ public:
   bool isIntegerConstantExpr(llvm::APSInt &Result, ASTContext &Ctx,
                              SourceLocation *Loc = 0,
                              bool isEvaluated = true) const;
-  bool isIntegerConstantExpr(ASTContext &Ctx, SourceLocation *Loc = 0) const {
-    llvm::APSInt X;
-    return isIntegerConstantExpr(X, Ctx, Loc);
-  }
+  bool isIntegerConstantExpr(ASTContext &Ctx, SourceLocation *Loc = 0) const;
 
   /// isConstantInitializer - Returns true if this expression can be emitted to
   /// IR as a constant, and thus can be used as a constant initializer in C.
@@ -432,19 +429,16 @@ public:
     /// For example, (f() && 0) can be folded, but it still has side effects.
     bool HasSideEffects;
 
-    /// Diag - If the expression is unfoldable, then Diag contains a note
-    /// diagnostic indicating why it's not foldable. DiagLoc indicates a caret
-    /// position for the error, and DiagExpr is the expression that caused
-    /// the error.
-    /// If the expression is foldable, but not an integer constant expression,
-    /// Diag contains a note diagnostic that describes why it isn't an integer
-    /// constant expression. If the expression *is* an integer constant
-    /// expression, then Diag will be zero.
-    unsigned Diag;
-    const Expr *DiagExpr;
-    SourceLocation DiagLoc;
+    /// Diag - If this is non-null, it will be filled in with a stack of notes
+    /// indicating why evaluation failed (or why it failed to produce a constant
+    /// expression).
+    /// If the expression is unfoldable, the notes will indicate why it's not
+    /// foldable. If the expression is foldable, but not a constant expression,
+    /// the notes will describes why it isn't a constant expression. If the
+    /// expression *is* a constant expression, no notes will be produced.
+    llvm::SmallVectorImpl<PartialDiagnosticAt> *Diag;
 
-    EvalStatus() : HasSideEffects(false), Diag(0), DiagExpr(0) {}
+    EvalStatus() : HasSideEffects(false), Diag(0) {}
 
     // hasSideEffects - Return true if the evaluated expression has
     // side effects.
@@ -2692,6 +2686,7 @@ public:
   explicit BinaryOperator(EmptyShell Empty)
     : Expr(BinaryOperatorClass, Empty), Opc(BO_Comma) { }
 
+  SourceLocation getExprLoc() const { return OpLoc; }
   SourceLocation getOperatorLoc() const { return OpLoc; }
   void setOperatorLoc(SourceLocation L) { OpLoc = L; }
 

@@ -68,6 +68,17 @@ public:
 
   virtual ~SValBuilder() {}
 
+  bool haveSameType(const SymExpr *Sym1, const SymExpr *Sym2) {
+    return haveSameType(Sym1->getType(Context), Sym2->getType(Context));
+  }
+
+  bool haveSameType(QualType Ty1, QualType Ty2) {
+    // FIXME: Remove the second disjunct when we support symbolic
+    // truncation/extension.
+    return (Context.getCanonicalType(Ty1) == Context.getCanonicalType(Ty2) ||
+            (Ty2->isIntegerType() && Ty2->isIntegerType()));
+  }
+
   SVal evalCast(SVal val, QualType castTy, QualType originalType);
   
   virtual SVal evalMinus(NonLoc val) = 0;
@@ -98,7 +109,7 @@ public:
   /// handle the given binary expression. Depending on the state, decides to
   /// either keep the expression or forget the history and generate an
   /// UnknownVal.
-  SVal generateUnknownVal(const ProgramState *state, BinaryOperator::Opcode op,
+  SVal makeGenericVal(const ProgramState *state, BinaryOperator::Opcode op,
                           NonLoc lhs, NonLoc rhs, QualType resultTy);
 
   SVal evalBinOp(const ProgramState *state, BinaryOperator::Opcode op,
@@ -241,6 +252,9 @@ public:
 
   NonLoc makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
                     const llvm::APSInt& rhs, QualType type);
+
+  NonLoc makeNonLoc(const llvm::APSInt& rhs, BinaryOperator::Opcode op,
+                    const SymExpr *lhs, QualType type);
 
   NonLoc makeNonLoc(const SymExpr *lhs, BinaryOperator::Opcode op,
                     const SymExpr *rhs, QualType type);

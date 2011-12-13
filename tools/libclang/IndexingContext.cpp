@@ -228,7 +228,8 @@ bool IndexingContext::handleDecl(const NamedDecl *D,
   if (!DInfo.EntInfo.USR || Loc.isInvalid())
     return false;
 
-  markEntityOccurrenceInFile(D, Loc);
+  if (suppressRefs())
+    markEntityOccurrenceInFile(D, Loc);
   
   DInfo.entityInfo = &DInfo.EntInfo;
   DInfo.cursor = Cursor;
@@ -304,6 +305,12 @@ bool IndexingContext::handleObjCClass(const ObjCClassDecl *D) {
   SourceLocation Loc = Ref->getLocation();
   bool isRedeclaration = IFaceD->getLocation() != Loc;
  
+  // For @class forward declarations, suppress them the same way as references.
+  if (suppressRefs()) {
+    if (markEntityOccurrenceInFile(IFaceD, Loc))
+      return false; // already occurred.
+  }
+
   ObjCContainerDeclInfo ContDInfo(/*isForwardRef=*/true, isRedeclaration,
                                   /*isImplementation=*/false);
   return handleObjCContainer(IFaceD, Loc,
@@ -373,6 +380,11 @@ bool IndexingContext::handleObjCCategory(const ObjCCategoryDecl *D) {
                                                      : D->getCategoryNameLoc();
   getEntityInfo(IFaceD, ClassEntity, SA);
 
+  if (suppressRefs())
+    markEntityOccurrenceInFile(IFaceD, ClassLoc);
+
+  ObjCProtocolListInfo ProtInfo(D->getReferencedProtocols(), *this, SA);
+  
   CatDInfo.ObjCCatDeclInfo.containerInfo = &CatDInfo.ObjCContDeclInfo;
   if (IFaceD) {
     CatDInfo.ObjCCatDeclInfo.objcClass = &ClassEntity;
@@ -383,6 +395,9 @@ bool IndexingContext::handleObjCCategory(const ObjCCategoryDecl *D) {
     CatDInfo.ObjCCatDeclInfo.classCursor = clang_getNullCursor();
   }
   CatDInfo.ObjCCatDeclInfo.classLoc = getIndexLoc(ClassLoc);
+  CatDInfo.ObjCProtoListInfo = ProtInfo.getListInfo();
+  CatDInfo.ObjCCatDeclInfo.protocols = &CatDInfo.ObjCProtoListInfo;
+
   return handleObjCContainer(D, CategoryLoc, getCursor(D), CatDInfo);
 }
 
@@ -393,7 +408,7 @@ bool IndexingContext::handleObjCCategoryImpl(const ObjCCategoryImplDecl *D) {
   StrAdapter SA(*this);
   const ObjCInterfaceDecl *IFaceD = CatD->getClassInterface();
   SourceLocation ClassLoc = D->getLocation();
-  SourceLocation CategoryLoc = ClassLoc; //FIXME: D->getCategoryNameLoc();
+  SourceLocation CategoryLoc = D->getCategoryNameLoc();
   getEntityInfo(IFaceD, ClassEntity, SA);
 
   CatDInfo.ObjCCatDeclInfo.containerInfo = &CatDInfo.ObjCContDeclInfo;
@@ -406,6 +421,8 @@ bool IndexingContext::handleObjCCategoryImpl(const ObjCCategoryImplDecl *D) {
     CatDInfo.ObjCCatDeclInfo.classCursor = clang_getNullCursor();
   }
   CatDInfo.ObjCCatDeclInfo.classLoc = getIndexLoc(ClassLoc);
+  CatDInfo.ObjCCatDeclInfo.protocols = 0;
+
   return handleObjCContainer(D, CategoryLoc, getCursor(D), CatDInfo);
 }
 
@@ -583,10 +600,13 @@ bool IndexingContext::handleCXXRecordDecl(const CXXRecordDecl *RD,
 
 bool IndexingContext::markEntityOccurrenceInFile(const NamedDecl *D,
                                                  SourceLocation Loc) {
+  if (!D || Loc.isInvalid())
+    return true;
+
   SourceManager &SM = Ctx->getSourceManager();
   D = getEntityDecl(D);
   
-  std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(Loc);
+  std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(SM.getFileLoc(Loc));
   FileID FID = LocInfo.first;
   if (FID.isInvalid())
     return true;

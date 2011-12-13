@@ -71,7 +71,11 @@ unsigned ContentCache::getSize() const {
 
 void ContentCache::replaceBuffer(const llvm::MemoryBuffer *B,
                                  bool DoNotFree) {
-  assert(B != Buffer.getPointer());
+  if (B == Buffer.getPointer()) {
+    assert(0 && "Replacing with the same buffer");
+    Buffer.setInt(DoNotFree? DoNotFreeFlag : 0);
+    return;
+  }
   
   if (shouldFreeBuffer())
     delete Buffer.getPointer();
@@ -947,12 +951,19 @@ const char *SourceManager::getCharacterData(SourceLocation SL,
 unsigned SourceManager::getColumnNumber(FileID FID, unsigned FilePos,
                                         bool *Invalid) const {
   bool MyInvalid = false;
-  const char *Buf = getBuffer(FID, &MyInvalid)->getBufferStart();
+  const llvm::MemoryBuffer *MemBuf = getBuffer(FID, &MyInvalid);
   if (Invalid)
     *Invalid = MyInvalid;
 
   if (MyInvalid)
     return 1;
+
+  const char *Buf = MemBuf->getBufferStart();
+  if (Buf + FilePos >= MemBuf->getBufferEnd()) {
+    if (Invalid)
+      *Invalid = MyInvalid;
+    return 1;
+  }
 
   unsigned LineStart = FilePos;
   while (LineStart && Buf[LineStart-1] != '\n' && Buf[LineStart-1] != '\r')

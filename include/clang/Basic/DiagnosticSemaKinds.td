@@ -485,10 +485,12 @@ def warn_strict_multiple_method_decl : Warning<
   "multiple methods named %0 found">, InGroup<StrictSelector>, DefaultIgnore;
 def warn_accessor_property_type_mismatch : Warning<
   "type of property %0 does not match type of accessor %1">;
-def note_declared_at : Note<"declared here">;
 def note_method_declared_at : Note<"method declared here">;
 def err_setter_type_void : Error<"type of setter must be void">;
 def err_duplicate_method_decl : Error<"duplicate declaration of method %0">;
+def warn_duplicate_method_decl : 
+  Warning<"multiple declarations of method %0 found and ignored">, 
+  InGroup<MethodDuplicate>;
 def err_objc_var_decl_inclass : 
     Error<"cannot declare variable inside @interface or @protocol">;
 def error_missing_method_context : Error<
@@ -701,6 +703,10 @@ def warn_weak_vtable : Warning<
   "%0 has no out-of-line virtual method definitions; its vtable will be "
   "emitted in every translation unit">,
   InGroup<DiagGroup<"weak-vtables">>, DefaultIgnore;
+def warn_weak_template_vtable : Warning<
+  "explicit template instantiation %0 will emit a vtable in every "
+  "translation unit">,
+  InGroup<DiagGroup<"weak-template-vtables">>, DefaultIgnore;
 
 def ext_using_undefined_std : ExtWarn<
   "using directive refers to implicitly-defined namespace 'std'">;
@@ -1141,6 +1147,8 @@ def err_cannot_determine_declared_type_of_overloaded_function : Error<
 def warn_cxx98_compat_decltype : Warning<
   "'decltype' type specifier is incompatible with C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
+def err_decltype_in_declarator : Error<
+    "'decltype' cannot be used to name a declaration">;
     
 // C++11 auto
 def warn_cxx98_compat_auto_type_specifier : Warning<
@@ -1653,6 +1661,10 @@ def warn_impcast_null_pointer_to_integer : Warning<
 def warn_impcast_function_to_bool : Warning<
     "address of function %q0 will always evaluate to 'true'">,
     InGroup<BoolConversions>;
+def note_function_to_bool_silence : Note<
+    "prefix with the address-of operator to silence this warning">;
+def note_function_to_bool_call : Note<
+    "suffix with parentheses to turn this into a function call">;
 
 def warn_cast_align : Warning<
   "cast from %0 to %1 increases required alignment from %2 to %3">,
@@ -3050,7 +3062,7 @@ def ext_flexible_array_empty_aggregate_gnu : Extension<
 def ext_flexible_array_union_gnu : Extension<
   "flexible array member %0 in a union is a GNU extension">, InGroup<GNU>;
 
-let CategoryName = "ARC Issue" in {
+let CategoryName = "ARC Semantic Issue" in {
 
 // ARC-mode diagnostics.
 
@@ -3062,6 +3074,9 @@ def err_arc_unsupported_weak_class : Error<
   "class is incompatible with __weak references">;
 def err_arc_weak_unavailable_assign : Error<
   "assignment of a weak-unavailable object to a __weak object">;
+def err_arc_weak_unavailable_property : Error<
+  "synthesis of a weak-unavailable property is disallowed "
+  "because it requires synthesis of an ivar of the __weak object">;
 def err_arc_convesion_of_weak_unavailable : Error<
   "%select{implicit conversion|cast}0 of weak-unavailable object of type %1 to"
   " a __weak object of type %2">;
@@ -3083,7 +3098,7 @@ def err_arc_mismatched_cast : Error<
 def err_arc_nolifetime_behavior : Error<
   "explicit ownership qualifier on cast result has no effect">;
 def err_arc_objc_object_in_struct : Error<
-  "ARC forbids Objective-C objects in structs or unions">;
+  "ARC forbids %select{Objective-C objects|blocks}0 in structs or unions">;
 def err_arc_objc_property_default_assign_on_object : Error<
   "ARC forbids synthesizing a property of an Objective-C object "
   "with unspecified ownership or storage attribute">;

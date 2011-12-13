@@ -593,6 +593,7 @@ void ASTDeclWriter::VisitObjCImplDecl(ObjCImplDecl *D) {
 void ASTDeclWriter::VisitObjCCategoryImplDecl(ObjCCategoryImplDecl *D) {
   VisitObjCImplDecl(D);
   Writer.AddIdentifierRef(D->getIdentifier(), Record);
+  Writer.AddSourceLocation(D->getCategoryNameLoc(), Record);
   Code = serialization::DECL_OBJC_CATEGORY_IMPL;
 }
 
@@ -975,7 +976,6 @@ void ASTDeclWriter::VisitCXXConversionDecl(CXXConversionDecl *D) {
 
 void ASTDeclWriter::VisitImportDecl(ImportDecl *D) {
   VisitDecl(D);
-  Writer.SubmoduleIDs[D->getImportedModule()];
   ArrayRef<SourceLocation> IdentifierLocs = D->getIdentifierLocs();
   Record.push_back(!IdentifierLocs.empty());
   if (IdentifierLocs.empty()) {

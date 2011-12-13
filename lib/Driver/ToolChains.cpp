@@ -1406,6 +1406,73 @@ const char *Generic_GCC::GetDefaultRelocationModel() const {
 const char *Generic_GCC::GetForcedPicModel() const {
   return 0;
 }
+/// Hexagon Toolchain
+
+Hexagon_TC::Hexagon_TC(const HostInfo &Host, const llvm::Triple& Triple)
+  : ToolChain(Host, Triple) {
+  getProgramPaths().push_back(getDriver().getInstalledDir());
+  if (getDriver().getInstalledDir() != getDriver().Dir.c_str())
+    getProgramPaths().push_back(getDriver().Dir);
+}
+
+Hexagon_TC::~Hexagon_TC() {
+  // Free tool implementations.
+  for (llvm::DenseMap<unsigned, Tool*>::iterator
+         it = Tools.begin(), ie = Tools.end(); it != ie; ++it)
+    delete it->second;
+}
+
+Tool &Hexagon_TC::SelectTool(const Compilation &C,
+                             const JobAction &JA,
+                             const ActionList &Inputs) const {
+  Action::ActionClass Key;
+  //   if (JA.getKind () == Action::CompileJobClass)
+  //     Key = JA.getKind ();
+  //     else
+
+  if (getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
+    Key = Action::AnalyzeJobClass;
+  else
+    Key = JA.getKind();
+  //   if ((JA.getKind () == Action::CompileJobClass)
+  //     && (JA.getType () != types::TY_LTO_BC)) {
+  //     Key = JA.getKind ();
+  //   }
+
+  Tool *&T = Tools[Key];
+  if (!T) {
+    switch (Key) {
+    case Action::InputClass:
+    case Action::BindArchClass:
+      assert(0 && "Invalid tool kind.");
+    case Action::AnalyzeJobClass:
+      T = new tools::Clang(*this); break;
+    case Action::AssembleJobClass:
+      T = new tools::hexagon::Assemble(*this); break;
+    case Action::LinkJobClass:
+      T = new tools::hexagon::Link(*this); break;
+    default:
+      assert(false && "Unsupported action for Hexagon target.");
+    }
+  }
+
+  return *T;
+}
+
+bool Hexagon_TC::IsUnwindTablesDefault() const {
+  // FIXME: Gross; we should probably have some separate target
+  // definition, possibly even reusing the one in clang.
+  return getArchName() == "x86_64";
+}
+
+const char *Hexagon_TC::GetDefaultRelocationModel() const {
+  return "static";
+}
+
+const char *Hexagon_TC::GetForcedPicModel() const {
+  return 0;
+} // End Hexagon
+
 
 /// TCEToolChain - A tool chain using the llvm bitcode tools to perform
 /// all subcommands. See http://tce.cs.tut.fi for our peculiar target.
@@ -1612,11 +1679,9 @@ Tool &NetBSD::SelectTool(const Compilation &C, const JobAction &JA,
 /// Minix - Minix tool chain which can call as(1) and ld(1) directly.
 
 Minix::Minix(const HostInfo &Host, const llvm::Triple& Triple)
-  : Generic_GCC(Host, Triple) {
+  : Generic_ELF(Host, Triple) {
   getFilePaths().push_back(getDriver().Dir + "/../lib");
   getFilePaths().push_back("/usr/lib");
-  getFilePaths().push_back("/usr/gnu/lib");
-  getFilePaths().push_back("/usr/gnu/lib/gcc/i686-pc-minix/4.4.3");
 }
 
 Tool &Minix::SelectTool(const Compilation &C, const JobAction &JA,
@@ -1884,13 +1949,24 @@ Linux::Linux(const HostInfo &Host, const llvm::Triple &Triple)
   if (Arch == llvm::Triple::arm || Arch == llvm::Triple::thumb)
     ExtraOpts.push_back("-X");
 
-  if (IsRedhat(Distro) || IsOpenSuse(Distro) || Distro == UbuntuMaverick ||
-      Distro == UbuntuNatty || Distro == UbuntuOneiric)
-    ExtraOpts.push_back("--hash-style=gnu");
+  const bool IsMips = Arch == llvm::Triple::mips ||
+                      Arch == llvm::Triple::mipsel ||
+                      Arch == llvm::Triple::mips64 ||
+                      Arch == llvm::Triple::mips64el;
 
-  if (IsDebian(Distro) || IsOpenSuse(Distro) || Distro == UbuntuLucid ||
-      Distro == UbuntuJaunty || Distro == UbuntuKarmic)
-    ExtraOpts.push_back("--hash-style=both");
+  // Do not use 'gnu' hash style for Mips targets because .gnu.hash
+  // and the MIPS ABI require .dynsym to be sorted in different ways.
+  // .gnu.hash needs symbols to be grouped by hash code whereas the MIPS
+  // ABI requires a mapping between the GOT and the symbol table.
+  if (!IsMips) {
+    if (IsRedhat(Distro) || IsOpenSuse(Distro) || Distro == UbuntuMaverick ||
+        Distro == UbuntuNatty || Distro == UbuntuOneiric)
+      ExtraOpts.push_back("--hash-style=gnu");
+
+    if (IsDebian(Distro) || IsOpenSuse(Distro) || Distro == UbuntuLucid ||
+        Distro == UbuntuJaunty || Distro == UbuntuKarmic)
+      ExtraOpts.push_back("--hash-style=both");
+  }
 
   if (IsRedhat(Distro))
     ExtraOpts.push_back("--no-add-needed");
