@@ -1155,7 +1155,10 @@ public:
 //    UIntMaxType = UnsignedLong;
 //    Int64Type = SignedLongLong;
     // This must match llvm/lib/Target/Mico32/Mico32TargetMachine.cpp
-    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:8:8-S32-s0:32:32-n32";
+//    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:8:8-S32-s0:32:32-n32";
+//    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:64:64-a0:8:8-S32-s0:32:32-n32";
+DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-f32:32:32-f64:32:32-a0:8:8-S32-s0:32:32-n32";
+
 //    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:32:32-S32-s0:32:32-n32";
     // Define available target features
     // These must be defined in sorted order!      
