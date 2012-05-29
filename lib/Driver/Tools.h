@@ -153,6 +153,36 @@ namespace gcc {
   };
 } // end namespace gcc
 
+  /// baremetal -- Directly call GNU Binutils assembler and linker
+namespace baremetal {
+  class LLVM_LIBRARY_VISIBILITY Assemble : public Tool  {
+  public:
+    Assemble(const ToolChain &TC) : Tool("baremetal::Assemble", "assembler",
+                                         TC) {}
+
+    virtual bool hasIntegratedCPP() const { return false; }
+
+    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const ArgList &TCArgs,
+                              const char *LinkingOutput) const;
+  };
+  class LLVM_LIBRARY_VISIBILITY Link : public Tool  {
+  public:
+    Link(const ToolChain &TC) : Tool("baremetal::Link", "linker", TC) {}
+
+    virtual bool hasIntegratedCPP() const { return false; }
+
+    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const ArgList &TCArgs,
+                              const char *LinkingOutput) const;
+  };
+} // end namespace baremetal
+
+
 namespace hexagon {
   // For Hexagon, we do not need to instantiate tools for PreProcess, PreCompile and Compile.
   // We simply use "clang -cc1" for those actions.

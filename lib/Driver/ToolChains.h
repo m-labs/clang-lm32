@@ -442,6 +442,14 @@ public:
                            const ActionList &Inputs) const;
 };
 
+class LLVM_LIBRARY_VISIBILITY BareMetal : public Generic_ELF {
+public:
+  BareMetal(const HostInfo &Host, const llvm::Triple& Triple);
+
+  virtual Tool &SelectTool(const Compilation &C, const JobAction &JA,
+                           const ActionList &Inputs) const;
+};
+
 class LLVM_LIBRARY_VISIBILITY OpenBSD : public Generic_ELF {
 public:
   OpenBSD(const HostInfo &Host, const llvm::Triple& Triple);

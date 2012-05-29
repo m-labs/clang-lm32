@@ -1574,6 +1574,9 @@ const HostInfo *Driver::GetHostInfo(const char *TripleStr) const {
   llvm::PrettyStackTraceString CrashInfo("Constructing host");
   llvm::Triple Triple(llvm::Triple::normalize(TripleStr).c_str());
 
+  if (Triple.getEnvironment() == llvm::Triple::ELF)
+    return createBareMetalHostInfo(*this, Triple);
+  
   // TCE is an osless target
   if (Triple.getArchName() == "tce")
     return createTCEHostInfo(*this, Triple);

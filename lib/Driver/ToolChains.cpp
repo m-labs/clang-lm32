@@ -1406,6 +1406,36 @@ const char *Generic_GCC::GetDefaultRelocationModel() const {
 const char *Generic_GCC::GetForcedPicModel() const {
   return 0;
 }
+
+/// BareMetal - Bare metal tool chain which can call as(1) and ld(1) directly.
+
+BareMetal::BareMetal(const HostInfo &Host, const llvm::Triple& Triple)
+  : Generic_ELF(Host, Triple) {
+}
+
+Tool &BareMetal::SelectTool(const Compilation &C, const JobAction &JA,
+                        const ActionList &Inputs) const {
+  Action::ActionClass Key;
+  if (getDriver().ShouldUseClangCompiler(C, JA, getTriple()))
+    Key = Action::AnalyzeJobClass;
+  else
+    Key = JA.getKind();
+
+  Tool *&T = Tools[Key];
+  if (!T) {
+    switch (Key) {
+    case Action::AssembleJobClass:
+      T = new tools::baremetal::Assemble(*this); break;
+    case Action::LinkJobClass:
+      T = new tools::baremetal::Link(*this); break;
+    default:
+      T = &Generic_GCC::SelectTool(C, JA, Inputs);
+    }
+  }
+
+  return *T;
+}
+
 /// Hexagon Toolchain
 
 Hexagon_TC::Hexagon_TC(const HostInfo &Host, const llvm::Triple& Triple)

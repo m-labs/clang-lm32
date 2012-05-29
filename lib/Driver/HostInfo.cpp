@@ -34,6 +34,54 @@ HostInfo::~HostInfo() {
 
 namespace {
 
+// Bare metal Host Info
+
+/// BareMetalHostInfo -  Bare metal host information implementation.
+class BareMetalHostInfo : public HostInfo {
+  /// Cache of tool chains we have created.
+  mutable llvm::StringMap<ToolChain*> ToolChains;
+
+public:
+  BareMetalHostInfo(const Driver &D, const llvm::Triple& Triple)
+    : HostInfo(D, Triple) {}
+  ~BareMetalHostInfo();
+
+  virtual bool useDriverDriver() const;
+
+  virtual ToolChain *CreateToolChain(const ArgList &Args,
+                                     const char *ArchName) const;
+};
+
+BareMetalHostInfo::~BareMetalHostInfo() {
+  for (llvm::StringMap<ToolChain*>::iterator
+         it = ToolChains.begin(), ie = ToolChains.end(); it != ie; ++it){
+    delete it->second;
+  }
+}
+
+bool BareMetalHostInfo::useDriverDriver() const {
+  return false;
+}
+
+ToolChain *BareMetalHostInfo::CreateToolChain(const ArgList &Args,
+                                            const char *ArchName) const {
+  assert(!ArchName &&
+         "Unexpected arch name on platform without driver driver support.");
+
+  std::string Arch = getArchName();
+  ArchName = Arch.c_str();
+
+  ToolChain *&TC = ToolChains[ArchName];
+  if (!TC) {
+    llvm::Triple TCTriple(getTriple());
+    TCTriple.setArchName(ArchName);
+
+    TC = new toolchains::BareMetal(*this, TCTriple);
+  }
+
+  return TC;
+}
+
 // Darwin Host Info
 
 /// DarwinHostInfo - Darwin host information implementation.
@@ -667,6 +715,12 @@ const HostInfo *
 clang::driver::createAuroraUXHostInfo(const Driver &D,
                                       const llvm::Triple& Triple){
   return new AuroraUXHostInfo(D, Triple);
+}
+
+const HostInfo *
+clang::driver::createBareMetalHostInfo(const Driver &D,
+                                     const llvm::Triple& Triple) {
+  return new BareMetalHostInfo(D, Triple);
 }
 
 const HostInfo *
