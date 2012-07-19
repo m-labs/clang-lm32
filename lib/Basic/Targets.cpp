@@ -1280,6 +1280,128 @@ void MBlazeTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
 } // end anonymous namespace.
 
 namespace {
+// LM32 abstract base class
+class LM32TargetInfo : public TargetInfo {
+  static const char * const GCCRegNames[];
+  static const TargetInfo::GCCRegAlias GCCRegAliases[];
+  std::vector<llvm::StringRef> AvailableFeatures;
+
+public:
+  LM32TargetInfo(const std::string& triple) : TargetInfo(triple) {
+//    PointerWidth = PointerAlign = 32;
+//    LongWidth = LongAlign = 32;
+    LongLongWidth = 64;
+    LongLongAlign = 32;
+    DoubleWidth = 64;
+    DoubleAlign = 32;
+    LongDoubleWidth = 64;
+    LongDoubleAlign = 32;
+//    IntMaxType = SignedLong;
+//    UIntMaxType = UnsignedLong;
+//    Int64Type = SignedLongLong;
+    // This must match llvm/lib/Target/LM32/LM32TargetMachine.cpp
+//    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:8:8-S32-s0:32:32-n32";
+//    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:64:64-a0:8:8-S32-s0:32:32-n32";
+DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-f32:32:32-f64:32:32-a0:8:8-S32-s0:32:32-n32";
+
+//    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:32:32-S32-s0:32:32-n32";
+    // Define available target features
+    // These must be defined in sorted order!      
+//    AvailableFeatures.push_back("barrel");
+//    AvailableFeatures.push_back("div");
+//    AvailableFeatures.push_back("mul");
+//    AvailableFeatures.push_back("sdiv");
+    AvailableFeatures.push_back("nospbias");
+  }
+
+  virtual void getTargetBuiltins(const Builtin::Info *&Records,
+                                 unsigned &NumRecords) const {
+    // FIXME: Implement.
+    Records = 0;
+    NumRecords = 0;
+  }
+
+  virtual void getTargetDefines(const LangOptions &Opts,
+                                MacroBuilder &Builder) const;
+
+  virtual BuiltinVaListKind getBuiltinVaListKind() const {
+    return TargetInfo::CharPtrBuiltinVaList;
+  }
+  virtual const char *getTargetPrefix() const {
+    return "lm32";
+  }
+  virtual void getGCCRegNames(const char * const *&Names,
+                              unsigned &NumNames) const;
+  virtual void getGCCRegAliases(const GCCRegAlias *&Aliases,
+                                  unsigned &NumAliases) const {
+      // No aliases.
+      Aliases = 0;
+      NumAliases = 0;
+    }
+  virtual bool validateAsmConstraint(const char *&Name,
+                                     TargetInfo::ConstraintInfo &Info) const {
+    switch (*Name) {
+    default: return false;
+    case 'O': // Zero
+      return true;
+    case 'b': // Base register
+    case 'f': // Floating point register
+      Info.setAllowsRegister();
+      return true;
+    }
+  }
+  virtual const char *getClobbers() const {
+    return "";
+  }
+
+  bool setFeatureEnabled(llvm::StringMap<bool> &Features,
+                                           StringRef Name,
+                                           bool Enabled) const {
+    if(std::binary_search(AvailableFeatures.begin(), AvailableFeatures.end(),
+                          Name)) {
+      Features[Name] = Enabled;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+};
+
+/// LM32TargetInfo::getTargetDefines - Return a set of the LM32-specific
+/// #defines that are not tied to a specific subtarget.
+void LM32TargetInfo::getTargetDefines(const LangOptions &Opts,
+                                     MacroBuilder &Builder) const {
+  // Target identification.
+  Builder.defineMacro("__lm32__");
+  Builder.defineMacro("__LM32__");
+  Builder.defineMacro("_ARCH_LM32");
+
+  // Target properties.
+  Builder.defineMacro("_BIG_ENDIAN");
+  Builder.defineMacro("__BIG_ENDIAN__");
+
+  // Subtarget options.
+  Builder.defineMacro("__REGISTER_PREFIX__", "");
+}
+
+
+const char * const LM32TargetInfo::GCCRegNames[] = {
+  "r0",   "r1",   "r2",   "r3",   "r4",   "r5",   "r6",   "r7",
+  "r8",   "r9",   "r10",  "r11",  "r12",  "r13",  "r14",  "r15",
+  "r16",  "r17",  "r18",  "r19",  "r20",  "r21",  "r22",  "r23",
+  "r24",  "r25",  "r26",  "r27",  "r28",  "r29",  "r30",  "r31"
+};
+
+void LM32TargetInfo::getGCCRegNames(const char * const *&Names,
+                                   unsigned &NumNames) const {
+  Names = GCCRegNames;
+  NumNames = llvm::array_lengthof(GCCRegNames);
+}
+
+} // end anonymous namespace.
+
+namespace {
 // Namespace for x86 abstract base class
 const Builtin::Info BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS) { #ID, TYPE, ATTRS, 0, ALL_LANGUAGES },
@@ -4263,6 +4385,9 @@ static TargetInfo *AllocateTarget(const std::string &T) {
 
   case llvm::Triple::mblaze:
     return new MBlazeTargetInfo(T);
+    
+  case llvm::Triple::lm32:
+    return new LM32TargetInfo(T);
 
   case llvm::Triple::sparc:
     switch (os) {

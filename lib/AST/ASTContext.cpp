@@ -1350,6 +1350,8 @@ CharUnits ASTContext::getTypeAlignInChars(const Type *T) const {
 unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
   unsigned ABIAlign = getTypeAlign(T);
 
+/*  This assumes overaligning is a performance boost - it's not
+    with LM32 and this over aligns to 64bits and breaks the ABI.
   // Double and long long should be naturally aligned if possible.
   if (const ComplexType* CT = T->getAs<ComplexType>())
     T = CT->getElementType().getTypePtr();
@@ -1357,6 +1359,7 @@ unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
       T->isSpecificBuiltinType(BuiltinType::LongLong) ||
       T->isSpecificBuiltinType(BuiltinType::ULongLong))
     return std::max(ABIAlign, (unsigned)getTypeSize(T));
+*/
 
   return ABIAlign;
 }
