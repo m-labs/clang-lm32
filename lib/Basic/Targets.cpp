@@ -1162,11 +1162,11 @@ DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-f32:32:3
 //    DescriptionString = "E-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-a0:32:32-S32-s0:32:32-n32";
     // Define available target features
     // These must be defined in sorted order!      
-//    AvailableFeatures.push_back("barrel");
-//    AvailableFeatures.push_back("div");
-//    AvailableFeatures.push_back("mul");
-//    AvailableFeatures.push_back("sdiv");
+    AvailableFeatures.push_back("barrel");
+    AvailableFeatures.push_back("div");
+    AvailableFeatures.push_back("mul");
     AvailableFeatures.push_back("nospbias");
+    AvailableFeatures.push_back("sdiv");
   }
 
   virtual void getTargetBuiltins(const Builtin::Info *&Records,
