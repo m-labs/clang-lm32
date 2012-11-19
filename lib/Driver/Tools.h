@@ -202,6 +202,8 @@ namespace hexagon {
 
 
 namespace darwin {
+  llvm::Triple::ArchType getArchTypeForDarwinArchName(StringRef Str);
+
   class LLVM_LIBRARY_VISIBILITY DarwinTool : public Tool {
     virtual void anchor();
   protected:
@@ -288,8 +290,9 @@ namespace darwin {
   };
 
   class LLVM_LIBRARY_VISIBILITY Link : public DarwinTool  {
+    bool NeedsTempPath(const InputInfoList &Inputs) const;
     void AddLinkArgs(Compilation &C, const ArgList &Args,
-                     ArgStringList &CmdArgs) const;
+                     ArgStringList &CmdArgs, const InputInfoList &Inputs) const;
 
   public:
     Link(const ToolChain &TC) : DarwinTool("darwin::Link", "linker", TC) {}
@@ -376,6 +379,36 @@ namespace openbsd {
                               const char *LinkingOutput) const;
   };
 } // end namespace openbsd
+
+  /// bitrig -- Directly call GNU Binutils assembler and linker
+namespace bitrig {
+  class LLVM_LIBRARY_VISIBILITY Assemble : public Tool  {
+  public:
+    Assemble(const ToolChain &TC) : Tool("bitrig::Assemble", "assembler",
+                                         TC) {}
+
+    virtual bool hasIntegratedCPP() const { return false; }
+
+    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const ArgList &TCArgs,
+                              const char *LinkingOutput) const;
+  };
+  class LLVM_LIBRARY_VISIBILITY Link : public Tool  {
+  public:
+    Link(const ToolChain &TC) : Tool("bitrig::Link", "linker", TC) {}
+
+    virtual bool hasIntegratedCPP() const { return false; }
+    virtual bool isLinkJob() const { return true; }
+
+    virtual void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const ArgList &TCArgs,
+                              const char *LinkingOutput) const;
+  };
+} // end namespace bitrig
 
   /// freebsd -- Directly call GNU Binutils assembler and linker
 namespace freebsd {

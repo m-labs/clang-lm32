@@ -192,13 +192,7 @@ const char GenericTaintChecker::MsgTaintedBufferSize[] =
 /// to the call post-visit. The values are unsigned integers, which are either
 /// ReturnValueIndex, or indexes of the pointer/reference argument, which
 /// points to data, which should be tainted on return.
-namespace { struct TaintArgsOnPostVisit{}; }
-namespace clang { namespace ento {
-template<> struct ProgramStateTrait<TaintArgsOnPostVisit>
-    :  public ProgramStatePartialTrait<llvm::ImmutableSet<unsigned> > {
-  static void *GDMIndex() { return GenericTaintChecker::getTag(); }
-};
-}}
+REGISTER_SET_WITH_PROGRAMSTATE(TaintArgsOnPostVisit, unsigned)
 
 GenericTaintChecker::TaintPropagationRule
 GenericTaintChecker::TaintPropagationRule::getTaintPropagationRule(
@@ -337,7 +331,7 @@ bool GenericTaintChecker::propagateFromPre(const CallExpr *CE,
   // Depending on what was tainted at pre-visit, we determined a set of
   // arguments which should be tainted after the function returns. These are
   // stored in the state as TaintArgsOnPostVisit set.
-  llvm::ImmutableSet<unsigned> TaintArgs = State->get<TaintArgsOnPostVisit>();
+  TaintArgsOnPostVisitTy TaintArgs = State->get<TaintArgsOnPostVisit>();
   if (TaintArgs.isEmpty())
     return false;
 
@@ -559,7 +553,6 @@ ProgramStateRef GenericTaintChecker::postScanf(const CallExpr *CE,
   if (CE->getNumArgs() < 2)
     return State;
 
-  SVal x = State->getSVal(CE->getArg(1), C.getLocationContext());
   // All arguments except for the very first one should get taint.
   for (unsigned int i = 1; i < CE->getNumArgs(); ++i) {
     // The arguments are pointer arguments. The data they are pointing at is
@@ -654,7 +647,7 @@ bool GenericTaintChecker::generateReportIfTainted(const Expr *E,
     initBugType();
     BugReport *report = new BugReport(*BT, Msg, N);
     report->addRange(E->getSourceRange());
-    C.EmitReport(report);
+    C.emitReport(report);
     return true;
   }
   return false;

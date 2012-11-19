@@ -62,7 +62,6 @@ class LangOptions;
 class ASTWriter;
 class ASTReader;
 
-/// \namespace
 /// \brief Public enums and private classes that are part of the
 /// SourceManager implementation.
 ///
@@ -221,7 +220,7 @@ namespace SrcMgr {
 
   private:
     // Disable assignments.
-    ContentCache &operator=(const ContentCache& RHS);
+    ContentCache &operator=(const ContentCache& RHS) LLVM_DELETED_FUNCTION;
   };
 
   /// \brief Information about a FileID, basically just the logical file
@@ -647,8 +646,8 @@ class SourceManager : public RefCountedBase<SourceManager> {
   mutable llvm::DenseMap<FileID, MacroArgsMap *> MacroArgsCacheMap;
 
   // SourceManager doesn't support copy construction.
-  explicit SourceManager(const SourceManager&);
-  void operator=(const SourceManager&);
+  explicit SourceManager(const SourceManager&) LLVM_DELETED_FUNCTION;
+  void operator=(const SourceManager&) LLVM_DELETED_FUNCTION;
 public:
   SourceManager(DiagnosticsEngine &Diag, FileManager &FileMgr,
                 bool UserFilesAreVolatile = false);
@@ -675,9 +674,10 @@ public:
   ///
   /// One example of when this would be used is when the main source is read
   /// from STDIN.
-  FileID createMainFileIDForMemBuffer(const llvm::MemoryBuffer *Buffer) {
+  FileID createMainFileIDForMemBuffer(const llvm::MemoryBuffer *Buffer,
+                             SrcMgr::CharacteristicKind Kind = SrcMgr::C_User) {
     assert(MainFileID.isInvalid() && "MainFileID already set!");
-    MainFileID = createFileIDForMemBuffer(Buffer);
+    MainFileID = createFileIDForMemBuffer(Buffer, Kind);
     return MainFileID;
   }
 
@@ -734,10 +734,11 @@ public:
   /// This does no caching of the buffer and takes ownership of the
   /// MemoryBuffer, so only pass a MemoryBuffer to this once.
   FileID createFileIDForMemBuffer(const llvm::MemoryBuffer *Buffer,
+                      SrcMgr::CharacteristicKind FileCharacter = SrcMgr::C_User,
                                   int LoadedID = 0, unsigned LoadedOffset = 0,
                                  SourceLocation IncludeLoc = SourceLocation()) {
     return createFileID(createMemBufferContentCache(Buffer), IncludeLoc,
-                        SrcMgr::C_User, LoadedID, LoadedOffset);
+                        FileCharacter, LoadedID, LoadedOffset);
   }
 
   /// \brief Return a new SourceLocation that encodes the
@@ -779,7 +780,7 @@ public:
                             const llvm::MemoryBuffer *Buffer,
                             bool DoNotFree = false);
 
-  /// \brief Override the the given source file with another one.
+  /// \brief Override the given source file with another one.
   ///
   /// \param SourceFile the source file which will be overriden.
   ///
@@ -1186,7 +1187,8 @@ public:
   /// presumed location cannot be calculate (e.g., because \p Loc is invalid
   /// or the file containing \p Loc has changed on disk), returns an invalid
   /// presumed location.
-  PresumedLoc getPresumedLoc(SourceLocation Loc) const;
+  PresumedLoc getPresumedLoc(SourceLocation Loc,
+                             bool UseLineDirectives = true) const;
 
   /// \brief Returns true if both SourceLocations correspond to the same file.
   bool isFromSameFile(SourceLocation Loc1, SourceLocation Loc2) const {
@@ -1422,7 +1424,8 @@ public:
 
   /// Get a presumed location suitable for displaying in a diagnostic message,
   /// taking into account macro arguments and expansions.
-  PresumedLoc getPresumedLocForDisplay(SourceLocation Loc) const {
+  PresumedLoc getPresumedLocForDisplay(SourceLocation Loc,
+                                       bool UseLineDirectives = true) const{
     // This is a condensed form of the algorithm used by emitCaretDiagnostic to
     // walk to the top of the macro call stack.
     while (Loc.isMacroID()) {
@@ -1430,7 +1433,7 @@ public:
       Loc = getImmediateMacroCallerLoc(Loc);
     }
 
-    return getPresumedLoc(Loc);
+    return getPresumedLoc(Loc, UseLineDirectives);
   }
 
   /// Look through spelling locations for a macro argument expansion, and if
@@ -1517,13 +1520,12 @@ private:
       return true;
 
     // If it is the last local entry, then it does if the location is local.
-    if (static_cast<unsigned>(FID.ID+1) == LocalSLocEntryTable.size()) {
+    if (FID.ID+1 == static_cast<int>(LocalSLocEntryTable.size()))
       return SLocOffset < NextLocalOffset;
-    }
 
     // Otherwise, the entry after it has to not include it. This works for both
     // local and loaded entries.
-    return SLocOffset < getSLocEntry(FileID::get(FID.ID+1)).getOffset();
+    return SLocOffset < getSLocEntryByID(FID.ID+1).getOffset();
   }
 
   /// \brief Create a new fileID for the specified ContentCache and
@@ -1558,7 +1560,11 @@ private:
   getDecomposedSpellingLocSlowCase(const SrcMgr::SLocEntry *E,
                                    unsigned Offset) const;
   void computeMacroArgsCache(MacroArgsMap *&MacroArgsCache, FileID FID) const;
-
+  void associateFileChunkWithMacroArgExp(MacroArgsMap &MacroArgsCache,
+                                         FileID FID,
+                                         SourceLocation SpellLoc,
+                                         SourceLocation ExpansionLoc,
+                                         unsigned ExpansionLength) const;
   friend class ASTReader;
   friend class ASTWriter;
 };

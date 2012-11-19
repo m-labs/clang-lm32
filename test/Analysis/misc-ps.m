@@ -1,8 +1,6 @@
 // NOTE: Use '-fobjc-gc' to test the analysis being run twice, and multiple reports are not issued.
-// RUN: %clang_cc1 -triple i386-apple-darwin10 -analyze -analyzer-checker=core,experimental.deadcode.IdempotentOperations,experimental.core,osx.cocoa.AtSync,osx.AtomicCAS -analyzer-store=region -analyzer-constraints=basic -verify -fblocks -Wno-unreachable-code -Wno-null-dereference -Wno-objc-root-class %s
-// RUN: %clang_cc1 -triple i386-apple-darwin10 -analyze -analyzer-checker=core,experimental.deadcode.IdempotentOperations,experimental.core,osx.cocoa.AtSync,osx.AtomicCAS -analyzer-store=region -analyzer-constraints=range -verify -fblocks -Wno-unreachable-code -Wno-null-dereference -Wno-objc-root-class %s
-// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -analyze -analyzer-checker=core,experimental.deadcode.IdempotentOperations,experimental.core,osx.cocoa.AtSync,osx.AtomicCAS -analyzer-store=region -analyzer-constraints=basic -verify -fblocks -Wno-unreachable-code -Wno-null-dereference -Wno-objc-root-class %s
-// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -analyze -analyzer-checker=core,experimental.deadcode.IdempotentOperations,experimental.core,osx.cocoa.AtSync,osx.AtomicCAS -analyzer-store=region -analyzer-constraints=range -verify -fblocks -Wno-unreachable-code -Wno-null-dereference -Wno-objc-root-class %s
+// RUN: %clang_cc1 -triple i386-apple-darwin10 -analyze -analyzer-checker=core,alpha.deadcode.IdempotentOperations,alpha.core,osx.cocoa.AtSync -analyzer-store=region -analyzer-constraints=range -verify -fblocks -Wno-unreachable-code -Wno-null-dereference -Wno-objc-root-class %s
+// RUN: %clang_cc1 -triple x86_64-apple-darwin10 -analyze -analyzer-checker=core,alpha.deadcode.IdempotentOperations,alpha.core,osx.cocoa.AtSync -analyzer-store=region -analyzer-constraints=range -verify -fblocks -Wno-unreachable-code -Wno-null-dereference -Wno-objc-root-class %s
 
 #ifndef __clang_analyzer__
 #error __clang_analyzer__ not defined
@@ -1152,11 +1150,11 @@ void rdar8578650(id x) {
 @implementation RDar6352035
 - (void)foo {
   RDar6352035 *friend = 0;
-  friend->c = 7; // expected-warning{{Instance variable access (via 'friend') results in a null pointer dereference}}
+  friend->c = 7; // expected-warning{{Access to instance variable 'c' results in a dereference of a null pointer (loaded from variable 'friend')}}
 }
 - (void)bar {
   self = 0;
-  c = 7; // expected-warning{{Instance variable access (via 'self') results in a null pointer dereference}}
+  c = 7; // expected-warning{{Access to instance variable 'c' results in a dereference of a null pointer (loaded from variable 'self')}}
 }
 @end
 
@@ -1355,4 +1353,21 @@ void radar9414427() {
   }();
 }
 @end
+
+// Don't crash when a ?: is only preceded by a statement (not an expression)
+// in the CFG.
+void __assert_fail();
+
+enum rdar1196620_e { E_A, E_B, E_C, E_D };
+struct rdar1196620_s { int ints[E_D+1]; };
+
+static void rdar1196620_call_assert(struct rdar1196620_s* s) {
+  int i = 0;
+  s?(void)0:__assert_fail();
+}
+
+static void rdar1196620(struct rdar1196620_s* s) {
+  rdar1196620_call_assert(s);
+}
+
 

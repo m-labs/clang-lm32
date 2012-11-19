@@ -1,13 +1,13 @@
-// RUN: %clang_cc1  -fsyntax-only -verify -Wobjc-interface-ivars %s
+// RUN: %clang_cc1  -fsyntax-only -verify -Wno-objc-root-class -Wobjc-interface-ivars %s
 // rdar://10763173
 
 @interface I
 {
-  @protected  int P_IVAR; // expected-warning {{declaration of ivars in the interface is deprecated}}
+  @protected  int P_IVAR; // expected-warning {{declaration of instance variables in the interface is deprecated}}
 
-  @public     int PU_IVAR; // expected-warning {{declaration of ivars in the interface is deprecated}}
+  @public     int PU_IVAR; // expected-warning {{declaration of instance variables in the interface is deprecated}}
 
-  @private    int PRV_IVAR; // expected-warning {{declaration of ivars in the interface is deprecated}}
+  @private    int PRV_IVAR; // expected-warning {{declaration of instance variables in the interface is deprecated}}
 }
 @end
 

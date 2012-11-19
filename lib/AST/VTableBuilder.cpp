@@ -165,7 +165,7 @@ FinalOverriders::FinalOverriders(const CXXRecordDecl *MostDerivedClass,
                      SubobjectOffsets, SubobjectLayoutClassOffsets, 
                      SubobjectCounts);
 
-  // Get the the final overriders.
+  // Get the final overriders.
   CXXFinalOverriderMap FinalOverriders;
   MostDerivedClass->getFinalOverriders(FinalOverriders);
 
@@ -1890,6 +1890,9 @@ void VTableBuilder::dumpLayout(raw_ostream& Out) {
       Out << Str;
       if (MD->isPure())
         Out << " [pure]";
+
+      if (MD->isDeleted())
+        Out << " [deleted]";
 
       ThunkInfo Thunk = VTableThunks.lookup(I);
       if (!Thunk.isEmpty()) {

@@ -20,6 +20,7 @@
 #include "clang/Basic/Linkage.h"
 #include "clang/Basic/PartialDiagnostic.h"
 #include "clang/Basic/Visibility.h"
+#include "clang/Basic/Specifiers.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/TemplateName.h"
 #include "llvm/Support/type_traits.h"
@@ -159,6 +160,44 @@ public:
   };
 
   Qualifiers() : Mask(0) {}
+
+  /// \brief Returns the common set of qualifiers while removing them from
+  /// the given sets.
+  static Qualifiers removeCommonQualifiers(Qualifiers &L, Qualifiers &R) {
+    // If both are only CVR-qualified, bit operations are sufficient.
+    if (!(L.Mask & ~CVRMask) && !(R.Mask & ~CVRMask)) {
+      Qualifiers Q;
+      Q.Mask = L.Mask & R.Mask;
+      L.Mask &= ~Q.Mask;
+      R.Mask &= ~Q.Mask;
+      return Q;
+    }
+
+    Qualifiers Q;
+    unsigned CommonCRV = L.getCVRQualifiers() & R.getCVRQualifiers();
+    Q.addCVRQualifiers(CommonCRV);
+    L.removeCVRQualifiers(CommonCRV);
+    R.removeCVRQualifiers(CommonCRV);
+
+    if (L.getObjCGCAttr() == R.getObjCGCAttr()) {
+      Q.setObjCGCAttr(L.getObjCGCAttr());
+      L.removeObjCGCAttr();
+      R.removeObjCGCAttr();
+    }
+
+    if (L.getObjCLifetime() == R.getObjCLifetime()) {
+      Q.setObjCLifetime(L.getObjCLifetime());
+      L.removeObjCLifetime();
+      R.removeObjCLifetime();
+    }
+
+    if (L.getAddressSpace() == R.getAddressSpace()) {
+      Q.setAddressSpace(L.getAddressSpace());
+      L.removeAddressSpace();
+      R.removeAddressSpace();
+    }
+    return Q;
+  }
 
   static Qualifiers fromFastMask(unsigned Mask) {
     Qualifiers Qs;
@@ -333,6 +372,23 @@ public:
     }
   }
 
+  /// \brief Remove the qualifiers from the given set from this set.
+  void removeQualifiers(Qualifiers Q) {
+    // If the other set doesn't have any non-boolean qualifiers, just
+    // bit-and the inverse in.
+    if (!(Q.Mask & ~CVRMask))
+      Mask &= ~Q.Mask;
+    else {
+      Mask &= ~(Q.Mask & CVRMask);
+      if (getObjCGCAttr() == Q.getObjCGCAttr())
+        removeObjCGCAttr();
+      if (getObjCLifetime() == Q.getObjCLifetime())
+        removeObjCLifetime();
+      if (getAddressSpace() == Q.getAddressSpace())
+        removeAddressSpace();
+    }
+  }
+
   /// \brief Add the qualifiers from the given set to this set, given that
   /// they don't conflict.
   void addConsistentQualifiers(Qualifiers qs) {
@@ -378,8 +434,6 @@ public:
     return hasConst();
   }
 
-  bool isSupersetOf(Qualifiers Other) const;
-
   /// \brief Determine whether this set of qualifiers is a strict superset of
   /// another set of qualifiers, not considering qualifier compatibility.
   bool isStrictSupersetOf(Qualifiers Other) const;
@@ -402,7 +456,7 @@ public:
   }
 
   Qualifiers &operator-=(Qualifiers R) {
-    Mask = Mask & ~(R.Mask);
+    removeQualifiers(R);
     return *this;
   }
 
@@ -435,18 +489,6 @@ private:
   static const uint32_t LifetimeShift = 5;
   static const uint32_t AddressSpaceMask = ~(CVRMask|GCAttrMask|LifetimeMask);
   static const uint32_t AddressSpaceShift = 8;
-};
-
-/// CallingConv - Specifies the calling convention that a function uses.
-enum CallingConv {
-  CC_Default,
-  CC_C,           // __attribute__((cdecl))
-  CC_X86StdCall,  // __attribute__((stdcall))
-  CC_X86FastCall, // __attribute__((fastcall))
-  CC_X86ThisCall, // __attribute__((thiscall))
-  CC_X86Pascal,   // __attribute__((pascal))
-  CC_AAPCS,       // __attribute__((pcs("aapcs")))
-  CC_AAPCS_VFP    // __attribute__((pcs("aapcs-vfp")))
 };
 
 /// A std::pair-like structure for storing a qualified type split
@@ -937,10 +979,6 @@ public:
   ///   type other than void.
   bool isCForbiddenLValueType() const;
 
-  /// \brief Determine whether this type has trivial copy/move-assignment
-  ///        semantics.
-  bool hasTrivialAssignment(ASTContext &Context, bool Copying) const;
-
 private:
   // These methods are implemented in a separate translation unit;
   // "static"-ize them to avoid creating temporary QualTypes in the
@@ -1128,8 +1166,8 @@ public:
   };
 
 private:
-  Type(const Type&);           // DO NOT IMPLEMENT.
-  void operator=(const Type&); // DO NOT IMPLEMENT.
+  Type(const Type &) LLVM_DELETED_FUNCTION;
+  void operator=(const Type &) LLVM_DELETED_FUNCTION;
 
   /// Bitfields required by the Type class.
   class TypeBitfields {
@@ -1140,8 +1178,6 @@ private:
     unsigned TC : 8;
 
     /// Dependent - Whether this type is a dependent type (C++ [temp.dep.type]).
-    /// Note that this should stay at the end of the ivars for Type so that
-    /// subclasses can pack their bitfields into the same word.
     unsigned Dependent : 1;
 
     /// \brief Whether this type somehow involves a template parameter, even
@@ -1229,7 +1265,7 @@ protected:
 
     /// Extra information which affects how the function is called, like
     /// regparm and the calling convention.
-    unsigned ExtInfo : 8;
+    unsigned ExtInfo : 9;
 
     /// TypeQuals - Used only by FunctionProtoType, put here to pack with the
     /// other bitfields.
@@ -1516,6 +1552,7 @@ public:
   bool isRecordType() const;
   bool isClassType() const;
   bool isStructureType() const;
+  bool isInterfaceType() const;
   bool isStructureOrClassType() const;
   bool isUnionType() const;
   bool isComplexIntegerType() const;            // GCC _Complex integer type.
@@ -1634,12 +1671,18 @@ public:
   const ObjCObjectPointerType *getAsObjCQualifiedIdType() const;
   const ObjCObjectPointerType *getAsObjCQualifiedClassType() const;
   const ObjCObjectType *getAsObjCQualifiedInterfaceType() const;
-  const CXXRecordDecl *getCXXRecordDeclForPointerType() const;
 
   /// \brief Retrieves the CXXRecordDecl that this type refers to, either
   /// because the type is a RecordType or because it is the injected-class-name
   /// type of a class template or class template partial specialization.
   CXXRecordDecl *getAsCXXRecordDecl() const;
+
+  /// If this is a pointer or reference to a RecordType, return the
+  /// CXXRecordDecl that that type refers to.
+  ///
+  /// If this is not a pointer or reference, or the type being pointed to does
+  /// not refer to a CXXRecordDecl, returns NULL.
+  const CXXRecordDecl *getPointeeCXXRecordDecl() const;
 
   /// \brief Get the AutoType whose type will be deduced for a variable with
   /// an initializer of this type. This looks through declarators like pointer
@@ -1742,8 +1785,6 @@ public:
   CanQualType getCanonicalTypeUnqualified() const; // in CanonicalType.h
   LLVM_ATTRIBUTE_USED void dump() const;
 
-  static bool classof(const Type *) { return true; }
-
   friend class ASTReader;
   friend class ASTWriter;
 };
@@ -1751,6 +1792,11 @@ public:
 /// \brief This will check for a TypedefType by removing any existing sugar
 /// until it reaches a TypedefType or a non-sugared type.
 template <> const TypedefType *Type::getAs() const;
+
+/// \brief This will check for a TemplateSpecializationType by removing any
+/// existing sugar until it reaches a TemplateSpecializationType or a
+/// non-sugared type.
+template <> const TemplateSpecializationType *Type::getAs() const;
 
 // We can do canonical leaf types faster, because we don't have to
 // worry about preserving child type decoration.
@@ -1838,7 +1884,6 @@ public:
   }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Builtin; }
-  static bool classof(const BuiltinType *) { return true; }
 };
 
 /// ComplexType - C99 6.2.5p11 - Complex values.  This supports the C99 complex
@@ -1869,7 +1914,6 @@ public:
   }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Complex; }
-  static bool classof(const ComplexType *) { return true; }
 };
 
 /// ParenType - Sugar for parentheses used when specifying types.
@@ -1901,7 +1945,6 @@ public:
   }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Paren; }
-  static bool classof(const ParenType *) { return true; }
 };
 
 /// PointerType - C99 6.7.5.1 - Pointer Declarators.
@@ -1933,7 +1976,6 @@ public:
   }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Pointer; }
-  static bool classof(const PointerType *) { return true; }
 };
 
 /// BlockPointerType - pointer to a block type.
@@ -1969,7 +2011,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == BlockPointer;
   }
-  static bool classof(const BlockPointerType *) { return true; }
 };
 
 /// ReferenceType - Base for LValueReferenceType and RValueReferenceType
@@ -2017,7 +2058,6 @@ public:
     return T->getTypeClass() == LValueReference ||
            T->getTypeClass() == RValueReference;
   }
-  static bool classof(const ReferenceType *) { return true; }
 };
 
 /// LValueReferenceType - C++ [dcl.ref] - Lvalue reference
@@ -2035,7 +2075,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == LValueReference;
   }
-  static bool classof(const LValueReferenceType *) { return true; }
 };
 
 /// RValueReferenceType - C++0x [dcl.ref] - Rvalue reference
@@ -2052,7 +2091,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == RValueReference;
   }
-  static bool classof(const RValueReferenceType *) { return true; }
 };
 
 /// MemberPointerType - C++ 8.3.3 - Pointers to members
@@ -2107,7 +2145,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == MemberPointer;
   }
-  static bool classof(const MemberPointerType *) { return true; }
 };
 
 /// ArrayType - C99 6.7.5.2 - Array Declarators.
@@ -2163,7 +2200,6 @@ public:
            T->getTypeClass() == IncompleteArray ||
            T->getTypeClass() == DependentSizedArray;
   }
-  static bool classof(const ArrayType *) { return true; }
 };
 
 /// ConstantArrayType - This class represents the canonical version of
@@ -2215,7 +2251,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == ConstantArray;
   }
-  static bool classof(const ConstantArrayType *) { return true; }
 };
 
 /// IncompleteArrayType - This class represents C arrays with an unspecified
@@ -2235,7 +2270,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == IncompleteArray;
   }
-  static bool classof(const IncompleteArrayType *) { return true; }
 
   friend class StmtIteratorBase;
 
@@ -2298,7 +2332,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == VariableArray;
   }
-  static bool classof(const VariableArrayType *) { return true; }
 
   friend class StmtIteratorBase;
 
@@ -2355,7 +2388,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == DependentSizedArray;
   }
-  static bool classof(const DependentSizedArrayType *) { return true; }
 
   friend class StmtIteratorBase;
 
@@ -2401,7 +2433,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == DependentSizedExtVector;
   }
-  static bool classof(const DependentSizedExtVectorType *) { return true; }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
     Profile(ID, Context, getElementType(), getSizeExpr());
@@ -2467,7 +2498,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == Vector || T->getTypeClass() == ExtVector;
   }
-  static bool classof(const VectorType *) { return true; }
 };
 
 /// ExtVectorType - Extended vector type. This type is created using
@@ -2533,7 +2563,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == ExtVector;
   }
-  static bool classof(const ExtVectorType *) { return true; }
 };
 
 /// FunctionType - C99 6.7.5.3 - Function Declarators.  This is the common base
@@ -2565,19 +2594,19 @@ class FunctionType : public Type {
   // * AST read and write
   // * Codegen
   class ExtInfo {
-    // Feel free to rearrange or add bits, but if you go over 8,
+    // Feel free to rearrange or add bits, but if you go over 9,
     // you'll need to adjust both the Bits field below and
     // Type::FunctionTypeBitfields.
 
     //   |  CC  |noreturn|produces|regparm|
-    //   |0 .. 2|   3    |    4   | 5 .. 7|
+    //   |0 .. 3|   4    |    5   | 6 .. 8|
     //
     // regparm is either 0 (no regparm attribute) or the regparm value+1.
-    enum { CallConvMask = 0x7 };
-    enum { NoReturnMask = 0x8 };
-    enum { ProducesResultMask = 0x10 };
+    enum { CallConvMask = 0xF };
+    enum { NoReturnMask = 0x10 };
+    enum { ProducesResultMask = 0x20 };
     enum { RegParmMask = ~(CallConvMask | NoReturnMask | ProducesResultMask),
-           RegParmOffset = 5 }; // Assumed to be the last field
+           RegParmOffset = 6 }; // Assumed to be the last field
 
     uint16_t Bits;
 
@@ -2680,6 +2709,9 @@ public:
   bool getNoReturnAttr() const { return getExtInfo().getNoReturn(); }
   CallingConv getCallConv() const { return getExtInfo().getCC(); }
   ExtInfo getExtInfo() const { return ExtInfo(FunctionTypeBits.ExtInfo); }
+  bool isConst() const { return getTypeQuals() & Qualifiers::Const; }
+  bool isVolatile() const { return getTypeQuals() & Qualifiers::Volatile; }
+  bool isRestrict() const { return getTypeQuals() & Qualifiers::Restrict; }
 
   /// \brief Determine the type of an expression that calls a function of
   /// this type.
@@ -2693,7 +2725,6 @@ public:
     return T->getTypeClass() == FunctionNoProto ||
            T->getTypeClass() == FunctionProto;
   }
-  static bool classof(const FunctionType *) { return true; }
 };
 
 /// FunctionNoProtoType - Represents a K&R-style 'int foo()' function, which has
@@ -2725,7 +2756,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == FunctionNoProto;
   }
-  static bool classof(const FunctionNoProtoType *) { return true; }
 };
 
 /// FunctionProtoType - Represents a prototype with argument type info, e.g.
@@ -2847,6 +2877,8 @@ public:
     } else if (EPI.ExceptionSpecType == EST_Uninstantiated) {
       EPI.ExceptionSpecDecl = getExceptionSpecDecl();
       EPI.ExceptionSpecTemplate = getExceptionSpecTemplate();
+    } else if (EPI.ExceptionSpecType == EST_Unevaluated) {
+      EPI.ExceptionSpecDecl = getExceptionSpecDecl();
     }
     if (hasAnyConsumedArgs())
       EPI.ConsumedArguments = getConsumedArgsBuffer();
@@ -2890,11 +2922,13 @@ public:
     // NoexceptExpr sits where the arguments end.
     return *reinterpret_cast<Expr *const *>(arg_type_end());
   }
-  /// \brief If this function type has an uninstantiated exception
-  /// specification, this is the function whose exception specification
-  /// is represented by this type.
+  /// \brief If this function type has an exception specification which hasn't
+  /// been determined yet (either because it has not been evaluated or because
+  /// it has not been instantiated), this is the function whose exception
+  /// specification is represented by this type.
   FunctionDecl *getExceptionSpecDecl() const {
-    if (getExceptionSpecType() != EST_Uninstantiated)
+    if (getExceptionSpecType() != EST_Uninstantiated &&
+        getExceptionSpecType() != EST_Unevaluated)
       return 0;
     return reinterpret_cast<FunctionDecl * const *>(arg_type_end())[0];
   }
@@ -2909,7 +2943,7 @@ public:
   }
   bool isNothrow(ASTContext &Ctx) const {
     ExceptionSpecificationType EST = getExceptionSpecType();
-    assert(EST != EST_Delayed && EST != EST_Uninstantiated);
+    assert(EST != EST_Unevaluated && EST != EST_Uninstantiated);
     if (EST == EST_DynamicNone || EST == EST_BasicNoexcept)
       return true;
     if (EST != EST_ComputedNoexcept)
@@ -2969,14 +3003,13 @@ public:
 
   // FIXME: Remove the string version.
   void printExceptionSpecification(std::string &S, 
-                                   PrintingPolicy Policy) const;
+                                   const PrintingPolicy &Policy) const;
   void printExceptionSpecification(raw_ostream &OS, 
-                                   PrintingPolicy Policy) const;
+                                   const PrintingPolicy &Policy) const;
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == FunctionProto;
   }
-  static bool classof(const FunctionProtoType *) { return true; }
 
   void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &Ctx);
   static void Profile(llvm::FoldingSetNodeID &ID, QualType Result,
@@ -3007,7 +3040,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == UnresolvedUsing;
   }
-  static bool classof(const UnresolvedUsingType *) { return true; }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
     return Profile(ID, Decl);
@@ -3039,7 +3071,6 @@ public:
   QualType desugar() const;
 
   static bool classof(const Type *T) { return T->getTypeClass() == Typedef; }
-  static bool classof(const TypedefType *) { return true; }
 };
 
 /// TypeOfExprType (GCC extension).
@@ -3059,7 +3090,6 @@ public:
   bool isSugared() const;
 
   static bool classof(const Type *T) { return T->getTypeClass() == TypeOfExpr; }
-  static bool classof(const TypeOfExprType *) { return true; }
 };
 
 /// \brief Internal representation of canonical, dependent
@@ -3106,7 +3136,6 @@ public:
   bool isSugared() const { return true; }
 
   static bool classof(const Type *T) { return T->getTypeClass() == TypeOf; }
-  static bool classof(const TypeOfType *) { return true; }
 };
 
 /// DecltypeType (C++0x)
@@ -3128,7 +3157,6 @@ public:
   bool isSugared() const;
 
   static bool classof(const Type *T) { return T->getTypeClass() == Decltype; }
-  static bool classof(const DecltypeType *) { return true; }
 };
 
 /// \brief Internal representation of canonical, dependent
@@ -3181,7 +3209,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == UnaryTransform;
   }
-  static bool classof(const UnaryTransformType *) { return true; }
 };
 
 class TagType : public Type {
@@ -3204,7 +3231,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() >= TagFirst && T->getTypeClass() <= TagLast;
   }
-  static bool classof(const TagType *) { return true; }
 };
 
 /// RecordType - This is a helper class that allows the use of isa/cast/dyncast
@@ -3231,7 +3257,6 @@ public:
   QualType desugar() const { return QualType(this, 0); }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Record; }
-  static bool classof(const RecordType *) { return true; }
 };
 
 /// EnumType - This is a helper class that allows the use of isa/cast/dyncast
@@ -3250,7 +3275,6 @@ public:
   QualType desugar() const { return QualType(this, 0); }
 
   static bool classof(const Type *T) { return T->getTypeClass() == Enum; }
-  static bool classof(const EnumType *) { return true; }
 };
 
 /// AttributedType - An attributed type is a type to which a type
@@ -3294,7 +3318,8 @@ public:
     attr_fastcall,
     attr_stdcall,
     attr_thiscall,
-    attr_pascal
+    attr_pascal,
+    attr_pnaclcall
   };
 
 private:
@@ -3338,7 +3363,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == Attributed;
   }
-  static bool classof(const AttributedType *T) { return true; }
 };
 
 class TemplateTypeParmType : public Type, public llvm::FoldingSetNode {
@@ -3412,7 +3436,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == TemplateTypeParm;
   }
-  static bool classof(const TemplateTypeParmType *T) { return true; }
 };
 
 /// \brief Represents the result of substituting a type for a template
@@ -3463,7 +3486,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == SubstTemplateTypeParm;
   }
-  static bool classof(const SubstTemplateTypeParmType *T) { return true; }
 };
 
 /// \brief Represents the result of substituting a set of types for a template
@@ -3516,7 +3538,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == SubstTemplateTypeParmPack;
   }
-  static bool classof(const SubstTemplateTypeParmPackType *T) { return true; }
 };
 
 /// \brief Represents a C++0x auto type.
@@ -3559,7 +3580,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == Auto;
   }
-  static bool classof(const AutoType *T) { return true; }
 };
 
 /// \brief Represents a type template specialization; the template
@@ -3723,7 +3743,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == TemplateSpecialization;
   }
-  static bool classof(const TemplateSpecializationType *T) { return true; }
 };
 
 /// \brief The injected class name of a C++ class template or class
@@ -3786,13 +3805,14 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == InjectedClassName;
   }
-  static bool classof(const InjectedClassNameType *T) { return true; }
 };
 
 /// \brief The kind of a tag type.
 enum TagTypeKind {
   /// \brief The "struct" keyword.
   TTK_Struct,
+  /// \brief The "__interface" keyword.
+  TTK_Interface,
   /// \brief The "union" keyword.
   TTK_Union,
   /// \brief The "class" keyword.
@@ -3806,6 +3826,8 @@ enum TagTypeKind {
 enum ElaboratedTypeKeyword {
   /// \brief The "struct" keyword introduces the elaborated-type-specifier.
   ETK_Struct,
+  /// \brief The "__interface" keyword introduces the elaborated-type-specifier.
+  ETK_Interface,
   /// \brief The "union" keyword introduces the elaborated-type-specifier.
   ETK_Union,
   /// \brief The "class" keyword introduces the elaborated-type-specifier.
@@ -3929,7 +3951,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == Elaborated;
   }
-  static bool classof(const ElaboratedType *T) { return true; }
 };
 
 /// \brief Represents a qualified type name for which the type name is
@@ -3993,7 +4014,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == DependentName;
   }
-  static bool classof(const DependentNameType *T) { return true; }
 };
 
 /// DependentTemplateSpecializationType - Represents a template
@@ -4063,9 +4083,6 @@ public:
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == DependentTemplateSpecialization;
-  }
-  static bool classof(const DependentTemplateSpecializationType *T) {
-    return true;
   }
 };
 
@@ -4146,9 +4163,6 @@ public:
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == PackExpansion;
-  }
-  static bool classof(const PackExpansionType *T) {
-    return true;
   }
 };
 
@@ -4260,7 +4274,6 @@ public:
     return T->getTypeClass() == ObjCObject ||
            T->getTypeClass() == ObjCInterface;
   }
-  static bool classof(const ObjCObjectType *) { return true; }
 };
 
 /// ObjCObjectTypeImpl - A class providing a concrete implementation
@@ -4324,7 +4337,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == ObjCInterface;
   }
-  static bool classof(const ObjCInterfaceType *) { return true; }
 
   // Nonsense to "hide" certain members of ObjCObjectType within this
   // class.  People asking for protocols on an ObjCInterfaceType are
@@ -4474,7 +4486,6 @@ public:
   static bool classof(const Type *T) {
     return T->getTypeClass() == ObjCObjectPointer;
   }
-  static bool classof(const ObjCObjectPointerType *) { return true; }
 };
 
 class AtomicType : public Type, public llvm::FoldingSetNode {
@@ -4505,7 +4516,6 @@ class AtomicType : public Type, public llvm::FoldingSetNode {
   static bool classof(const Type *T) {
     return T->getTypeClass() == Atomic;
   }
-  static bool classof(const AtomicType *) { return true; }
 };
 
 /// A qualifier set is used to build a set of qualifiers.

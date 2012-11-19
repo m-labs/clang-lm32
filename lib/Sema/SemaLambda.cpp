@@ -22,13 +22,14 @@ using namespace clang;
 using namespace sema;
 
 CXXRecordDecl *Sema::createLambdaClosureType(SourceRange IntroducerRange,
+                                             TypeSourceInfo *Info,
                                              bool KnownDependent) {
   DeclContext *DC = CurContext;
   while (!(DC->isFunctionOrMethod() || DC->isRecord() || DC->isFileContext()))
     DC = DC->getParent();
   
   // Start constructing the lambda class.
-  CXXRecordDecl *Class = CXXRecordDecl::CreateLambda(Context, DC, 
+  CXXRecordDecl *Class = CXXRecordDecl::CreateLambda(Context, DC, Info,
                                                      IntroducerRange.getBegin(),
                                                      KnownDependent);
   DC->addDecl(Class);
@@ -54,9 +55,7 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
                  SourceRange IntroducerRange,
                  TypeSourceInfo *MethodType,
                  SourceLocation EndLoc,
-                 llvm::ArrayRef<ParmVarDecl *> Params,
-                 llvm::Optional<unsigned> ManglingNumber,
-                 Decl *ContextDecl) {
+                 llvm::ArrayRef<ParmVarDecl *> Params) {
   // C++11 [expr.prim.lambda]p5:
   //   The closure type for a lambda-expression has a public inline function 
   //   call operator (13.5.4) whose parameters and return type are described by
@@ -98,64 +97,76 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
          P != PEnd; ++P)
       (*P)->setOwningFunction(Method);
   }
-  
-  // If we don't already have a mangling number for this lambda expression,
-  // allocate one now.
-  if (!ManglingNumber) {
-    ContextDecl = ExprEvalContexts.back().LambdaContextDecl;
-    
-    enum ContextKind {
-      Normal,
-      DefaultArgument,
-      DataMember,
-      StaticDataMember
-    } Kind = Normal;
-    
-    // Default arguments of member function parameters that appear in a class
-    // definition, as well as the initializers of data members, receive special
-    // treatment. Identify them.
-    if (ContextDecl) {
-      if (ParmVarDecl *Param = dyn_cast<ParmVarDecl>(ContextDecl)) {
-        if (const DeclContext *LexicalDC
-            = Param->getDeclContext()->getLexicalParent())
-          if (LexicalDC->isRecord())
-            Kind = DefaultArgument;
-      } else if (VarDecl *Var = dyn_cast<VarDecl>(ContextDecl)) {
-        if (Var->getDeclContext()->isRecord())
-          Kind = StaticDataMember;
-      } else if (isa<FieldDecl>(ContextDecl)) {
-        Kind = DataMember;
-      }
-    }        
-    
-    switch (Kind) {
-      case Normal:
-        if (CurContext->isDependentContext() || isInInlineFunction(CurContext))
-          ManglingNumber = Context.getLambdaManglingNumber(Method);
-        else
-          ManglingNumber = 0;
-        
-        // There is no special context for this lambda.
-        ContextDecl = 0;        
-        break;
-        
-      case StaticDataMember:
-        if (!CurContext->isDependentContext()) {
-          ManglingNumber = 0;
-          ContextDecl = 0;
-          break;
-        }
-        // Fall through to assign a mangling number.
-        
-      case DataMember:
-      case DefaultArgument:
-        ManglingNumber = ExprEvalContexts.back().getLambdaMangleContext()
-                           .getManglingNumber(Method);
-        break;
+
+  // Allocate a mangling number for this lambda expression, if the ABI
+  // requires one.
+  Decl *ContextDecl = ExprEvalContexts.back().LambdaContextDecl;
+
+  enum ContextKind {
+    Normal,
+    DefaultArgument,
+    DataMember,
+    StaticDataMember
+  } Kind = Normal;
+
+  // Default arguments of member function parameters that appear in a class
+  // definition, as well as the initializers of data members, receive special
+  // treatment. Identify them.
+  if (ContextDecl) {
+    if (ParmVarDecl *Param = dyn_cast<ParmVarDecl>(ContextDecl)) {
+      if (const DeclContext *LexicalDC
+          = Param->getDeclContext()->getLexicalParent())
+        if (LexicalDC->isRecord())
+          Kind = DefaultArgument;
+    } else if (VarDecl *Var = dyn_cast<VarDecl>(ContextDecl)) {
+      if (Var->getDeclContext()->isRecord())
+        Kind = StaticDataMember;
+    } else if (isa<FieldDecl>(ContextDecl)) {
+      Kind = DataMember;
     }
   }
 
-  Class->setLambdaMangling(*ManglingNumber, ContextDecl);
+  // Itanium ABI [5.1.7]:
+  //   In the following contexts [...] the one-definition rule requires closure
+  //   types in different translation units to "correspond":
+  bool IsInNonspecializedTemplate =
+    !ActiveTemplateInstantiations.empty() || CurContext->isDependentContext();
+  unsigned ManglingNumber;
+  switch (Kind) {
+  case Normal:
+    //  -- the bodies of non-exported nonspecialized template functions
+    //  -- the bodies of inline functions
+    if ((IsInNonspecializedTemplate &&
+         !(ContextDecl && isa<ParmVarDecl>(ContextDecl))) ||
+        isInInlineFunction(CurContext))
+      ManglingNumber = Context.getLambdaManglingNumber(Method);
+    else
+      ManglingNumber = 0;
+
+    // There is no special context for this lambda.
+    ContextDecl = 0;
+    break;
+
+  case StaticDataMember:
+    //  -- the initializers of nonspecialized static members of template classes
+    if (!IsInNonspecializedTemplate) {
+      ManglingNumber = 0;
+      ContextDecl = 0;
+      break;
+    }
+    // Fall through to assign a mangling number.
+
+  case DataMember:
+    //  -- the in-class initializers of class members
+  case DefaultArgument:
+    //  -- default arguments appearing in class definitions
+    ManglingNumber = ExprEvalContexts.back().getLambdaMangleContext()
+                       .getManglingNumber(Method);
+    break;
+  }
+
+  Class->setLambdaMangling(ManglingNumber, ContextDecl);
+
   return Method;
 }
 
@@ -359,14 +370,13 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     if (!TmplScope->decl_empty())
       KnownDependent = true;
   
-  CXXRecordDecl *Class = createLambdaClosureType(Intro.Range, KnownDependent);
-  
   // Determine the signature of the call operator.
   TypeSourceInfo *MethodTyInfo;
   bool ExplicitParams = true;
   bool ExplicitResultType = true;
+  bool ContainsUnexpandedParameterPack = false;
   SourceLocation EndLoc;
-  llvm::ArrayRef<ParmVarDecl *> Params;
+  llvm::SmallVector<ParmVarDecl *, 8> Params;
   if (ParamInfo.getNumTypeObjects() == 0) {
     // C++11 [expr.prim.lambda]p4:
     //   If a lambda-expression does not include a lambda-declarator, it is as 
@@ -399,30 +409,25 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     ExplicitResultType
       = MethodTyInfo->getType()->getAs<FunctionType>()->getResultType() 
                                                         != Context.DependentTy;
-    
-    TypeLoc TL = MethodTyInfo->getTypeLoc();
-    FunctionProtoTypeLoc Proto = cast<FunctionProtoTypeLoc>(TL);
-    Params = llvm::ArrayRef<ParmVarDecl *>(Proto.getParmArray(), 
-                                           Proto.getNumArgs());
+
+    if (FTI.NumArgs == 1 && !FTI.isVariadic && FTI.ArgInfo[0].Ident == 0 &&
+        cast<ParmVarDecl>(FTI.ArgInfo[0].Param)->getType()->isVoidType()) {
+      // Empty arg list, don't push any params.
+      checkVoidParamDecl(cast<ParmVarDecl>(FTI.ArgInfo[0].Param));
+    } else {
+      Params.reserve(FTI.NumArgs);
+      for (unsigned i = 0, e = FTI.NumArgs; i != e; ++i)
+        Params.push_back(cast<ParmVarDecl>(FTI.ArgInfo[i].Param));
+    }
 
     // Check for unexpanded parameter packs in the method type.
-    // FIXME: We should allow unexpanded parameter packs here, but that would,
-    // in turn, make the lambda expression contain unexpanded parameter packs.
-    if (DiagnoseUnexpandedParameterPack(Intro.Range.getBegin(), MethodTyInfo,
-                                        UPPC_Lambda)) {
-      // Drop the parameters.
-      Params = llvm::ArrayRef<ParmVarDecl *>();
-      FunctionProtoType::ExtProtoInfo EPI;
-      EPI.HasTrailingReturn = false;
-      EPI.TypeQuals |= DeclSpec::TQ_const;
-      QualType MethodTy = Context.getFunctionType(Context.DependentTy,
-                                                  /*Args=*/0, /*NumArgs=*/0, EPI);
-      MethodTyInfo = Context.getTrivialTypeSourceInfo(MethodTy);
-      ExplicitParams = false;
-      ExplicitResultType = false;
-    }
+    if (MethodTyInfo->getType()->containsUnexpandedParameterPack())
+      ContainsUnexpandedParameterPack = true;
   }
-  
+
+  CXXRecordDecl *Class = createLambdaClosureType(Intro.Range, MethodTyInfo,
+                                                 KnownDependent);
+
   CXXMethodDecl *Method = startLambdaDefinition(Class, Intro.Range,
                                                 MethodTyInfo, EndLoc, Params);
   
@@ -439,7 +444,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
   LambdaScopeInfo *LSI
     = enterLambdaScope(Method, Intro.Range, Intro.Default, ExplicitParams,
                        ExplicitResultType,
-                       (Method->getTypeQualifiers() & Qualifiers::Const) == 0);
+                       !Method->isConst());
  
   // Handle explicit captures.
   SourceLocation PrevCaptureLoc
@@ -530,6 +535,10 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
       continue;
     }
 
+    // Ignore invalid decls; they'll just confuse the code later.
+    if (Var->isInvalidDecl())
+      continue;
+
     if (!Var->hasLocalStorage()) {
       Diag(C->Loc, diag::err_capture_non_automatic_variable) << C->Id;
       Diag(Var->getLocation(), diag::note_previous_decl) << C->Id;
@@ -561,8 +570,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
         // Just ignore the ellipsis.
       }
     } else if (Var->isParameterPack()) {
-      Diag(C->Loc, diag::err_lambda_unexpanded_pack);
-      continue;
+      ContainsUnexpandedParameterPack = true;
     }
     
     TryCaptureKind Kind = C->Kind == LCK_ByRef ? TryCapture_ExplicitByRef :
@@ -570,6 +578,8 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     tryCaptureVariable(Var, C->Loc, Kind, EllipsisLoc);
   }
   finishLambdaExplicitCaptures(LSI);
+
+  LSI->ContainsUnexpandedParameterPack = ContainsUnexpandedParameterPack;
 
   // Add lambda parameters into scope.
   addLambdaParameters(Method, CurScope);
@@ -733,6 +743,7 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
   bool ExplicitParams;
   bool ExplicitResultType;
   bool LambdaExprNeedsCleanups;
+  bool ContainsUnexpandedParameterPack;
   llvm::SmallVector<VarDecl *, 4> ArrayIndexVars;
   llvm::SmallVector<unsigned, 4> ArrayIndexStarts;
   {
@@ -743,6 +754,7 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
     ExplicitParams = LSI->ExplicitParams;
     ExplicitResultType = !LSI->HasImplicitReturnType;
     LambdaExprNeedsCleanups = LSI->ExprNeedsCleanups;
+    ContainsUnexpandedParameterPack = LSI->ContainsUnexpandedParameterPack;
     ArrayIndexVars.swap(LSI->ArrayIndexVars);
     ArrayIndexStarts.swap(LSI->ArrayIndexStarts);
     
@@ -857,7 +869,8 @@ ExprResult Sema::ActOnLambdaExpr(SourceLocation StartLoc, Stmt *Body,
                                           CaptureDefault, Captures, 
                                           ExplicitParams, ExplicitResultType,
                                           CaptureInits, ArrayIndexVars, 
-                                          ArrayIndexStarts, Body->getLocEnd());
+                                          ArrayIndexStarts, Body->getLocEnd(),
+                                          ContainsUnexpandedParameterPack);
 
   // C++11 [expr.prim.lambda]p2:
   //   A lambda-expression shall not appear in an unevaluated operand

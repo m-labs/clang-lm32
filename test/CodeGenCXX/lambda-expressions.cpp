@@ -1,7 +1,11 @@
 // RUN: %clang_cc1 -triple x86_64-apple-darwin10.0.0 -emit-llvm -o - %s -fexceptions -std=c++11 | FileCheck %s
 
-// CHECK: @var = internal global
-auto var = [](int i) { return i+1; };
+// CHECK-NOT: @unused
+auto unused = [](int i) { return i+1; };
+
+// CHECK: @used = internal global
+auto used = [](int i) { return i+1; };
+void *use = &used;
 
 // CHECK: @cvar = global
 extern "C" auto cvar = []{};
@@ -66,6 +70,15 @@ void f() {
   // CHECK-NEXT: ret void
   int (*fp)(int, int) = [](int x, int y){ return x + y; };
 }
+
+static int k;
+int g() {
+  int &r = k;
+  // CHECK: define internal i32 @"_ZZ1gvENK3$_6clEv"(
+  // CHECK-NOT: }
+  // CHECK: load i32* @_ZL1k,
+  return [] { return r; } ();
+};
 
 // CHECK: define internal i32 @"_ZZ1fvEN3$_58__invokeEii"
 // CHECK: store i32

@@ -66,16 +66,16 @@ void isdoxy15(void);
 /// Doxygen comment.  IS_DOXYGEN_END
 void isdoxy16(void);
 
-/// isdoxy17 IS_DOXYGEN_START
-// Not a Doxygen comment, but still picked up.
-/// IS_DOXYGEN_END
+/// NOT_DOXYGEN
+// NOT_DOXYGEN
+/// isdoxy17 IS_DOXYGEN_START IS_DOXYGEN_END
 void isdoxy17(void);
 
 unsigned
 // NOT_DOXYGEN
-/// isdoxy18 IS_DOXYGEN_START
-// Not a Doxygen comment, but still picked up.
-/// IS_DOXYGEN_END
+/// NOT_DOXYGEN
+// NOT_DOXYGEN
+/// isdoxy18 IS_DOXYGEN_START IS_DOXYGEN_END
 // NOT_DOXYGEN
 int isdoxy18(void);
 
@@ -168,7 +168,7 @@ class test42 {
 ///\brief
 ///
 /// Some malformed command.
-/* \*/
+/** \*/
 /**
  * \brief Aaa aaaaaaa aaaa.
  * IS_DOXYGEN_END
@@ -213,14 +213,50 @@ void notdoxy47(void);
 /// \returns ddd IS_DOXYGEN_END
 void isdoxy48(int);
 
+/// \brief IS_DOXYGEN_START Aaa
+/// \returns bbb IS_DOXYGEN_END
+void isdoxy49(void);
+
+/// \param ccc IS_DOXYGEN_START
+/// \returns ddd IS_DOXYGEN_END
+void isdoxy50(int);
+
+// One of the following lines has trailing whitespace.  It is intended, don't
+// fix it.
+/**
+ * Aaa. IS_DOXYGEN_START
+ * 
+ * Bbb. IS_DOXYGEN_END
+ */
+void isdoxy51(int);
+
+// One of the following lines has trailing whitespace.  It is intended, don't
+// fix it.
+/**
+ * Aaa. IS_DOXYGEN_START
+ * Bbb.
+ *  
+ * Ccc. IS_DOXYGEN_END
+ */
+void isdoxy52(int);
+
+/**
+ * \fn isdoxy53
+ *
+ * Aaa. IS_DOXYGEN_START IS_DOXYGEN_END
+ */
+void isdoxy53(int);
+
 #endif
 
 // RUN: rm -rf %t
 // RUN: mkdir %t
-// RUN: %clang_cc1 -x c++ -emit-pch -o %t/out.pch %s
-// RUN: %clang_cc1 -x c++ -include-pch %t/out.pch -fsyntax-only %s
 
-// RUN: c-index-test -test-load-source all %s > %t/out.c-index-direct
+// Check that we serialize comment source locations properly.
+// RUN: %clang_cc1 -x c++ -std=c++11 -emit-pch -o %t/out.pch %s
+// RUN: %clang_cc1 -x c++ -std=c++11 -include-pch %t/out.pch -fsyntax-only %s
+
+// RUN: c-index-test -test-load-source all -comments-xml-schema=%S/../../bindings/xml/comment-xml-schema.rng %s -std=c++11 > %t/out.c-index-direct
 // RUN: c-index-test -test-load-tu %t/out.pch all > %t/out.c-index-pch
 
 // RUN: FileCheck %s -check-prefix=WRONG < %t/out.c-index-direct
@@ -239,10 +275,18 @@ void isdoxy48(int);
 // Ensure we don't pick up extra comments.
 // WRONG-NOT: IS_DOXYGEN_START{{.*}}IS_DOXYGEN_START{{.*}}BriefComment=
 // WRONG-NOT: IS_DOXYGEN_END{{.*}}IS_DOXYGEN_END{{.*}}BriefComment=
+//
+// Ensure that XML is not invalid
+// WRONG-NOT: CommentXMLInvalid
 
 // RUN: FileCheck %s < %t/out.c-index-direct
 // RUN: FileCheck %s < %t/out.c-index-pch
 
+// These CHECK lines are not located near the code on purpose.  This test
+// checks that documentation comments are attached to declarations correctly.
+// Adding a non-documentation comment with CHECK line between every two
+// documentation comments will only test a single code path.
+//
 // CHECK: annotate-comments.cpp:16:6: FunctionDecl=isdoxy4:{{.*}} isdoxy4 IS_DOXYGEN_SINGLE
 // CHECK: annotate-comments.cpp:20:6: FunctionDecl=isdoxy5:{{.*}} isdoxy5 IS_DOXYGEN_SINGLE
 // CHECK: annotate-comments.cpp:25:6: FunctionDecl=isdoxy6:{{.*}} isdoxy6 IS_DOXYGEN_SINGLE
@@ -279,4 +323,8 @@ void isdoxy48(int);
 // CHECK: annotate-comments.cpp:195:6: FunctionDecl=isdoxy45:{{.*}} BriefComment=[Ddd eee. Fff.]
 // CHECK: annotate-comments.cpp:205:6: FunctionDecl=isdoxy46:{{.*}} BriefComment=[Ddd eee. Fff.]
 // CHECK: annotate-comments.cpp:214:6: FunctionDecl=isdoxy48:{{.*}} BriefComment=[IS_DOXYGEN_START Aaa bbb]
+// CHECK: annotate-comments.cpp:218:6: FunctionDecl=isdoxy49:{{.*}} BriefComment=[IS_DOXYGEN_START Aaa]
+// CHECK: annotate-comments.cpp:222:6: FunctionDecl=isdoxy50:{{.*}} BriefComment=[Returns ddd IS_DOXYGEN_END]
+// CHECK: annotate-comments.cpp:231:6: FunctionDecl=isdoxy51:{{.*}} BriefComment=[Aaa. IS_DOXYGEN_START]
+// CHECK: annotate-comments.cpp:241:6: FunctionDecl=isdoxy52:{{.*}} BriefComment=[Aaa. IS_DOXYGEN_START Bbb.]
 
