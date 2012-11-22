@@ -370,9 +370,10 @@ public:
 
   virtual void AddLinkRuntimeLibArgs(const ArgList &Args,
                                      ArgStringList &CmdArgs) const;
-  void AddLinkRuntimeLib(const ArgList &Args, ArgStringList &CmdArgs, 
-                         const char *DarwinStaticLib) const;
-  
+  void AddLinkRuntimeLib(const ArgList &Args, ArgStringList &CmdArgs,
+                         const char *DarwinStaticLib,
+                         bool AlwaysLink = false) const;
+
   virtual void AddCXXStdlibLibArgs(const ArgList &Args,
                                    ArgStringList &CmdArgs) const;
 
@@ -510,7 +511,8 @@ public:
 
   virtual void AddClangSystemIncludeArgs(const ArgList &DriverArgs,
                                          ArgStringList &CC1Args) const;
-  virtual void addClangTargetOptions(ArgStringList &CC1Args) const;
+  virtual void addClangTargetOptions(const ArgList &DriverArgs,
+                                     ArgStringList &CC1Args) const;
   virtual void AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                             ArgStringList &CC1Args) const;
 
