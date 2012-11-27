@@ -2777,6 +2777,9 @@ PPC64_SVR4_ABIInfo::isPromotableTypeForABI(QualType Ty) const {
 
 ABIArgInfo
 PPC64_SVR4_ABIInfo::classifyArgumentType(QualType Ty) const {
+  if (Ty->isAnyComplexType())
+    return ABIArgInfo::getDirect();
+
   if (isAggregateTypeForABI(Ty)) {
     // Records with non trivial destructors/constructors should not be passed
     // by value.
@@ -3789,9 +3792,9 @@ void MSP430TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
       F->addFnAttr(llvm::Attributes::NoInline);
 
       // Step 3: Emit ISR vector alias.
-      unsigned Num = attr->getNumber() + 0xffe0;
+      unsigned Num = attr->getNumber() / 2;
       new llvm::GlobalAlias(GV->getType(), llvm::Function::ExternalLinkage,
-                            "vector_" + Twine::utohexstr(Num),
+                            "__isr_" + Twine(Num),
                             GV, &M.getModule());
     }
   }
