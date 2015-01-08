@@ -1,9 +1,9 @@
 /* RUN: %clang_cc1 %s -Eonly -std=c89 -pedantic -verify
 */
 /* PR3937 */
-#define zero() 0
-#define one(x) 0
-#define two(x, y) 0
+#define zero() 0 /* expected-note 2 {{defined here}} */
+#define one(x) 0 /* expected-note 2 {{defined here}} */
+#define two(x, y) 0 /* expected-note 4 {{defined here}} */
 #define zero_dot(...) 0   /* expected-warning {{variadic macros are a C99 feature}} */
 #define one_dot(x, ...) 0 /* expected-warning {{variadic macros are a C99 feature}} expected-note 2{{macro 'one_dot' defined here}} */
 
@@ -13,7 +13,8 @@ zero(1, 2, 3);    /* expected-error {{too many arguments provided to function-li
 
 one()   /* ok */
 one(a)
-one(a,)           /* expected-error {{too many arguments provided to function-like macro invocation}} */
+one(a,)           /* expected-error {{too many arguments provided to function-like macro invocation}} \
+                     expected-warning {{empty macro arguments are a C99 feature}}*/
 one(a, b)         /* expected-error {{too many arguments provided to function-like macro invocation}} */
 
 two()       /* expected-error {{too few arguments provided to function-like macro invocation}} */
@@ -25,7 +26,7 @@ two(
     ,     /* expected-warning {{empty macro arguments are a C99 feature}} */
     ,     /* expected-warning {{empty macro arguments are a C99 feature}}  \
              expected-error {{too many arguments provided to function-like macro invocation}} */
-    )     
+    )     /* expected-warning {{empty macro arguments are a C99 feature}} */
 two(,)      /* expected-warning 2 {{empty macro arguments are a C99 feature}} */
 
 

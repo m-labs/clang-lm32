@@ -9,7 +9,7 @@ struct X {
     int i;
     float f;
     
-    union {
+    union { // expected-warning{{anonymous types declared in an anonymous union are an extension}}
       float f2;
       mutable double d;
     };
@@ -80,9 +80,13 @@ union { // expected-error{{anonymous unions at namespace or global scope must be
 };
 
 static union {
-  int int_val2;
+  int int_val2; // expected-note{{previous definition is here}}
   float float_val2;
 };
+
+void PR21858() {
+  void int_val2(); // expected-error{{redefinition of 'int_val2' as different kind of symbol}}
+}
 
 void f() {
   int_val2 = 0;
@@ -101,7 +105,7 @@ void g() {
 struct BadMembers {
   union {
     struct X { }; // expected-error {{types cannot be declared in an anonymous union}}
-    struct { int x; int y; } y;
+    struct { int x; int y; } y; // expected-warning{{anonymous types declared in an anonymous union are an extension}}
     
     void f(); // expected-error{{functions cannot be declared in an anonymous union}}
   private: int x1; // expected-error{{anonymous union cannot contain a private data member}}
@@ -110,7 +114,7 @@ struct BadMembers {
 };
 
 // <rdar://problem/6481130>
-typedef union { }; // expected-warning{{declaration does not declare anything}}
+typedef union { }; // expected-warning{{typedef requires a name}}
 
 // <rdar://problem/7562438>
 typedef struct objc_module *Foo ;
@@ -128,7 +132,7 @@ namespace test4 {
     struct { // expected-warning{{anonymous structs are a GNU extension}}
       int s0; // expected-note {{declared private here}}
       double s1; // expected-note {{declared private here}}
-      union {
+      union { // expected-warning{{anonymous types declared in an anonymous struct are an extension}}
         int su0; // expected-note {{declared private here}}
         double su1; // expected-note {{declared private here}}
       };
@@ -136,7 +140,7 @@ namespace test4 {
     union {
       int u0; // expected-note {{declared private here}}
       double u1; // expected-note {{declared private here}}
-      struct { // expected-warning{{anonymous structs are a GNU extension}}
+      struct { // expected-warning{{anonymous structs are a GNU extension}} expected-warning{{anonymous types declared in an anonymous union are an extension}}
         int us0; // expected-note {{declared private here}}
         double us1; // expected-note {{declared private here}}
       };
@@ -187,7 +191,7 @@ namespace PR8326 {
   
   private:
     const union { // expected-warning{{anonymous union cannot be 'const'}}
-      struct { // expected-warning{{anonymous structs are a GNU extension}}
+      struct { // expected-warning{{anonymous structs are a GNU extension}} expected-warning{{declared in an anonymous union}}
         T x;
         T y;
       };
@@ -196,4 +200,13 @@ namespace PR8326 {
   };
 
   Foo<int> baz;
+}
+
+namespace PR16630 {
+  struct A { union { int x; float y; }; }; // expected-note {{member is declared here}}
+  struct B : private A { using A::x; } b; // expected-note 2 {{private}}
+  void foo () {
+    b.x = 10;
+    b.y = 0; // expected-error {{cannot cast 'struct B' to its private base class 'PR16630::A'}} expected-error {{'y' is a private member of 'PR16630::A'}}
+  }
 }

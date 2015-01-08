@@ -1,7 +1,7 @@
 // Force x86-64 because some of our heuristics are actually based
 // on integer sizes.
 
-// RUN: %clang_cc1 -triple x86_64-apple-darwin -fsyntax-only -pedantic -verify -Wsign-compare %s
+// RUN: %clang_cc1 -triple x86_64-apple-darwin -fsyntax-only -pedantic -verify -Wsign-compare -std=c++11 %s
 
 int test0(long a, unsigned long b) {
   enum EnumA {A};
@@ -89,8 +89,8 @@ int test0(long a, unsigned long b) {
          // (C,b)
          (C == (unsigned long) b) +
          (C == (unsigned int) b) +
-         (C == (unsigned short) b) + // expected-warning {{comparison of constant 65536 with expression of type 'unsigned short' is always false}}
-         (C == (unsigned char) b) +  // expected-warning {{comparison of constant 65536 with expression of type 'unsigned char' is always false}}
+         (C == (unsigned short) b) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'unsigned short' is always false}}
+         (C == (unsigned char) b) +  // expected-warning {{comparison of constant 'C' (65536) with expression of type 'unsigned char' is always false}}
          ((long) C == b) +
          ((int) C == b) +
          ((short) C == b) +
@@ -101,8 +101,8 @@ int test0(long a, unsigned long b) {
          ((signed char) C == (unsigned char) b) +
          (C < (unsigned long) b) +
          (C < (unsigned int) b) +
-         (C < (unsigned short) b) + // expected-warning {{comparison of constant 65536 with expression of type 'unsigned short' is always false}}
-         (C < (unsigned char) b) + // expected-warning {{comparison of constant 65536 with expression of type 'unsigned char' is always false}}
+         (C < (unsigned short) b) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'unsigned short' is always false}}
+         (C < (unsigned char) b) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'unsigned char' is always false}}
          ((long) C < b) +
          ((int) C < b) +
          ((short) C < b) +
@@ -119,8 +119,8 @@ int test0(long a, unsigned long b) {
          (a == (unsigned char) C) +
          ((long) a == C) +
          ((int) a == C) +
-         ((short) a == C) + // expected-warning {{comparison of constant 65536 with expression of type 'short' is always false}}
-         ((signed char) a == C) + // expected-warning {{comparison of constant 65536 with expression of type 'signed char' is always false}}
+         ((short) a == C) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'short' is always false}}
+         ((signed char) a == C) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'signed char' is always false}}
          ((long) a == (unsigned long) C) +
          ((int) a == (unsigned int) C) +
          ((short) a == (unsigned short) C) +
@@ -131,8 +131,8 @@ int test0(long a, unsigned long b) {
          (a < (unsigned char) C) +
          ((long) a < C) +
          ((int) a < C) +
-         ((short) a < C) + // expected-warning {{comparison of constant 65536 with expression of type 'short' is always true}}
-         ((signed char) a < C) + // expected-warning {{comparison of constant 65536 with expression of type 'signed char' is always true}}
+         ((short) a < C) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'short' is always true}}
+         ((signed char) a < C) + // expected-warning {{comparison of constant 'C' (65536) with expression of type 'signed char' is always true}}
          ((long) a < (unsigned long) C) +  // expected-warning {{comparison of integers of different signs}}
          ((int) a < (unsigned int) C) +  // expected-warning {{comparison of integers of different signs}}
          ((short) a < (unsigned short) C) +
@@ -225,7 +225,7 @@ void test3() {
 }
 
 // Test comparison of short to unsigned.  If tautological compare does not
-// trigger, then the signed comparision warning will.
+// trigger, then the signed comparison warning will.
 void test4(short s) {
   // A is max short plus 1.  All zero and positive shorts are smaller than it.
   // All negative shorts are cast towards the max unsigned range.  Relation
@@ -347,4 +347,78 @@ void test8(int x) {
 
   (void)((E)x == 1);
   (void)((E)x == -1);
+}
+
+void test9(int x) {
+  enum E : int {
+    Positive = 1
+  };
+  (void)((E)x == 1);
+}
+
+namespace templates {
+  template<class T> T max();
+
+  template<> constexpr int max<int>() { return 2147483647; };
+
+  template<typename T>
+  bool less_than_max(short num, T value) {
+    const T vmax = max<T>();
+    return (vmax >= num);  // no warning
+  }
+
+  template<typename T>
+  bool less_than_max(short num) {
+    // This should trigger one warning on the template pattern, and not a
+    // warning per specialization.
+    return num < max<int>();  // expected-warning{{comparison of constant 2147483647 with expression of type 'short' is always true}}
+  }
+
+  void test10(short num, int x) {
+    less_than_max(num, x);
+    less_than_max<int>(num);
+    less_than_max<long>(num);
+    less_than_max<short>(num);
+  }
+
+  template<typename T>
+  inline bool less_than_zero(T num, T value) {
+    return num < 0;  // no warning
+  }
+
+  template<typename T>
+  inline bool less_than_zero(unsigned num) {
+    // This should trigger one warning on the template pattern, and not a
+    // warning per specialization.
+    return num < 0;  // expected-warning{{comparison of unsigned expression < 0 is always false}}
+  }
+
+  void test11(unsigned num) {
+    less_than_zero(num, num);
+    less_than_zero<int>(num);
+    less_than_zero<long>(num);
+    less_than_zero<short>(num);
+  }
+
+  template<unsigned n> bool compare(unsigned k) { return k >= n; }
+
+  void test12() {
+    compare<0>(42);
+  }
+
+  struct A { static int x; };
+  struct B { static int x; };
+  typedef A otherA;
+
+  template <typename T>
+  void testx() {
+    if (A::x == T::x &&  // no warning
+        A::x == otherA::x)  // expected-warning{{self-comparison always evaluates to true}}
+      return;
+  }
+
+  void test13() {
+    testx<A>();
+    testx<B>();
+  }
 }

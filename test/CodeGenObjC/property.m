@@ -1,8 +1,5 @@
 // RUN: %clang_cc1 -triple i386-unknown-unknown -emit-llvm -o - %s | FileCheck %s
 
-// PR13820
-// REQUIRES: LP64
-
 // TODO: actually test most of this instead of just emitting it
 
 int printf(const char *, ...);
@@ -57,7 +54,7 @@ int printf(const char *, ...);
 @end
 
 // Test that compound operations only compute the base once.
-// CHECK: define void @test2
+// CHECK-LABEL: define void @test2
 A *test2_helper(void);
 void test2() {
   // CHECK:      [[BASE:%.*]] = call [[A:%.*]]* @test2_helper()
@@ -97,7 +94,7 @@ void test3(test3_object *p) {
 @interface Test4  {}
 @property float f;
 @end
-// CHECK: define void @test4
+// CHECK-LABEL: define void @test4
 void test4(Test4 *t) {
   extern int test4_printf(const char *, ...);
   // CHECK: [[TMP:%.*]] = call float {{.*}} @objc_msgSend
@@ -139,33 +136,33 @@ void test7(Test7 *t) {
 // CHECK:      [[T:%.*]] = alloca [[TEST7]]*,
 // CHECK-NEXT: store
 // CHECK-NEXT: [[T0:%.*]] = load [[TEST7]]** [[T]], align
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES
 // CHECK-NEXT: [[T1:%.*]] = bitcast [[TEST7]]* [[T0]] to i8*
 // CHECK-NEXT: [[T2:%.*]] = call zeroext i8 bitcast
 // CHECK-NEXT: [[T3:%.*]] = zext i8 [[T2]] to i32
 // CHECK-NEXT: [[T4:%.*]] = and i32 [[T3]], 2
 // CHECK-NEXT: [[T5:%.*]] = trunc i32 [[T4]] to i8
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES
 // CHECK-NEXT: [[T6:%.*]] = bitcast [[TEST7]]* [[T0]] to i8*
 // CHECK-NEXT: call void bitcast
 // CHECK-NEXT: [[T0:%.*]] = load [[TEST7]]** [[T]], align
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES
 // CHECK-NEXT: [[T1:%.*]] = bitcast [[TEST7]]* [[T0]] to i8*
 // CHECK-NEXT: [[T2:%.*]] = call zeroext i8 bitcast
 // CHECK-NEXT: [[T3:%.*]] = zext i8 [[T2]] to i32
 // CHECK-NEXT: [[T4:%.*]] = or i32 [[T3]], 5
 // CHECK-NEXT: [[T5:%.*]] = trunc i32 [[T4]] to i8
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES
 // CHECK-NEXT: [[T6:%.*]] = bitcast [[TEST7]]* [[T0]] to i8*
 // CHECK-NEXT: call void bitcast
 // CHECK-NEXT: [[T0:%.*]] = load [[TEST7]]** [[T]], align
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES
 // CHECK-NEXT: [[T1:%.*]] = bitcast [[TEST7]]* [[T0]] to i8*
 // CHECK-NEXT: [[T2:%.*]] = call zeroext i8 bitcast
 // CHECK-NEXT: [[T3:%.*]] = zext i8 [[T2]] to i32
 // CHECK-NEXT: [[T4:%.*]] = xor i32 [[T3]], 8
 // CHECK-NEXT: [[T5:%.*]] = trunc i32 [[T4]] to i8
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES
 // CHECK-NEXT: [[T6:%.*]] = bitcast [[TEST7]]* [[T0]] to i8*
 // CHECK-NEXT: call void bitcast
 // CHECK-NEXT: ret void

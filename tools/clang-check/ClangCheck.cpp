@@ -17,16 +17,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/ASTConsumer.h"
-#include "clang/Driver/OptTable.h"
 #include "clang/Driver/Options.h"
 #include "clang/Frontend/ASTConsumers.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Rewrite/Frontend/FixItRewriter.h"
 #include "clang/Rewrite/Frontend/FrontendActions.h"
+#include "clang/StaticAnalyzer/Frontend/FrontendActions.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Option/OptTable.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Signals.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace clang::driver;
 using namespace clang::tooling;
@@ -48,26 +50,33 @@ static cl::extrahelp MoreHelp(
     "\n"
 );
 
-static OwningPtr<OptTable> Options(createDriverOptTable());
-static cl::opt<bool> ASTDump(
-    "ast-dump",
-    cl::desc(Options->getOptionHelpText(options::OPT_ast_dump)));
-static cl::opt<bool> ASTList(
-    "ast-list",
-    cl::desc(Options->getOptionHelpText(options::OPT_ast_list)));
-static cl::opt<bool> ASTPrint(
-    "ast-print",
-    cl::desc(Options->getOptionHelpText(options::OPT_ast_print)));
+static cl::OptionCategory ClangCheckCategory("clang-check options");
+static std::unique_ptr<opt::OptTable> Options(createDriverOptTable());
+static cl::opt<bool>
+ASTDump("ast-dump", cl::desc(Options->getOptionHelpText(options::OPT_ast_dump)),
+        cl::cat(ClangCheckCategory));
+static cl::opt<bool>
+ASTList("ast-list", cl::desc(Options->getOptionHelpText(options::OPT_ast_list)),
+        cl::cat(ClangCheckCategory));
+static cl::opt<bool>
+ASTPrint("ast-print",
+         cl::desc(Options->getOptionHelpText(options::OPT_ast_print)),
+         cl::cat(ClangCheckCategory));
 static cl::opt<std::string> ASTDumpFilter(
     "ast-dump-filter",
-    cl::desc(Options->getOptionHelpText(options::OPT_ast_dump_filter)));
+    cl::desc(Options->getOptionHelpText(options::OPT_ast_dump_filter)),
+    cl::cat(ClangCheckCategory));
+static cl::opt<bool>
+Analyze("analyze", cl::desc(Options->getOptionHelpText(options::OPT_analyze)),
+        cl::cat(ClangCheckCategory));
 
-static cl::opt<bool> Fixit(
-    "fixit",
-    cl::desc(Options->getOptionHelpText(options::OPT_fixit)));
+static cl::opt<bool>
+Fixit("fixit", cl::desc(Options->getOptionHelpText(options::OPT_fixit)),
+      cl::cat(ClangCheckCategory));
 static cl::opt<bool> FixWhatYouCan(
     "fix-what-you-can",
-    cl::desc(Options->getOptionHelpText(options::OPT_fix_what_you_can)));
+    cl::desc(Options->getOptionHelpText(options::OPT_fix_what_you_can)),
+    cl::cat(ClangCheckCategory));
 
 namespace {
 
@@ -79,7 +88,7 @@ public:
     FixWhatYouCan = ::FixWhatYouCan;
   }
 
-  std::string RewriteFilename(const std::string& filename, int &fd) {
+  std::string RewriteFilename(const std::string& filename, int &fd) override {
     assert(llvm::sys::path::is_absolute(filename) &&
            "clang-fixit expects absolute paths only.");
 
@@ -106,15 +115,15 @@ public:
       : clang::FixItRewriter(Diags, SourceMgr, LangOpts, FixItOpts) {
   }
 
-  virtual bool IncludeInDiagnosticCounts() const { return false; }
+  bool IncludeInDiagnosticCounts() const override { return false; }
 };
 
 /// \brief Subclasses \c clang::FixItAction so that we can install the custom
 /// \c FixItRewriter.
 class FixItAction : public clang::FixItAction {
 public:
-  virtual bool BeginSourceFileAction(clang::CompilerInstance& CI,
-                                     StringRef Filename) {
+  bool BeginSourceFileAction(clang::CompilerInstance& CI,
+                             StringRef Filename) override {
     FixItOpts.reset(new FixItOptions);
     Rewriter.reset(new FixItRewriter(CI.getDiagnostics(), CI.getSourceManager(),
                                      CI.getLangOpts(), FixItOpts.get()));
@@ -122,31 +131,47 @@ public:
   }
 };
 
-} // namespace
-
-// Anonymous namespace here causes problems with gcc <= 4.4 on MacOS 10.6.
-// "Non-global symbol: ... can't be a weak_definition"
-namespace clang_check {
 class ClangCheckActionFactory {
 public:
-  clang::ASTConsumer *newASTConsumer() {
+  std::unique_ptr<clang::ASTConsumer> newASTConsumer() {
     if (ASTList)
       return clang::CreateASTDeclNodeLister();
     if (ASTDump)
-      return clang::CreateASTDumper(ASTDumpFilter);
+      return clang::CreateASTDumper(ASTDumpFilter, /*DumpDecls=*/true,
+                                    /*DumpLookups=*/false);
     if (ASTPrint)
       return clang::CreateASTPrinter(&llvm::outs(), ASTDumpFilter);
-    return new clang::ASTConsumer();
+    return llvm::make_unique<clang::ASTConsumer>();
   }
 };
-}
+
+} // namespace
 
 int main(int argc, const char **argv) {
-  CommonOptionsParser OptionsParser(argc, argv);
-  ClangTool Tool(OptionsParser.GetCompilations(),
-                 OptionsParser.GetSourcePathList());
-  if (Fixit)
-    return Tool.run(newFrontendActionFactory<FixItAction>());
-  clang_check::ClangCheckActionFactory Factory;
-  return Tool.run(newFrontendActionFactory(&Factory));
+  llvm::sys::PrintStackTraceOnErrorSignal();
+  CommonOptionsParser OptionsParser(argc, argv, ClangCheckCategory);
+  ClangTool Tool(OptionsParser.getCompilations(),
+                 OptionsParser.getSourcePathList());
+
+  // Clear adjusters because -fsyntax-only is inserted by the default chain.
+  Tool.clearArgumentsAdjusters();
+  Tool.appendArgumentsAdjuster(getClangStripOutputAdjuster());
+
+  // Running the analyzer requires --analyze. Other modes can work with the
+  // -fsyntax-only option.
+  Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
+      Analyze ? "--analyze" : "-fsyntax-only", ArgumentInsertPosition::BEGIN));
+
+  ClangCheckActionFactory CheckFactory;
+  std::unique_ptr<FrontendActionFactory> FrontendFactory;
+
+  // Choose the correct factory based on the selected mode.
+  if (Analyze)
+    FrontendFactory = newFrontendActionFactory<clang::ento::AnalysisAction>();
+  else if (Fixit)
+    FrontendFactory = newFrontendActionFactory<FixItAction>();
+  else
+    FrontendFactory = newFrontendActionFactory(&CheckFactory);
+
+  return Tool.run(FrontendFactory.get());
 }

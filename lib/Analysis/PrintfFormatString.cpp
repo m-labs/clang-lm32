@@ -13,8 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Analysis/Analyses/FormatString.h"
-#include "clang/Basic/TargetInfo.h"
 #include "FormatStringParsing.h"
+#include "clang/Basic/TargetInfo.h"
 
 using clang::analyze_format_string::ArgType;
 using clang::analyze_format_string::FormatStringHandler;
@@ -54,13 +54,14 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
                                                   const char *E,
                                                   unsigned &argIndex,
                                                   const LangOptions &LO,
-                                                  const TargetInfo &Target) {
+                                                  const TargetInfo &Target,
+                                                  bool Warn) {
 
   using namespace clang::analyze_format_string;
   using namespace clang::analyze_printf;
 
   const char *I = Beg;
-  const char *Start = 0;
+  const char *Start = nullptr;
   UpdateOnReturn <const char*> UpdateBeg(Beg, I);
 
   // Look for a '%' character that indicates the start of a format specifier.
@@ -83,7 +84,8 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
 
   if (I == E) {
     // No more characters left?
-    H.HandleIncompleteSpecifier(Start, E - Start);
+    if (Warn)
+      H.HandleIncompleteSpecifier(Start, E - Start);
     return true;
   }
 
@@ -93,7 +95,8 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
 
   if (I == E) {
     // No more characters left?
-    H.HandleIncompleteSpecifier(Start, E - Start);
+    if (Warn)
+      H.HandleIncompleteSpecifier(Start, E - Start);
     return true;
   }
 
@@ -118,18 +121,20 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
 
   if (I == E) {
     // No more characters left?
-    H.HandleIncompleteSpecifier(Start, E - Start);
+    if (Warn)
+      H.HandleIncompleteSpecifier(Start, E - Start);
     return true;
   }
 
   // Look for the field width (if any).
   if (ParseFieldWidth(H, FS, Start, I, E,
-                      FS.usesPositionalArg() ? 0 : &argIndex))
+                      FS.usesPositionalArg() ? nullptr : &argIndex))
     return true;
 
   if (I == E) {
     // No more characters left?
-    H.HandleIncompleteSpecifier(Start, E - Start);
+    if (Warn)
+      H.HandleIncompleteSpecifier(Start, E - Start);
     return true;
   }
 
@@ -137,17 +142,19 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
   if (*I == '.') {
     ++I;
     if (I == E) {
-      H.HandleIncompleteSpecifier(Start, E - Start);
+      if (Warn)
+        H.HandleIncompleteSpecifier(Start, E - Start);
       return true;
     }
 
     if (ParsePrecision(H, FS, Start, I, E,
-                       FS.usesPositionalArg() ? 0 : &argIndex))
+                       FS.usesPositionalArg() ? nullptr : &argIndex))
       return true;
 
     if (I == E) {
       // No more characters left?
-      H.HandleIncompleteSpecifier(Start, E - Start);
+      if (Warn)
+        H.HandleIncompleteSpecifier(Start, E - Start);
       return true;
     }
   }
@@ -155,7 +162,8 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
   // Look for the length modifier.
   if (ParseLengthModifier(FS, I, E, LO) && I == E) {
     // No more characters left?
-    H.HandleIncompleteSpecifier(Start, E - Start);
+    if (Warn)
+      H.HandleIncompleteSpecifier(Start, E - Start);
     return true;
   }
 
@@ -187,8 +195,8 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
     case 'i': k = ConversionSpecifier::iArg; break;
     case 'n': k = ConversionSpecifier::nArg; break;
     case 'o': k = ConversionSpecifier::oArg; break;
-    case 'p': k = ConversionSpecifier::pArg;   break;
-    case 's': k = ConversionSpecifier::sArg;      break;
+    case 'p': k = ConversionSpecifier::pArg; break;
+    case 's': k = ConversionSpecifier::sArg; break;
     case 'u': k = ConversionSpecifier::uArg; break;
     case 'x': k = ConversionSpecifier::xArg; break;
     // POSIX specific.
@@ -198,7 +206,7 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
     case '@': k = ConversionSpecifier::ObjCObjArg; break;
     // Glibc specific.
     case 'm': k = ConversionSpecifier::PrintErrno; break;
-    // Apple-specific
+    // Apple-specific.
     case 'D':
       if (Target.getTriple().isOSDarwin())
         k = ConversionSpecifier::DArg;
@@ -211,6 +219,10 @@ static PrintfSpecifierResult ParsePrintfSpecifier(FormatStringHandler &H,
       if (Target.getTriple().isOSDarwin())
         k = ConversionSpecifier::UArg;
       break;
+    // MS specific.
+    case 'Z':
+      if (Target.getTriple().isOSMSVCRT())
+        k = ConversionSpecifier::ZArg;
   }
   PrintfConversionSpecifier CS(conversionPosition, k);
   FS.setConversionSpecifier(CS);
@@ -235,7 +247,7 @@ bool clang::analyze_format_string::ParsePrintfString(FormatStringHandler &H,
   // Keep looking for a format specifier until we have exhausted the string.
   while (I != E) {
     const PrintfSpecifierResult &FSR = ParsePrintfSpecifier(H, I, E, argIndex,
-                                                            LO, Target);
+                                                            LO, Target, true);
     // Did a fail-stop error of any kind occur when parsing the specifier?
     // If so, don't do any more processing.
     if (FSR.shouldStop())
@@ -253,6 +265,34 @@ bool clang::analyze_format_string::ParsePrintfString(FormatStringHandler &H,
   return false;
 }
 
+bool clang::analyze_format_string::ParseFormatStringHasSArg(const char *I,
+                                                            const char *E,
+                                                            const LangOptions &LO,
+                                                            const TargetInfo &Target) {
+  
+  unsigned argIndex = 0;
+  
+  // Keep looking for a %s format specifier until we have exhausted the string.
+  FormatStringHandler H;
+  while (I != E) {
+    const PrintfSpecifierResult &FSR = ParsePrintfSpecifier(H, I, E, argIndex,
+                                                            LO, Target, false);
+    // Did a fail-stop error of any kind occur when parsing the specifier?
+    // If so, don't do any more processing.
+    if (FSR.shouldStop())
+      return false;
+    // Did we exhaust the string or encounter an error that
+    // we can recover from?
+    if (!FSR.hasValue())
+      continue;
+    const analyze_printf::PrintfSpecifier &FS = FSR.getValue();
+    // Return true if this a %s format specifier.
+    if (FS.getConversionSpecifier().getKind() == ConversionSpecifier::Kind::sArg)
+      return true;
+  }
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // Methods on PrintfSpecifier.
 //===----------------------------------------------------------------------===//
@@ -266,9 +306,14 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
 
   if (CS.getKind() == ConversionSpecifier::cArg)
     switch (LM.getKind()) {
-      case LengthModifier::None: return Ctx.IntTy;
+      case LengthModifier::None:
+        return Ctx.IntTy;
       case LengthModifier::AsLong:
+      case LengthModifier::AsWide:
         return ArgType(ArgType::WIntTy, "wint_t");
+      case LengthModifier::AsShort:
+        if (Ctx.getTargetInfo().getTriple().isOSMSVCRT())
+          return Ctx.IntTy;
       default:
         return ArgType::Invalid();
     }
@@ -278,22 +323,32 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
       case LengthModifier::AsLongDouble:
         // GNU extension.
         return Ctx.LongLongTy;
-      case LengthModifier::None: return Ctx.IntTy;
+      case LengthModifier::None:
+        return Ctx.IntTy;
+      case LengthModifier::AsInt32:
+        return ArgType(Ctx.IntTy, "__int32");
       case LengthModifier::AsChar: return ArgType::AnyCharTy;
       case LengthModifier::AsShort: return Ctx.ShortTy;
       case LengthModifier::AsLong: return Ctx.LongTy;
       case LengthModifier::AsLongLong:
       case LengthModifier::AsQuad:
         return Ctx.LongLongTy;
+      case LengthModifier::AsInt64:
+        return ArgType(Ctx.LongLongTy, "__int64");
       case LengthModifier::AsIntMax:
         return ArgType(Ctx.getIntMaxType(), "intmax_t");
       case LengthModifier::AsSizeT:
         // FIXME: How to get the corresponding signed version of size_t?
         return ArgType();
+      case LengthModifier::AsInt3264:
+        return Ctx.getTargetInfo().getTriple().isArch64Bit()
+                   ? ArgType(Ctx.LongLongTy, "__int64")
+                   : ArgType(Ctx.IntTy, "__int32");
       case LengthModifier::AsPtrDiff:
         return ArgType(Ctx.getPointerDiffType(), "ptrdiff_t");
       case LengthModifier::AsAllocate:
       case LengthModifier::AsMAllocate:
+      case LengthModifier::AsWide:
         return ArgType::Invalid();
     }
 
@@ -302,23 +357,33 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
       case LengthModifier::AsLongDouble:
         // GNU extension.
         return Ctx.UnsignedLongLongTy;
-      case LengthModifier::None: return Ctx.UnsignedIntTy;
+      case LengthModifier::None:
+        return Ctx.UnsignedIntTy;
+      case LengthModifier::AsInt32:
+        return ArgType(Ctx.UnsignedIntTy, "unsigned __int32");
       case LengthModifier::AsChar: return Ctx.UnsignedCharTy;
       case LengthModifier::AsShort: return Ctx.UnsignedShortTy;
       case LengthModifier::AsLong: return Ctx.UnsignedLongTy;
       case LengthModifier::AsLongLong:
       case LengthModifier::AsQuad:
         return Ctx.UnsignedLongLongTy;
+      case LengthModifier::AsInt64:
+        return ArgType(Ctx.UnsignedLongLongTy, "unsigned __int64");
       case LengthModifier::AsIntMax:
         return ArgType(Ctx.getUIntMaxType(), "uintmax_t");
       case LengthModifier::AsSizeT:
         return ArgType(Ctx.getSizeType(), "size_t");
+      case LengthModifier::AsInt3264:
+        return Ctx.getTargetInfo().getTriple().isArch64Bit()
+                   ? ArgType(Ctx.UnsignedLongLongTy, "unsigned __int64")
+                   : ArgType(Ctx.UnsignedIntTy, "unsigned __int32");
       case LengthModifier::AsPtrDiff:
         // FIXME: How to get the corresponding unsigned
         // version of ptrdiff_t?
         return ArgType();
       case LengthModifier::AsAllocate:
       case LengthModifier::AsMAllocate:
+      case LengthModifier::AsWide:
         return ArgType::Invalid();
     }
 
@@ -351,6 +416,10 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
         return ArgType(); // FIXME: Is this a known extension?
       case LengthModifier::AsAllocate:
       case LengthModifier::AsMAllocate:
+      case LengthModifier::AsInt32:
+      case LengthModifier::AsInt3264:
+      case LengthModifier::AsInt64:
+      case LengthModifier::AsWide:
         return ArgType::Invalid();
     }
   }
@@ -359,18 +428,28 @@ ArgType PrintfSpecifier::getArgType(ASTContext &Ctx,
     case ConversionSpecifier::sArg:
       if (LM.getKind() == LengthModifier::AsWideChar) {
         if (IsObjCLiteral)
-          return Ctx.getPointerType(Ctx.UnsignedShortTy.withConst());
+          return ArgType(Ctx.getPointerType(Ctx.UnsignedShortTy.withConst()),
+                         "const unichar *");
         return ArgType(ArgType::WCStrTy, "wchar_t *");
       }
+      if (LM.getKind() == LengthModifier::AsWide)
+        return ArgType(ArgType::WCStrTy, "wchar_t *");
       return ArgType::CStrTy;
     case ConversionSpecifier::SArg:
       if (IsObjCLiteral)
-        return Ctx.getPointerType(Ctx.UnsignedShortTy.withConst());
+        return ArgType(Ctx.getPointerType(Ctx.UnsignedShortTy.withConst()),
+                       "const unichar *");
+      if (Ctx.getTargetInfo().getTriple().isOSMSVCRT() &&
+          LM.getKind() == LengthModifier::AsShort)
+        return ArgType::CStrTy;
       return ArgType(ArgType::WCStrTy, "wchar_t *");
     case ConversionSpecifier::CArg:
       if (IsObjCLiteral)
-        return Ctx.UnsignedShortTy;
-      return ArgType(Ctx.WCharTy, "wchar_t");
+        return ArgType(Ctx.UnsignedShortTy, "unichar");
+      if (Ctx.getTargetInfo().getTriple().isOSMSVCRT() &&
+          LM.getKind() == LengthModifier::AsShort)
+        return Ctx.IntTy;
+      return ArgType(Ctx.WideCharTy, "wchar_t");
     case ConversionSpecifier::pArg:
       return ArgType::CPointerTy;
     case ConversionSpecifier::ObjCObjArg:
@@ -494,11 +573,29 @@ bool PrintfSpecifier::fixType(QualType QT, const LangOptions &LangOpt,
   }
 
   // Handle size_t, ptrdiff_t, etc. that have dedicated length modifiers in C99.
-  if (isa<TypedefType>(QT) && (LangOpt.C99 || LangOpt.CPlusPlus0x))
+  if (isa<TypedefType>(QT) && (LangOpt.C99 || LangOpt.CPlusPlus11))
     namedTypeToLengthModifier(QT, LM);
 
-  // If fixing the length modifier was enough, we are done.
+  // If fixing the length modifier was enough, we might be done.
   if (hasValidLengthModifier(Ctx.getTargetInfo())) {
+    // If we're going to offer a fix anyway, make sure the sign matches.
+    switch (CS.getKind()) {
+    case ConversionSpecifier::uArg:
+    case ConversionSpecifier::UArg:
+      if (QT->isSignedIntegerType())
+        CS.setKind(clang::analyze_format_string::ConversionSpecifier::dArg);
+      break;
+    case ConversionSpecifier::dArg:
+    case ConversionSpecifier::DArg:
+    case ConversionSpecifier::iArg:
+      if (QT->isUnsignedIntegerType() && !HasPlusPrefix)
+        CS.setKind(clang::analyze_format_string::ConversionSpecifier::uArg);
+      break;
+    default:
+      // Other specifiers do not have signed/unsigned variants.
+      break;
+    }
+
     const analyze_printf::ArgType &ATR = getArgType(Ctx, IsObjCLiteral);
     if (ATR.isValid() && ATR.matchesType(Ctx, QT))
       return true;
@@ -506,7 +603,7 @@ bool PrintfSpecifier::fixType(QualType QT, const LangOptions &LangOpt,
 
   // Set conversion specifier and disable any flags which do not apply to it.
   // Let typedefs to char fall through to int, as %c is silly for uint8_t.
-  if (isa<TypedefType>(QT) && QT->isAnyCharacterType()) {
+  if (!isa<TypedefType>(QT) && QT->isCharType()) {
     CS.setKind(ConversionSpecifier::cArg);
     LM.setKind(LengthModifier::None);
     Precision.setHowSpecified(OptionalAmount::NotSpecified);

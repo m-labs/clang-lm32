@@ -1,3 +1,7 @@
+set(LLVM_LINK_COMPONENTS
+  Support
+  )
+
 add_clang_library(clangARCMigrate
   ARCMT.cpp
   ARCMTActions.cpp
@@ -9,34 +13,26 @@ add_clang_library(clangARCMigrate
   TransAutoreleasePool.cpp
   TransBlockObjCVariable.cpp
   TransEmptyStatementsAndDealloc.cpp
-  TransformActions.cpp
-  Transforms.cpp
   TransGCAttrs.cpp
   TransGCCalls.cpp
   TransProperties.cpp
+  TransProtectedScope.cpp
   TransRetainReleaseDealloc.cpp
   TransUnbridgedCasts.cpp
   TransUnusedInitDelegate.cpp
   TransZeroOutPropsInDealloc.cpp
-  )
+  TransformActions.cpp
+  Transforms.cpp
 
-add_dependencies(clangARCMigrate
-  ClangAttrClasses
-  ClangAttrList
-  ClangAttrParsedAttrList
-  ClangCommentNodes
-  ClangDeclNodes
-  ClangDiagnosticCommon
-  ClangDiagnosticGroups
-  ClangDiagnosticSema
-  ClangStmtNodes
-  )
-
-target_link_libraries(clangARCMigrate
-  clangBasic
+  LINK_LIBS
   clangAST
-  clangParse
+  clangAnalysis
+  clangBasic
+  clangEdit
   clangFrontend
-  clangRewriteCore
-  clangRewriteFrontend
+  clangLex
+  clangRewrite
+  clangSema
+  clangSerialization
+  clangStaticAnalyzerCheckers
   )

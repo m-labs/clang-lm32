@@ -1,4 +1,4 @@
-@__experimental_modules_import templates_top;
+@import templates_top;
 
 template<typename T> class Vector { 
 public:
@@ -18,6 +18,10 @@ namespace N {
   };
 }
 
+constexpr unsigned List<int>::*size_right = &List<int>::size;
+List<int> list_right = { 0, 12 };
+typedef List<int> ListInt_right;
+
 template <typename T>
 void pendingInstantiationEmit(T) {}
 void triggerPendingInstantiationToo() {
@@ -25,3 +29,21 @@ void triggerPendingInstantiationToo() {
 }
 
 void redeclDefinitionEmit(){}
+
+typedef Outer<int>::Inner OuterIntInner_right;
+
+int defineListDoubleRight() {
+  List<double> ld;
+  ld.push_back(0.0);
+  return ld.size;
+}
+
+template<typename T> struct MergePatternDecl;
+
+void outOfLineInlineUseRightF(void (OutOfLineInline<int>::*)() = &OutOfLineInline<int>::f);
+void outOfLineInlineUseRightG(void (OutOfLineInline<int>::*)() = &OutOfLineInline<int>::g);
+void outOfLineInlineUseRightH(void (OutOfLineInline<int>::*)() = &OutOfLineInline<int>::h);
+
+inline int *getStaticDataMemberRight() {
+  return WithUndefinedStaticDataMember<int[]>::undefined;
+}

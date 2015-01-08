@@ -94,7 +94,7 @@ struct Current : Derived {
                            Derived::Base1(), // expected-error {{type 'Derived::Base1' is not a direct or virtual base of 'Current'}}
                            Derived::V(),
                            ::NonExisting(), // expected-error {{member initializer 'NonExisting' does not name a non-static data member or}}
-                           INT::NonExisting()  {} // expected-error {{expected a class or namespace}} \
+                           INT::NonExisting()  {} // expected-error {{'INT' (aka 'int') is not a class, namespace, or scoped enumeration}} \
                                                   // expected-error {{member initializer 'NonExisting' does not name a non-static data member or}}
 };
 
@@ -238,7 +238,8 @@ namespace test3 {
     B(const String& s, int e=0) // expected-error {{unknown type name}} 
       : A(e), m_String(s) , m_ErrorStr(__null) {} // expected-error {{no matching constructor}} expected-error {{does not name}}
     B(const B& e)
-      : A(e), m_String(e.m_String), m_ErrorStr(__null) { // expected-error {{does not name}} expected-error {{no member named 'm_String' in 'test3::B'}}
+      : A(e), m_String(e.m_String), m_ErrorStr(__null) { // expected-error {{does not name}} \
+      // expected-error {{no member named 'm_String' in 'test3::B'}}
     }
   };
 }

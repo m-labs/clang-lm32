@@ -7,17 +7,12 @@ void foo(int x)
   // Check that multiply / divides on atomics produce a cmpxchg loop
   i *= 2;
   // CHECK: mul nsw i32
-  // CHECK: cmpxchg i32*
+  // CHECK: {{(cmpxchg i32*|i1 @__atomic_compare_exchange\(i32 4,)}}
   i /= 2;
   // CHECK: sdiv i32
-  // CHECK: cmpxchg i32*
+  // CHECK: {{(cmpxchg i32*|i1 @__atomic_compare_exchange\(i32 4, )}}
   j /= x;
   // CHECK: sdiv i32
-  // CHECK: cmpxchg i16*
+  // CHECK: {{(cmpxchg i16*|i1 @__atomic_compare_exchange\(i32 2, )}}
 
-  // These should be emitting atomicrmw instructions, but they aren't yet
-  i += 2; // CHECK: cmpxchg
-  i -= 2; // CHECK: cmpxchg
-  i++; // CHECK: cmpxchg
-  i--; // CHECK: cmpxchg
 }

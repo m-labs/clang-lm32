@@ -5,7 +5,7 @@ namespace Test1 {
     virtual int f() final;
   };
 
-  // CHECK: define i32 @_ZN5Test11fEPNS_1AE
+  // CHECK-LABEL: define i32 @_ZN5Test11fEPNS_1AE
   int f(A *a) {
     // CHECK: call i32 @_ZN5Test11A1fEv
     return a->f();
@@ -17,7 +17,7 @@ namespace Test2 {
     virtual int f();
   };
 
-  // CHECK: define i32 @_ZN5Test21fEPNS_1AE
+  // CHECK-LABEL: define i32 @_ZN5Test21fEPNS_1AE
   int f(A *a) {
     // CHECK: call i32 @_ZN5Test21A1fEv
     return a->f();
@@ -31,19 +31,19 @@ namespace Test3 {
 
   struct B final : A { };
 
-  // CHECK: define i32 @_ZN5Test31fEPNS_1BE
+  // CHECK-LABEL: define i32 @_ZN5Test31fEPNS_1BE
   int f(B *b) {
     // CHECK: call i32 @_ZN5Test31A1fEv
     return b->f();
   }
 
-  // CHECK: define i32 @_ZN5Test31fERNS_1BE
+  // CHECK-LABEL: define i32 @_ZN5Test31fERNS_1BE
   int f(B &b) {
     // CHECK: call i32 @_ZN5Test31A1fEv
     return b.f();
   }
 
-  // CHECK: define i32 @_ZN5Test31fEPv
+  // CHECK-LABEL: define i32 @_ZN5Test31fEPv
   int f(void *v) {
     // CHECK: call i32 @_ZN5Test31A1fEv
     return static_cast<B*>(v)->f();
@@ -53,32 +53,38 @@ namespace Test3 {
 namespace Test4 {
   struct A {
     virtual void f();
+    virtual int operator-();
   };
 
   struct B final : A {
     virtual void f();
+    virtual int operator-();
   };
 
-  // CHECK: define void @_ZN5Test41fEPNS_1BE
+  // CHECK-LABEL: define void @_ZN5Test41fEPNS_1BE
   void f(B* d) {
     // CHECK: call void @_ZN5Test41B1fEv
     static_cast<A*>(d)->f();
+    // CHECK: call i32 @_ZN5Test41BngEv
+    -static_cast<A&>(*d);
   }
 }
 
 namespace Test5 {
   struct A {
     virtual void f();
+    virtual int operator-();
   };
 
   struct B : A {
     virtual void f();
+    virtual int operator-();
   };
 
   struct C final : B {
   };
 
-  // CHECK: define void @_ZN5Test51fEPNS_1CE
+  // CHECK-LABEL: define void @_ZN5Test51fEPNS_1CE
   void f(C* d) {
     // FIXME: It should be possible to devirtualize this case, but that is
     // not implemented yet.
@@ -86,6 +92,15 @@ namespace Test5 {
     // CHECK-NEXT: %[[FUNC:.*]] = load
     // CHECK-NEXT: call void %[[FUNC]]
     static_cast<A*>(d)->f();
+  }
+  // CHECK-LABEL: define void @_ZN5Test53fopEPNS_1CE
+  void fop(C* d) {
+    // FIXME: It should be possible to devirtualize this case, but that is
+    // not implemented yet.
+    // CHECK: getelementptr
+    // CHECK-NEXT: %[[FUNC:.*]] = load
+    // CHECK-NEXT: call i32 %[[FUNC]]
+    -static_cast<A&>(*d);
   }
 }
 
@@ -105,7 +120,7 @@ namespace Test6 {
   struct D final : public C, public B {
   };
 
-  // CHECK: define void @_ZN5Test61fEPNS_1DE
+  // CHECK-LABEL: define void @_ZN5Test61fEPNS_1DE
   void f(D* d) {
     // CHECK: call void @_ZN5Test61DD1Ev
     static_cast<A*>(d)->~A();
@@ -126,7 +141,7 @@ namespace Test7 {
     virtual int f() {return z;}
   };
 
-  // CHECK: define i32 @_ZN5Test71fEPNS_3zedE
+  // CHECK-LABEL: define i32 @_ZN5Test71fEPNS_3zedE
   int f(zed *z) {
     // CHECK: alloca
     // CHECK-NEXT: store
@@ -144,7 +159,7 @@ namespace Test8 {
     virtual int foo() { return b; }
   };
   struct C final : A, B {  };
-  // CHECK: define i32 @_ZN5Test84testEPNS_1CE
+  // CHECK-LABEL: define i32 @_ZN5Test84testEPNS_1CE
   int test(C *c) {
     // CHECK: %[[THIS:.*]] = phi
     // CHECK-NEXT: call i32 @_ZN5Test81B3fooEv(%"struct.Test8::B"* %[[THIS]])
@@ -165,9 +180,18 @@ namespace Test9 {
     virtual A *f() {
       return 0;
     }
+    virtual A *operator-() {
+      return 0;
+    }
   };
   struct RC final : public RA {
     virtual C *f() {
+      C *x = new C();
+      x->a = 1;
+      x->b = 2;
+      return x;
+    }
+    virtual C *operator-() {
       C *x = new C();
       x->a = 1;
       x->b = 2;
@@ -178,10 +202,26 @@ namespace Test9 {
   A *f(RC *x) {
     // FIXME: It should be possible to devirtualize this case, but that is
     // not implemented yet.
-    // CHECK: getelementptr
-    // CHECK-NEXT: %[[FUNC:.*]] = load
-    // CHECK-NEXT: bitcast
+    // CHECK: load
+    // CHECK: bitcast
+    // CHECK: [[F_PTR_RA:%.+]] = bitcast
+    // CHECK: [[VTABLE:%.+]] = load {{.+}} [[F_PTR_RA]]
+    // CHECK: [[VFN:%.+]] = getelementptr inbounds {{.+}} [[VTABLE]], i{{[0-9]+}} 0
+    // CHECK-NEXT: %[[FUNC:.*]] = load {{.+}} [[VFN]]
     // CHECK-NEXT: = call {{.*}} %[[FUNC]]
     return static_cast<RA*>(x)->f();
+  }
+  // CHECK: define {{.*}} @_ZN5Test93fopEPNS_2RCE
+  A *fop(RC *x) {
+    // FIXME: It should be possible to devirtualize this case, but that is
+    // not implemented yet.
+    // CHECK: load
+    // CHECK: bitcast
+    // CHECK: [[F_PTR_RA:%.+]] = bitcast
+    // CHECK: [[VTABLE:%.+]] = load {{.+}} [[F_PTR_RA]]
+    // CHECK: [[VFN:%.+]] = getelementptr inbounds {{.+}} [[VTABLE]], i{{[0-9]+}} 1
+    // CHECK-NEXT: %[[FUNC:.*]] = load {{.+}} [[VFN]]
+    // CHECK-NEXT: = call {{.*}} %[[FUNC]]
+    return -static_cast<RA&>(*x);
   }
 }

@@ -11,33 +11,32 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_CODEGEN_CGBLOCKS_H
-#define CLANG_CODEGEN_CGBLOCKS_H
+#ifndef LLVM_CLANG_LIB_CODEGEN_CGBLOCKS_H
+#define LLVM_CLANG_LIB_CODEGEN_CGBLOCKS_H
 
+#include "CGBuilder.h"
+#include "CGCall.h"
+#include "CGValue.h"
+#include "CodeGenFunction.h"
 #include "CodeGenTypes.h"
-#include "clang/AST/Type.h"
-#include "llvm/Module.h"
-#include "clang/Basic/TargetInfo.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
-
-#include "CodeGenFunction.h"
-#include "CGBuilder.h"
-#include "CGCall.h"
-#include "CGValue.h"
+#include "clang/AST/Type.h"
+#include "clang/Basic/TargetInfo.h"
+#include "llvm/IR/Module.h"
 
 namespace llvm {
-  class Module;
-  class Constant;
-  class Function;
-  class GlobalValue;
-  class DataLayout;
-  class FunctionType;
-  class PointerType;
-  class Value;
-  class LLVMContext;
+class Module;
+class Constant;
+class Function;
+class GlobalValue;
+class DataLayout;
+class FunctionType;
+class PointerType;
+class Value;
+class LLVMContext;
 }
 
 namespace clang {
@@ -145,7 +144,7 @@ inline BlockFieldFlags operator|(BlockFieldFlag_t l, BlockFieldFlag_t r) {
 class CGBlockInfo {
 public:
   /// Name - The name of the block, kindof.
-  llvm::StringRef Name;
+  StringRef Name;
 
   /// The field index of 'this' within the block, if there is one.
   unsigned CXXThisIndex;
@@ -212,6 +211,14 @@ public:
   const BlockExpr *BlockExpression;
   CharUnits BlockSize;
   CharUnits BlockAlign;
+  
+  // Offset of the gap caused by block header having a smaller
+  // alignment than the alignment of the block descriptor. This
+  // is the gap offset before the first capturued field.
+  CharUnits BlockHeaderForcedGapOffset;
+  // Gap size caused by aligning first field after block header.
+  // This could be zero if no forced alignment is required.
+  CharUnits BlockHeaderForcedGapSize;
 
   /// An instruction which dominates the full-expression that the
   /// block is inside.
@@ -240,7 +247,7 @@ public:
     return BlockExpression;
   }
 
-  CGBlockInfo(const BlockDecl *blockDecl, llvm::StringRef Name);
+  CGBlockInfo(const BlockDecl *blockDecl, StringRef Name);
 };
 
 }  // end namespace CodeGen

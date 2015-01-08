@@ -55,12 +55,14 @@ void test34(int cond) {
   test34_sink(cond ? &strong : 0);
   test34_sink(cond ? &weak : 0);
 
-  // CHECK:    define void @_Z6test34i(
+  // CHECK-LABEL:    define void @_Z6test34i(
   // CHECK:      [[COND:%.*]] = alloca i32
   // CHECK-NEXT: [[STRONG:%.*]] = alloca i8*
   // CHECK-NEXT: [[WEAK:%.*]] = alloca i8*
   // CHECK-NEXT: [[TEMP1:%.*]] = alloca i8*
   // CHECK-NEXT: [[TEMP2:%.*]] = alloca i8*
+  // CHECK-NEXT: [[CONDCLEANUPSAVE:%.*]] = alloca i8*
+  // CHECK-NEXT: [[CONDCLEANUP:%.*]] = alloca i1
   // CHECK-NEXT: store i32
   // CHECK-NEXT: store i8* null, i8** [[STRONG]]
   // CHECK-NEXT: call i8* @objc_initWeak(i8** [[WEAK]], i8* null)
@@ -74,11 +76,13 @@ void test34(int cond) {
   // CHECK:      [[T0:%.*]] = load i8** [[ARG]]
   // CHECK-NEXT: store i8* [[T0]], i8** [[TEMP1]]
   // CHECK-NEXT: br label
+  // CHECK:      [[W0:%.*]] = phi i8* [ [[T0]], {{%.*}} ], [ undef, {{%.*}} ]
   // CHECK:      call void @_Z11test34_sinkPU15__autoreleasingP11objc_object(i8** [[T1]])
   // CHECK-NEXT: [[T0:%.*]] = icmp eq i8** [[ARG]], null
   // CHECK-NEXT: br i1 [[T0]],
   // CHECK:      [[T0:%.*]] = load i8** [[TEMP1]]
   // CHECK-NEXT: [[T1:%.*]] = call i8* @objc_retain(i8* [[T0]])
+  // CHECK-NEXT: call void (...)* @clang.arc.use(i8* [[W0]])
   // CHECK-NEXT: [[T2:%.*]] = load i8** [[ARG]]
   // CHECK-NEXT: store i8* [[T1]], i8** [[ARG]]
   // CHECK-NEXT: call void @objc_release(i8* [[T2]])
@@ -89,8 +93,11 @@ void test34(int cond) {
   // CHECK:      [[ARG:%.*]] = phi i8**
   // CHECK-NEXT: [[T0:%.*]] = icmp eq i8** [[ARG]], null
   // CHECK-NEXT: [[T1:%.*]] = select i1 [[T0]], i8** null, i8** [[TEMP2]]
+  // CHECK-NEXT: store i1 false, i1* [[CONDCLEANUP]]
   // CHECK-NEXT: br i1 [[T0]],
-  // CHECK:      [[T0:%.*]] = call i8* @objc_loadWeak(i8** [[ARG]])
+  // CHECK:      [[T0:%.*]] = call i8* @objc_loadWeakRetained(i8** [[ARG]])
+  // CHECK-NEXT: store i8* [[T0]], i8** [[CONDCLEANUPSAVE]]
+  // CHECK-NEXT: store i1 true, i1* [[CONDCLEANUP]]
   // CHECK-NEXT: store i8* [[T0]], i8** [[TEMP2]]
   // CHECK-NEXT: br label
   // CHECK:      call void @_Z11test34_sinkPU15__autoreleasingP11objc_object(i8** [[T1]])
@@ -111,7 +118,7 @@ struct Test35_Helper {
   id makeObject4();
 };
 
-// CHECK: define void @_Z6test3513Test35_HelperPS_
+// CHECK-LABEL: define void @_Z6test3513Test35_HelperPS_
 void test35(Test35_Helper x0, Test35_Helper *x0p) {
   // CHECK: call i8* @_ZN13Test35_Helper11makeObject1Ev
   // CHECK-NOT: call i8* @objc_retain
@@ -139,7 +146,7 @@ void test35(Test35_Helper x0, Test35_Helper *x0p) {
   // CHECK-NEXT: ret void
 }
 
-// CHECK: define void @_Z7test35b13Test35_HelperPS_
+// CHECK-LABEL: define void @_Z7test35b13Test35_HelperPS_
 void test35b(Test35_Helper x0, Test35_Helper *x0p) {
   // CHECK: call i8* @_ZN13Test35_Helper11makeObject3Ev
   // CHECK: call i8* @objc_retain
@@ -167,7 +174,7 @@ void test35b(Test35_Helper x0, Test35_Helper *x0p) {
 }
 
 // rdar://problem/9603128
-// CHECK: define i8* @_Z6test36P11objc_object(
+// CHECK-LABEL: define i8* @_Z6test36P11objc_object(
 id test36(id z) {
   // CHECK: objc_retain
   // CHECK: objc_retain
@@ -189,14 +196,14 @@ template <class T> void test37(T *a) {
 }
 extern template void test37<Test37>(Test37 *a);
 template void test37<Test37>(Test37 *a);
-// CHECK: define weak_odr void @_Z6test37I6Test37EvPT_(
+// CHECK-LABEL: define weak_odr void @_Z6test37I6Test37EvPT_(
 // CHECK:      [[T0:%.*]] = call [[NSARRAY]]* bitcast (i8* (i8*, i8*, ...)* @objc_msgSend to [[NSARRAY]]* (i8*, i8*)*)(
 // CHECK-NEXT: [[T1:%.*]] = bitcast [[NSARRAY]]* [[T0]] to i8*
 // CHECK-NEXT: [[T2:%.*]] = call i8* @objc_retainAutoreleasedReturnValue(i8* [[T1]])
 // CHECK-NEXT: [[COLL:%.*]] = bitcast i8* [[T2]] to [[NSARRAY]]*
 
 // Make sure it's not immediately released before starting the iteration.
-// CHECK-NEXT: load i8** @"\01L_OBJC_SELECTOR_REFERENCES_
+// CHECK-NEXT: load i8** @OBJC_SELECTOR_REFERENCES_
 // CHECK-NEXT: [[T0:%.*]] = bitcast [[NSARRAY]]* [[COLL]] to i8*
 // CHECK-NEXT: @objc_msgSend
 
@@ -217,7 +224,7 @@ void send_release() {
   [Test37 array];
 }
 
-// CHECK: define weak_odr void @_Z12send_releaseIiEvv(
+// CHECK-LABEL: define weak_odr void @_Z12send_releaseIiEvv(
 // CHECK: call %0* bitcast (i8* (i8*, i8*, ...)* @objc_msgSend
 // CHECK-NEXT: bitcast
 // CHECK-NEXT: call i8* @objc_retainAutoreleasedReturnValue
@@ -233,7 +240,7 @@ Test37 *instantiate_init() {
   return result;
 }
 
-// CHECK: define weak_odr %2* @_Z16instantiate_initIiEP6Test37v
+// CHECK-LABEL: define weak_odr %2* @_Z16instantiate_initIiEP6Test37v
 // CHECK: call i8* bitcast (i8* (i8*, i8*, ...)* @objc_msgSend
 // CHECK: call i8* bitcast (i8* (i8*, i8*, ...)* @objc_msgSend
 // CHECK: call i8* @objc_retain
@@ -250,7 +257,7 @@ template <class T> class Test38 {
     ^{ (void) x; }, ({ x; });
   }
 };
-// CHECK: define weak_odr void @_ZN6Test38IiE4testEi(
+// CHECK-LABEL: define weak_odr void @_ZN6Test38IiE4testEi(
 template class Test38<int>;
 
 // rdar://problem/11964832
@@ -265,6 +272,28 @@ class Test39 : Test39_base1, Test39_base2 { // base2 is at non-zero offset
 };
 id Test39::bar() { return 0; }
 // Note lack of autorelease.
-// CHECK:    define i8* @_ZThn8_N6Test393barEv(
+// CHECK-LABEL:    define i8* @_ZThn8_N6Test393barEv(
 // CHECK:      call i8* @_ZN6Test393barEv(
 // CHECK-NEXT: ret i8*
+
+// rdar://13617051
+// Just a basic sanity-check that IR-gen still works after instantiating
+// a non-dependent message send that requires writeback.
+@interface Test40
++ (void) foo:(id *)errorPtr;
+@end
+template <class T> void test40_helper() {
+  id x;
+  [Test40 foo: &x];
+};
+template void test40_helper<int>();
+// CHECK-LABEL:    define weak_odr void @_Z13test40_helperIiEvv()
+// CHECK:      [[X:%.*]] = alloca i8*
+// CHECK-NEXT: [[TEMP:%.*]] = alloca i8*
+// CHECK-NEXT: store i8* null, i8** [[X]]
+// CHECK:      [[T0:%.*]] = load i8** [[X]]
+// CHECK-NEXT: store i8* [[T0]], i8** [[TEMP]]
+// CHECK:      @objc_msgSend
+// CHECK-NEXT: [[T0:%.*]] = load i8** [[TEMP]]
+// CHECK-NEXT: call i8* @objc_retain(i8* [[T0]])
+

@@ -13,6 +13,7 @@ void *reallocf(void *ptr, size_t size);
 void *calloc(size_t nmemb, size_t size);
 char *strdup(const char *s);
 char *strndup(const char *s, size_t n);
+int memcmp(const void *s1, const void *s2, size_t n);
 
 void myfoo(int *p);
 void myfooint(int p);
@@ -20,7 +21,7 @@ char *fooRetPtr();
 
 void f1() {
   int *p = malloc(12);
-  return; // expected-warning{{Memory is never released; potential leak of memory pointed to by 'p'}}
+  return; // expected-warning{{Potential leak of memory pointed to by 'p'}}
 }
 
 void f2() {
@@ -45,7 +46,7 @@ void reallocNotNullPtr(unsigned sizeIn) {
   char *p = (char*)malloc(size);
   if (p) {
     char *q = (char*)realloc(p, sizeIn);
-    char x = *q; // expected-warning {{Memory is never released; potential leak of memory pointed to by 'q'}}
+    char x = *q; // expected-warning {{Potential leak of memory pointed to by 'q'}}
   }
 }
 
@@ -104,7 +105,7 @@ void reallocSizeZero5() {
 
 void reallocPtrZero1() {
   char *r = realloc(0, 12);
-} // expected-warning {{Memory is never released; potential leak of memory pointed to by 'r'}}
+} // expected-warning {{Potential leak of memory pointed to by 'r'}}
 
 void reallocPtrZero2() {
   char *r = realloc(0, 12);
@@ -121,7 +122,7 @@ void reallocRadar6337483_1() {
     char *buf = malloc(100);
     buf = (char*)realloc(buf, 0x1000000);
     if (!buf) {
-        return;// expected-warning {{Memory is never released; potential leak}}
+        return;// expected-warning {{Potential leak of memory pointed to by}}
     }
     free(buf);
 }
@@ -134,7 +135,7 @@ void reallocRadar6337483_2() {
     } else {
       free(buf2);
     }
-} // expected-warning {{Memory is never released; potential leak}}
+} // expected-warning {{Potential leak of memory pointed to by}}
 
 void reallocRadar6337483_3() {
     char * buf = malloc(100);
@@ -152,7 +153,7 @@ void reallocRadar6337483_4() {
     char *buf = malloc(100);
     char *buf2 = (char*)realloc(buf, 0x1000000);
     if (!buf2) {
-      return;  // expected-warning {{Memory is never released; potential leak}}
+      return;  // expected-warning {{Potential leak of memory pointed to by}}
     } else {
       free(buf2);
     }
@@ -188,7 +189,7 @@ void reallocfRadar6337483_3() {
 
 void reallocfPtrZero1() {
   char *r = reallocf(0, 12);
-} // expected-warning {{Memory is never released; potential leak}}
+} // expected-warning {{Potential leak of memory pointed to by}}
 
 
 // This case tests that storing malloc'ed memory to a static variable which is
@@ -269,6 +270,222 @@ void PR7217() {
   buf[1] = 'c'; // not crash
 }
 
+void cast_emtpy_struct() {
+  struct st {
+  };
+
+  struct st *s = malloc(sizeof(struct st)); // no-warning
+  free(s);
+}
+
+void cast_struct_1() {
+  struct st {
+    int i[100];
+    char j[];
+  };
+
+  struct st *s = malloc(sizeof(struct st)); // no-warning
+  free(s);
+}
+
+void cast_struct_2() {
+  struct st {
+    int i[100];
+    char j[0];
+  };
+
+  struct st *s = malloc(sizeof(struct st)); // no-warning
+  free(s);
+}
+
+void cast_struct_3() {
+  struct st {
+    int i[100];
+    char j[1];
+  };
+
+  struct st *s = malloc(sizeof(struct st)); // no-warning
+  free(s);
+}
+
+void cast_struct_4() {
+  struct st {
+    int i[100];
+    char j[2];
+  };
+
+  struct st *s = malloc(sizeof(struct st)); // no-warning
+  free(s);
+}
+
+void cast_struct_5() {
+  struct st {
+    char i[200];
+    char j[1];
+  };
+
+  struct st *s = malloc(sizeof(struct st) - sizeof(char)); // no-warning
+  free(s);
+}
+
+void cast_struct_warn_1() {
+  struct st {
+    int i[100];
+    char j[2];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 2); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_warn_2() {
+  struct st {
+    int i[100];
+    char j[2];
+  };
+
+  struct st *s = malloc(2); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_flex_array_1() {
+  struct st {
+    int i[100];
+    char j[];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3); // no-warning
+  free(s);
+}
+
+void cast_struct_flex_array_2() {
+  struct st {
+    int i[100];
+    char j[0];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3); // no-warning
+  free(s);
+}
+
+void cast_struct_flex_array_3() {
+  struct st {
+    int i[100];
+    char j[1];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3); // no-warning
+  free(s);
+}
+
+void cast_struct_flex_array_4() {
+  struct foo {
+    char f[32];
+  };
+  struct st {
+    char i[100];
+    struct foo data[];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3 * sizeof(struct foo)); // no-warning
+  free(s);
+}
+
+void cast_struct_flex_array_5() {
+  struct foo {
+    char f[32];
+  };
+  struct st {
+    char i[100];
+    struct foo data[0];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3 * sizeof(struct foo)); // no-warning
+  free(s);
+}
+
+void cast_struct_flex_array_6() {
+  struct foo {
+    char f[32];
+  };
+  struct st {
+    char i[100];
+    struct foo data[1];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3 * sizeof(struct foo)); // no-warning
+  free(s);
+}
+
+void cast_struct_flex_array_warn_1() {
+  struct foo {
+    char f[32];
+  };
+  struct st {
+    char i[100];
+    struct foo data[];
+  };
+
+  struct st *s = malloc(3 * sizeof(struct st) + 3 * sizeof(struct foo)); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_flex_array_warn_2() {
+  struct foo {
+    char f[32];
+  };
+  struct st {
+    char i[100];
+    struct foo data[0];
+  };
+
+  struct st *s = malloc(3 * sizeof(struct st) + 3 * sizeof(struct foo)); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_flex_array_warn_3() {
+  struct foo {
+    char f[32];
+  };
+  struct st {
+    char i[100];
+    struct foo data[1];
+  };
+
+  struct st *s = malloc(3 * sizeof(struct st) + 3 * sizeof(struct foo)); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_flex_array_warn_4() {
+  struct st {
+    int i[100];
+    int j[];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_flex_array_warn_5() {
+  struct st {
+    int i[100];
+    int j[0];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
+void cast_struct_flex_array_warn_6() {
+  struct st {
+    int i[100];
+    int j[1];
+  };
+
+  struct st *s = malloc(sizeof(struct st) + 3); // expected-warning{{Cast a region whose size is not a multiple of the destination type size}}
+  free(s);
+}
+
 void mallocCastToVoid() {
   void *p = malloc(2);
   const void *cp = p; // not crash
@@ -292,7 +509,7 @@ char mallocGarbage () {
 // This tests that calloc() buffers need to be freed
 void callocNoFree () {
   char *buf = calloc(2,2);
-  return; // expected-warning{{never released}}
+  return; // expected-warning{{Potential leak of memory pointed to by 'buf'}}
 }
 
 // These test that calloc() buffers are zeroed by default
@@ -311,7 +528,7 @@ char callocZeroesBad () {
 	if (buf[1] != 0) {
 	  free(buf); // expected-warning{{never executed}}
 	}
-	return result; // expected-warning{{never released}}
+	return result; // expected-warning{{Potential leak of memory pointed to by 'buf'}}
 }
 
 void nullFree() {
@@ -386,12 +603,12 @@ void mallocEscapeMalloc() {
   int *p = malloc(12);
   myfoo(p);
   p = malloc(12);
-} // expected-warning{{Memory is never released; potential leak}}
+} // expected-warning{{Potential leak of memory pointed to by}}
 
 void mallocMalloc() {
   int *p = malloc(12);
   p = malloc(12);
-} // expected-warning {{Memory is never released; potential leak}}
+} // expected-warning {{Potential leak of memory pointed to by}}
 
 void mallocFreeMalloc() {
   int *p = malloc(12);
@@ -450,7 +667,7 @@ void mallocFailedOrNotLeak() {
   if (p == 0)
     return; // no warning
   else
-    return; // expected-warning {{Memory is never released; potential leak}}
+    return; // expected-warning {{Potential leak of memory pointed to by}}
 }
 
 void mallocAssignment() {
@@ -460,7 +677,7 @@ void mallocAssignment() {
 
 int vallocTest() {
   char *mem = valloc(12);
-  return 0; // expected-warning {{Memory is never released; potential leak}}
+  return 0; // expected-warning {{Potential leak of memory pointed to by}}
 }
 
 void vallocEscapeFreeUse() {
@@ -533,7 +750,7 @@ int *testMalloc3() {
 void testStructLeak() {
   StructWithPtr St;
   St.memP = malloc(12);
-  return; // expected-warning {{Memory is never released; potential leak of memory pointed to by 'St.memP'}}
+  return; // expected-warning {{Potential leak of memory pointed to by 'St.memP'}}
 }
 
 void testElemRegion1() {
@@ -583,7 +800,7 @@ struct X* RegInvalidationDetect1(struct X *s2) {
   struct X *px= malloc(sizeof(struct X));
   px->p = 0;
   px = s2;
-  return px; // expected-warning {{Memory is never released; potential leak}}
+  return px; // expected-warning {{Potential leak of memory pointed to by}}
 }
 
 struct X* RegInvalidationGiveUp1() {
@@ -597,7 +814,7 @@ int **RegInvalidationDetect2(int **pp) {
   int *p = malloc(12);
   pp = &p;
   pp++;
-  return 0;// expected-warning {{Memory is never released; potential leak}}
+  return 0;// expected-warning {{Potential leak of memory pointed to by}}
 }
 
 extern void exit(int) __attribute__ ((__noreturn__));
@@ -626,7 +843,48 @@ void doNotInvalidateWhenPassedToSystemCalls(char *s) {
   char *p = malloc(12);
   strlen(p);
   strcpy(p, s);
+  strcpy(s, p);
+  strcpy(p, p);
+  memcpy(p, s, 1);
+  memcpy(s, p, 1);
+  memcpy(p, p, 1);
 } // expected-warning {{leak}}
+
+// Treat source buffer contents as escaped.
+void escapeSourceContents(char *s) {
+  char *p = malloc(12);
+  memcpy(s, &p, 12); // no warning
+
+  void *p1 = malloc(7);
+  char *a;
+  memcpy(&a, &p1, sizeof a);
+  // FIXME: No warning due to limitations imposed by current modelling of
+  // 'memcpy' (regions metadata is not copied).
+
+  int *ptrs[2];
+  int *allocated = (int *)malloc(4);
+  memcpy(&ptrs[0], &allocated, sizeof(int *));
+  // FIXME: No warning due to limitations imposed by current modelling of
+  // 'memcpy' (regions metadata is not copied).
+}
+
+void invalidateDestinationContents() {
+  int *null = 0;
+  int *p = (int *)malloc(4);
+  memcpy(&p, &null, sizeof(int *));
+
+  int *ptrs1[2]; // expected-warning {{Potential leak of memory pointed to by}}
+  ptrs1[0] = (int *)malloc(4);
+  memcpy(ptrs1,  &null, sizeof(int *));
+
+  int *ptrs2[2]; // expected-warning {{Potential memory leak}}
+  ptrs2[0] = (int *)malloc(4);
+  memcpy(&ptrs2[1],  &null, sizeof(int *));
+
+  int *ptrs3[2]; // expected-warning {{Potential memory leak}}
+  ptrs3[0] = (int *)malloc(4);
+  memcpy(&ptrs3[0],  &null, sizeof(int *));
+} // expected-warning {{Potential memory leak}}
 
 // Rely on the CString checker evaluation of the strcpy API to convey that the result of strcpy is equal to p.
 void symbolLostWithStrcpy(char *s) {
@@ -673,7 +931,7 @@ int *specialMallocWithStruct() {
 void testStrdup(const char *s, unsigned validIndex) {
   char *s2 = strdup(s);
   s2[validIndex + 1] = 'b';
-} // expected-warning {{Memory is never released; potential leak}}
+} // expected-warning {{Potential leak of memory pointed to by}}
 
 int testStrndup(const char *s, unsigned validIndex, unsigned size) {
   char *s2 = strndup(s, size);
@@ -681,7 +939,7 @@ int testStrndup(const char *s, unsigned validIndex, unsigned size) {
   if (s2[validIndex] != 'a')
     return 0;
   else
-    return 1;// expected-warning {{Memory is never released; potential leak}}
+    return 1;// expected-warning {{Potential leak of memory pointed to by}}
 }
 
 void testStrdupContentIsDefined(const char *s, unsigned validIndex) {
@@ -944,7 +1202,7 @@ void localStructTest() {
   StructWithPtr St;
   StructWithPtr *pSt = &St;
   pSt->memP = malloc(12);
-} // expected-warning{{Memory is never released; potential leak}}
+} // expected-warning{{Potential leak of memory pointed to by}}
 
 #ifdef __INTPTR_TYPE__
 // Test double assignment through integers.
@@ -1041,15 +1299,235 @@ char *testLeakWithinReturn(char *str) {
   return strdup(strdup(str)); // expected-warning{{leak}}
 }
 
+void passConstPtr(const char * ptr);
+
+void testPassConstPointer() {
+  char * string = malloc(sizeof(char)*10);
+  passConstPtr(string);
+  return; // expected-warning {{leak}}
+}
+
+void testPassConstPointerIndirectly() {
+  char *p = malloc(1);
+  p++;
+  memcmp(p, p, sizeof(&p));
+  return; // expected-warning {{leak}}
+}
+
+void testPassConstPointerIndirectlyStruct() {
+  struct HasPtr hp;
+  hp.p = malloc(10);
+  memcmp(&hp, &hp, sizeof(hp));
+  return; // expected-warning {{Potential leak of memory pointed to by 'hp.p'}}
+}
+
+void testPassToSystemHeaderFunctionIndirectlyStruct() {
+  SomeStruct ss;
+  ss.p = malloc(1);
+  fakeSystemHeaderCall(&ss); // invalidates ss, making ss.p unreachable
+  // Technically a false negative here -- we know the system function won't free
+  // ss.p, but nothing else will either!
+} // no-warning
+
+void testPassToSystemHeaderFunctionIndirectlyStructFree() {
+  SomeStruct ss;
+  ss.p = malloc(1);
+  fakeSystemHeaderCall(&ss); // invalidates ss, making ss.p unreachable
+  free(ss.p);
+} // no-warning
+
+void testPassToSystemHeaderFunctionIndirectlyArray() {
+  int *p[1];
+  p[0] = malloc(sizeof(int));
+  fakeSystemHeaderCallIntPtr(p); // invalidates p, making p[0] unreachable
+  // Technically a false negative here -- we know the system function won't free
+  // p[0], but nothing else will either!
+} // no-warning
+
+void testPassToSystemHeaderFunctionIndirectlyArrayFree() {
+  int *p[1];
+  p[0] = malloc(sizeof(int));
+  fakeSystemHeaderCallIntPtr(p); // invalidates p, making p[0] unreachable
+  free(p[0]);
+} // no-warning
+
+int *testOffsetAllocate(size_t size) {
+  int *memoryBlock = (int *)malloc(size + sizeof(int));
+  return &memoryBlock[1]; // no-warning
+}
+
+void testOffsetDeallocate(int *memoryBlock) {
+  free(&memoryBlock[-1]);  // no-warning
+}
+
+void testOffsetOfRegionFreed() {
+  __int64_t * array = malloc(sizeof(__int64_t)*2);
+  array += 1;
+  free(&array[0]); // expected-warning{{Argument to free() is offset by 8 bytes from the start of memory allocated by malloc()}}
+}
+
+void testOffsetOfRegionFreed2() {
+  __int64_t *p = malloc(sizeof(__int64_t)*2);
+  p += 1;
+  free(p); // expected-warning{{Argument to free() is offset by 8 bytes from the start of memory allocated by malloc()}}
+}
+
+void testOffsetOfRegionFreed3() {
+  char *r = malloc(sizeof(char));
+  r = r - 10;
+  free(r); // expected-warning {{Argument to free() is offset by -10 bytes from the start of memory allocated by malloc()}}
+}
+
+void testOffsetOfRegionFreedAfterFunctionCall() {
+  int *p = malloc(sizeof(int)*2);
+  p += 1;
+  myfoo(p);
+  free(p); // expected-warning{{Argument to free() is offset by 4 bytes from the start of memory allocated by malloc()}}
+}
+
+void testFixManipulatedPointerBeforeFree() {
+  int * array = malloc(sizeof(int)*2);
+  array += 1;
+  free(&array[-1]); // no-warning
+}
+
+void testFixManipulatedPointerBeforeFree2() {
+  char *r = malloc(sizeof(char));
+  r = r + 10;
+  free(r-10); // no-warning
+}
+
+void freeOffsetPointerPassedToFunction() {
+  __int64_t *p = malloc(sizeof(__int64_t)*2);
+  p[1] = 0;
+  p += 1;
+  myfooint(*p); // not passing the pointer, only a value pointed by pointer
+  free(p); // expected-warning {{Argument to free() is offset by 8 bytes from the start of memory allocated by malloc()}}
+}
+
+int arbitraryInt();
+void freeUnknownOffsetPointer() {
+  char *r = malloc(sizeof(char));
+  r = r + arbitraryInt(); // unable to reason about what the offset might be
+  free(r); // no-warning
+}
+
+void testFreeNonMallocPointerWithNoOffset() {
+  char c;
+  char *r = &c;
+  r = r + 10;
+  free(r-10); // expected-warning {{Argument to free() is the address of the local variable 'c', which is not memory allocated by malloc()}}
+}
+
+void testFreeNonMallocPointerWithOffset() {
+  char c;
+  char *r = &c;
+  free(r+1); // expected-warning {{Argument to free() is the address of the local variable 'c', which is not memory allocated by malloc()}}
+}
+
+void testOffsetZeroDoubleFree() {
+  int *array = malloc(sizeof(int)*2);
+  int *p = &array[0];
+  free(p);
+  free(&array[0]); // expected-warning{{Attempt to free released memory}}
+}
+
+void testOffsetPassedToStrlen() {
+  char * string = malloc(sizeof(char)*10);
+  string += 1;
+  int length = strlen(string); // expected-warning {{Potential leak of memory pointed to by 'string'}}
+}
+
+void testOffsetPassedToStrlenThenFree() {
+  char * string = malloc(sizeof(char)*10);
+  string += 1;
+  int length = strlen(string);
+  free(string); // expected-warning {{Argument to free() is offset by 1 byte from the start of memory allocated by malloc()}}
+}
+
+void testOffsetPassedAsConst() {
+  char * string = malloc(sizeof(char)*10);
+  string += 1;
+  passConstPtr(string);
+  free(string); // expected-warning {{Argument to free() is offset by 1 byte from the start of memory allocated by malloc()}}
+}
+
+char **_vectorSegments;
+int _nVectorSegments;
+
+void poolFreeC(void* s) {
+  free(s); // no-warning
+}
+void freeMemory() {
+  while (_nVectorSegments) {
+    poolFreeC(_vectorSegments[_nVectorSegments++]);
+  }
+}
+
+// PR16730
+void testReallocEscaped(void **memory) {
+  *memory = malloc(47);
+  char *new_memory = realloc(*memory, 47);
+  if (new_memory != 0) {
+    *memory = new_memory;
+  }
+}
+
+// PR16558
+void *smallocNoWarn(size_t size) {
+  if (size == 0) {
+    return malloc(1); // this branch is never called
+  } 
+  else {
+    return malloc(size);
+  }
+}
+
+char *dupstrNoWarn(const char *s) {
+  const int len = strlen(s);
+  char *p = (char*) smallocNoWarn(len + 1);
+  strcpy(p, s); // no-warning
+  return p;
+}
+
+void *smallocWarn(size_t size) {
+  if (size == 2) {
+    return malloc(1);
+  }
+  else {
+    return malloc(size);
+  }
+}
+
+char *dupstrWarn(const char *s) {
+  const int len = strlen(s);
+  char *p = (char*) smallocWarn(len + 1);
+  strcpy(p, s); // expected-warning{{String copy function overflows destination buffer}}
+  return p;
+}
+
+int *radar15580979() {
+  int *data = (int *)malloc(32);
+  int *p = data ?: (int*)malloc(32); // no warning
+  return p;
+}
+
 // ----------------------------------------------------------------------------
 // False negatives.
 
-// TODO: This is another false negative.
 void testMallocWithParam(int **p) {
   *p = (int*) malloc(sizeof(int));
-  *p = 0;
+  *p = 0; // FIXME: should warn here
 }
 
 void testMallocWithParam_2(int **p) {
-  *p = (int*) malloc(sizeof(int));
+  *p = (int*) malloc(sizeof(int)); // no-warning
+}
+
+void testPassToSystemHeaderFunctionIndirectly() {
+  int *p = malloc(4);
+  p++;
+  fakeSystemHeaderCallInt(p);
+  // FIXME: This is a leak: if we think a system function won't free p, it
+  // won't free (p-1) either.
 }

@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -ffreestanding -triple i386-apple-darwin9 -target-cpu pentium4 -target-feature +sse4.1 -g -emit-llvm %s -o - | FileCheck %s
+// RUN: %clang_cc1 -ffreestanding -triple x86_64-apple-macosx10.8.0 -target-feature +sse4.1 -emit-llvm %s -o - | FileCheck %s
 
 #include <xmmintrin.h>
 #include <emmintrin.h>
@@ -63,8 +63,8 @@ __m128 test_load1_ps(void* y) {
 }
 
 void test_store_ss(__m128 x, void* y) {
-  // CHECK: define void @test_store_ss
-  // CHECK: store {{.*}} float* {{.*}}, align 1,
+  // CHECK-LABEL: define void @test_store_ss
+  // CHECK: store {{.*}} float* {{.*}}, align 1{{$}}
   _mm_store_ss(y, x);
 }
 
@@ -99,32 +99,32 @@ __m128d test_loadl_pd(__m128d x, void* y) {
 }
 
 void test_store_sd(__m128d x, void* y) {
-  // CHECK: define void @test_store_sd
+  // CHECK-LABEL: define void @test_store_sd
   // CHECK: store {{.*}} double* {{.*}}, align 1{{$}}
   _mm_store_sd(y, x);
 }
 
 void test_store1_pd(__m128d x, void* y) {
-  // CHECK: define void @test_store1_pd
+  // CHECK-LABEL: define void @test_store1_pd
   // CHECK: store {{.*}} double* {{.*}}, align 1{{$}}
   // CHECK: store {{.*}} double* {{.*}}, align 1{{$}}
   _mm_store1_pd(y, x);
 }
 
 void test_storer_pd(__m128d x, void* y) {
-  // CHECK: define void @test_storer_pd
+  // CHECK-LABEL: define void @test_storer_pd
   // CHECK: store {{.*}} <2 x double>* {{.*}}, align 16{{$}}
   _mm_storer_pd(y, x);
 }
 
 void test_storeh_pd(__m128d x, void* y) {
-  // CHECK: define void @test_storeh_pd
+  // CHECK-LABEL: define void @test_storeh_pd
   // CHECK: store {{.*}} double* {{.*}}, align 1{{$}}
   _mm_storeh_pd(y, x);
 }
 
 void test_storel_pd(__m128d x, void* y) {
-  // CHECK: define void @test_storel_pd
+  // CHECK-LABEL: define void @test_storel_pd
   // CHECK: store {{.*}} double* {{.*}}, align 1{{$}}
   _mm_storel_pd(y, x);
 }
@@ -184,7 +184,362 @@ __m128d test_mm_round_sd(__m128d x, __m128d y) {
 }
 
 void test_storel_epi64(__m128i x, void* y) {
-  // CHECK: define void @test_storel_epi64
+  // CHECK-LABEL: define void @test_storel_epi64
   // CHECK: store {{.*}} i64* {{.*}}, align 1{{$}}
   _mm_storel_epi64(y, x);
+}
+
+void test_stream_si32(int x, void *y) {
+  // CHECK-LABEL: define void @test_stream_si32
+  // CHECK: store {{.*}} i32* {{.*}}, align 1, !nontemporal
+  _mm_stream_si32(y, x);
+}
+
+void test_stream_si64(long long x, void *y) {
+  // CHECK-LABEL: define void @test_stream_si64
+  // CHECK: store {{.*}} i64* {{.*}}, align 1, !nontemporal
+  _mm_stream_si64(y, x);
+}
+
+void test_stream_si128(__m128i x, void *y) {
+  // CHECK-LABEL: define void @test_stream_si128
+  // CHECK: store {{.*}} <2 x i64>* {{.*}}, align 16, !nontemporal
+  _mm_stream_si128(y, x);
+}
+
+void test_extract_epi16(__m128i __a) {
+  // CHECK-LABEL: define void @test_extract_epi16
+  // CHECK: [[x:%.*]] = and i32 %{{.*}}, 7
+  // CHECK: extractelement <8 x i16> %{{.*}}, i32 [[x]]
+  _mm_extract_epi16(__a, 8);
+}
+
+int test_extract_ps(__m128i __a) {
+  // CHECK-LABEL: @test_extract_ps
+  // CHECK: extractelement <4 x float> %{{.*}}, i32 0
+  return _mm_extract_ps(__a, 4);
+}
+
+int test_extract_epi8(__m128i __a) {
+  // CHECK-LABEL: @test_extract_epi8
+  // CHECK: extractelement <16 x i8> %{{.*}}, i32 0
+  return _mm_extract_epi8(__a, 16);
+}
+
+int test_extract_epi32(__m128i __a) {
+  // CHECK-LABEL: @test_extract_epi32
+  // CHECK: extractelement <4 x i32> %{{.*}}, i32 0
+  return _mm_extract_epi32(__a, 4);
+}
+
+void test_insert_epi32(__m128i __a, int b) {
+  // CHECK-LABEL: @test_insert_epi32
+  // CHECK: insertelement <4 x i32> %{{.*}}, i32 %{{.*}}, i32 0
+   _mm_insert_epi32(__a, b, 4);
+}
+
+__m128d test_blend_pd(__m128d V1, __m128d V2) {
+  // CHECK-LABEL: @test_blend_pd
+  // CHECK: shufflevector <2 x double> %{{.*}}, <2 x double> %{{.*}}, <2 x i32> <i32 2, i32 1>
+  return _mm_blend_pd(V1, V2, 1);
+}
+
+__m128 test_blend_ps(__m128 V1, __m128 V2) {
+  // CHECK-LABEL: @test_blend_ps
+  // CHECK: shufflevector <4 x float> %{{.*}}, <4 x float> %{{.*}}, <4 x i32> <i32 4, i32 1, i32 6, i32 3>
+  return _mm_blend_ps(V1, V2, 5);
+}
+
+__m128i test_blend_epi16(__m128i V1, __m128i V2) {
+  // CHECK-LABEL: @test_blend_epi16
+  // CHECK: shufflevector <8 x i16> %{{.*}}, <8 x i16> %{{.*}}, <8 x i32> <i32 0, i32 9, i32 2, i32 11, i32 4, i32 13, i32 6, i32 7>
+  return _mm_blend_epi16(V1, V2, 42);
+}
+
+__m128 test_mm_cmpeq_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpeq_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 0)
+  return _mm_cmpeq_ss(__a, __b);
+}
+
+__m128 test_mm_cmplt_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmplt_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 1)
+  return _mm_cmplt_ss(__a, __b);
+}
+
+__m128 test_mm_cmple_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmple_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 2)
+  return _mm_cmple_ss(__a, __b);
+}
+
+__m128 test_mm_cmpunord_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpunord_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 3)
+  return _mm_cmpunord_ss(__a, __b);
+}
+
+__m128 test_mm_cmpneq_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpneq_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 4)
+  return _mm_cmpneq_ss(__a, __b);
+}
+
+__m128 test_mm_cmpnlt_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpnlt_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 5)
+  return _mm_cmpnlt_ss(__a, __b);
+}
+
+__m128 test_mm_cmpnle_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpnle_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 6)
+  return _mm_cmpnle_ss(__a, __b);
+}
+
+__m128 test_mm_cmpord_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpord_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 7)
+  return _mm_cmpord_ss(__a, __b);
+}
+
+__m128 test_mm_cmpgt_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpgt_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 1)
+  return _mm_cmpgt_ss(__a, __b);
+}
+
+__m128 test_mm_cmpge_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpge_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 2)
+  return _mm_cmpge_ss(__a, __b);
+}
+
+__m128 test_mm_cmpngt_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpngt_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 5)
+  return _mm_cmpngt_ss(__a, __b);
+}
+
+__m128 test_mm_cmpnge_ss(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpnge_ss
+  // CHECK: @llvm.x86.sse.cmp.ss(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 6)
+  return _mm_cmpnge_ss(__a, __b);
+}
+
+__m128 test_mm_cmpeq_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpeq_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 0)
+  return _mm_cmpeq_ps(__a, __b);
+}
+
+__m128 test_mm_cmplt_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmplt_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 1)
+  return _mm_cmplt_ps(__a, __b);
+}
+
+__m128 test_mm_cmple_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmple_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 2)
+  return _mm_cmple_ps(__a, __b);
+}
+
+__m128 test_mm_cmpunord_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpunord_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 3)
+  return _mm_cmpunord_ps(__a, __b);
+}
+
+__m128 test_mm_cmpneq_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpneq_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 4)
+  return _mm_cmpneq_ps(__a, __b);
+}
+
+__m128 test_mm_cmpnlt_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpnlt_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 5)
+  return _mm_cmpnlt_ps(__a, __b);
+}
+
+__m128 test_mm_cmpnle_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpnle_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 6)
+  return _mm_cmpnle_ps(__a, __b);
+}
+
+__m128 test_mm_cmpord_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpord_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 7)
+  return _mm_cmpord_ps(__a, __b);
+}
+
+__m128 test_mm_cmpgt_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpgt_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 1)
+  return _mm_cmpgt_ps(__a, __b);
+}
+
+__m128 test_mm_cmpge_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpge_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 2)
+  return _mm_cmpge_ps(__a, __b);
+}
+
+__m128 test_mm_cmpngt_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpngt_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 5)
+  return _mm_cmpngt_ps(__a, __b);
+}
+
+__m128 test_mm_cmpnge_ps(__m128 __a, __m128 __b) {
+  // CHECK-LABEL: @test_mm_cmpnge_ps
+  // CHECK: @llvm.x86.sse.cmp.ps(<4 x float> %{{.*}}, <4 x float> %{{.*}}, i8 6)
+  return _mm_cmpnge_ps(__a, __b);
+}
+
+__m128d test_mm_cmpeq_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpeq_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 0)
+  return _mm_cmpeq_sd(__a, __b);
+}
+
+__m128d test_mm_cmplt_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmplt_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 1)
+  return _mm_cmplt_sd(__a, __b);
+}
+
+__m128d test_mm_cmple_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmple_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 2)
+  return _mm_cmple_sd(__a, __b);
+}
+
+__m128d test_mm_cmpunord_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpunord_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 3)
+  return _mm_cmpunord_sd(__a, __b);
+}
+
+__m128d test_mm_cmpneq_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpneq_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 4)
+  return _mm_cmpneq_sd(__a, __b);
+}
+
+__m128d test_mm_cmpnlt_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpnlt_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 5)
+  return _mm_cmpnlt_sd(__a, __b);
+}
+
+__m128d test_mm_cmpnle_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpnle_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 6)
+  return _mm_cmpnle_sd(__a, __b);
+}
+
+__m128d test_mm_cmpord_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpord_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 7)
+  return _mm_cmpord_sd(__a, __b);
+}
+
+__m128d test_mm_cmpgt_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpgt_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 1)
+  return _mm_cmpgt_sd(__a, __b);
+}
+
+__m128d test_mm_cmpge_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpge_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 2)
+  return _mm_cmpge_sd(__a, __b);
+}
+
+__m128d test_mm_cmpngt_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpngt_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 5)
+  return _mm_cmpngt_sd(__a, __b);
+}
+
+__m128d test_mm_cmpnge_sd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpnge_sd
+  // CHECK: @llvm.x86.sse2.cmp.sd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 6)
+  return _mm_cmpnge_sd(__a, __b);
+}
+
+__m128d test_mm_cmpeq_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpeq_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 0)
+  return _mm_cmpeq_pd(__a, __b);
+}
+
+__m128d test_mm_cmplt_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmplt_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 1)
+  return _mm_cmplt_pd(__a, __b);
+}
+
+__m128d test_mm_cmple_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmple_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 2)
+  return _mm_cmple_pd(__a, __b);
+}
+
+__m128d test_mm_cmpunord_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpunord_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 3)
+  return _mm_cmpunord_pd(__a, __b);
+}
+
+__m128d test_mm_cmpneq_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpneq_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 4)
+  return _mm_cmpneq_pd(__a, __b);
+}
+
+__m128d test_mm_cmpnlt_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpnlt_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 5)
+  return _mm_cmpnlt_pd(__a, __b);
+}
+
+__m128d test_mm_cmpnle_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpnle_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 6)
+  return _mm_cmpnle_pd(__a, __b);
+}
+
+__m128d test_mm_cmpord_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpord_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 7)
+  return _mm_cmpord_pd(__a, __b);
+}
+
+__m128d test_mm_cmpgt_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpgt_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 1)
+  return _mm_cmpgt_pd(__a, __b);
+}
+
+__m128d test_mm_cmpge_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpge_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 2)
+  return _mm_cmpge_pd(__a, __b);
+}
+
+__m128d test_mm_cmpngt_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpngt_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 5)
+  return _mm_cmpngt_pd(__a, __b);
+}
+
+__m128d test_mm_cmpnge_pd(__m128d __a, __m128d __b) {
+  // CHECK-LABEL: @test_mm_cmpnge_pd
+  // CHECK: @llvm.x86.sse2.cmp.pd(<2 x double> %{{.*}}, <2 x double> %{{.*}}, i8 6)
+  return _mm_cmpnge_pd(__a, __b);
 }

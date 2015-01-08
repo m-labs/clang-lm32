@@ -1,4 +1,7 @@
 // RUN: %clang_cc1 -fsyntax-only -std=c++98 -Wc++11-compat -verify %s
+// RUN: %clang_cc1 -fsyntax-only -std=c++1z -Wc++11-compat -verify %s
+
+#if __cplusplus < 201103L
 
 namespace N {
   template<typename T> void f(T) {} // expected-note 2{{here}}
@@ -37,3 +40,16 @@ void h(size_t foo, size_t bar) {
 
 #define _x + 1
 char c = 'x'_x; // expected-warning {{will be treated as a user-defined literal suffix}}
+
+template<int ...N> int f() { // expected-warning {{C++11 extension}}
+  return (N + ...); // expected-warning {{C++1z extension}}
+}
+
+#else
+
+auto init_capture = [a(0)] {}; // expected-warning {{initialized lambda captures are incompatible with C++ standards before C++14}}
+static_assert(true); // expected-warning {{incompatible with C++ standards before C++1z}}
+
+template<int ...N> int f() { return (N + ...); } // expected-warning {{incompatible with C++ standards before C++1z}}
+
+#endif

@@ -7,13 +7,13 @@ struct MoveOnly {
 
 template<typename T> T &&move(T&);
 void test_special_member_functions(MoveOnly mo, int i) {
-  auto lambda1 = [i]() { }; // expected-note 2 {{lambda expression begins here}}
+  auto lambda1 = [i]() { }; // expected-note {{lambda expression begins here}} expected-note 2{{candidate}}
 
   // Default constructor
-  decltype(lambda1) lambda2; // expected-error{{call to implicitly-deleted default constructor of 'decltype(lambda1)' (aka '<lambda}}
+  decltype(lambda1) lambda2; // expected-error{{no matching constructor}}
 
   // Copy assignment operator
-  lambda1 = lambda1; // expected-error{{overload resolution selected implicitly-deleted copy assignment operator}}
+  lambda1 = lambda1; // expected-error{{copy assignment operator is implicitly deleted}}
 
   // Move assignment operator
   lambda1 = move(lambda1);

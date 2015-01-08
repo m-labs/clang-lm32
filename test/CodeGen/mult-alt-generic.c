@@ -1,12 +1,13 @@
 // RUN: %clang_cc1 -triple i686 %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple x86_64 %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple arm %s -emit-llvm -o - | FileCheck %s
-// RUN: %clang_cc1 -triple mblaze %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple mips %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple mipsel %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple powerpc %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple powerpc64 %s -emit-llvm -o - | FileCheck %s
+// RUN: %clang_cc1 -triple s390x %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple sparc %s -emit-llvm -o - | FileCheck %s
+// RUN: %clang_cc1 -triple sparcv9 %s -emit-llvm -o - | FileCheck %s
 // RUN: %clang_cc1 -triple thumb %s -emit-llvm -o - | FileCheck %s
 
 int mout0;
@@ -16,7 +17,7 @@ int marray[2];
 // CHECK: @single_m
 void single_m()
 {
-  // CHECK: call void asm "foo $1,$0", "=*m,*m[[CLOBBERS:[a-zA-Z0-9@%{},~_ ]*\"]](i32* {{[a-zA-Z0-9@%]+}}, i32* {{[a-zA-Z0-9@%]+}})
+  // CHECK: call void asm "foo $1,$0", "=*m,*m[[CLOBBERS:[a-zA-Z0-9@%{},~_$ ]*\"]](i32* {{[a-zA-Z0-9@%]+}}, i32* {{[a-zA-Z0-9@%]+}})
   asm("foo %1,%0" : "=m" (mout0) : "m" (min1));
 }
 
