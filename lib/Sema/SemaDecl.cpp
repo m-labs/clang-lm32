@@ -6613,9 +6613,6 @@ static FunctionDecl* CreateNewFunctionDecl(Sema &SemaRef, Declarator &D,
     if (D.isInvalidType())
       NewFD->setInvalidDecl();
 
-    // Set the lexical context.
-    NewFD->setLexicalDeclContext(SemaRef.CurContext);
-
     return NewFD;
   }
 
@@ -6715,6 +6712,11 @@ static FunctionDecl* CreateNewFunctionDecl(Sema &SemaRef, Declarator &D,
     IsVirtualOkay = !Ret->isStatic();
     return Ret;
   } else {
+    bool isFriend =
+        SemaRef.getLangOpts().CPlusPlus && D.getDeclSpec().isFriendSpecified();
+    if (!isFriend && SemaRef.CurContext->isRecord())
+      return nullptr;
+
     // Determine whether the function was written with a
     // prototype. This true when:
     //   - we're in C++ (where every function has a prototype),
@@ -7883,7 +7885,7 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
       (MD->getTypeQualifiers() & Qualifiers::Const) == 0) {
     CXXMethodDecl *OldMD = nullptr;
     if (OldDecl)
-      OldMD = dyn_cast<CXXMethodDecl>(OldDecl->getAsFunction());
+      OldMD = dyn_cast_or_null<CXXMethodDecl>(OldDecl->getAsFunction());
     if (!OldMD || !OldMD->isStatic()) {
       const FunctionProtoType *FPT =
         MD->getType()->castAs<FunctionProtoType>();

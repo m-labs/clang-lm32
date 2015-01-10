@@ -4701,6 +4701,9 @@ def warn_addition_in_bitshift : Warning<
 def warn_self_assignment : Warning<
   "explicitly assigning value of variable of type %0 to itself">,
   InGroup<SelfAssignment>, DefaultIgnore;
+def warn_self_move : Warning<
+  "explicitly moving variable of type %0 to itself">,
+  InGroup<SelfMove>, DefaultIgnore;
 
 def warn_string_plus_int : Warning<
   "adding %0 to a string does not append to the string">,
@@ -4984,8 +4987,6 @@ def err_typecheck_op_on_nonoverlapping_address_space_pointers : Error<
   "|arithmetic operation with operands of type %diff{ ($ and $)|}0,1}2"
   " which are pointers to non-overlapping address spaces">;
 def err_typecheck_assign_const : Error<"read-only variable is not assignable">;
-def err_stmtexpr_file_scope : Error<
-  "statement expression not allowed at file scope">;
 def warn_mixed_sign_comparison : Warning<
   "comparison of integers of different signs: %0 and %1">,
   InGroup<SignCompare>, DefaultIgnore;
