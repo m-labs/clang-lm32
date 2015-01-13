@@ -6018,17 +6018,12 @@ void LM32ABIInfo::computeInfo(CGFunctionInfo &FI) const {
     it->info = classifyArgumentType(it->type);
 }
 
-// Copied from MIPS
+// FIXME: CHECK EXPANSION OF RETURN TYPES
 ABIArgInfo LM32ABIInfo::classifyArgumentType(QualType Ty) const {
   if (isAggregateTypeForABI(Ty)) {
     // Ignore empty aggregates.
     if (getContext().getTypeSize(Ty) == 0)
       return ABIArgInfo::getIgnore();
-
-    // Records with non trivial destructors/constructors should not be passed
-    // by value.
-    if (isRecordWithNonTrivialDestructorOrCopyConstructor(Ty))
-      return ABIArgInfo::getIndirect(0, /*ByVal=*/false);
 
     return ABIArgInfo::getIndirect(0);
   }

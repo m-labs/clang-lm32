@@ -1700,11 +1700,11 @@ namespace {
 // LM32 abstract base class
 class LM32TargetInfo : public TargetInfo {
   static const char * const GCCRegNames[];
-  static const TargetInfo::GCCRegAlias GCCRegAliases[];
+  //static const TargetInfo::GCCRegAlias GCCRegAliases[];
   std::vector<llvm::StringRef> AvailableFeatures;
 
 public:
-  LM32TargetInfo(const std::string& triple) : TargetInfo(triple) {
+  LM32TargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {
 //    PointerWidth = PointerAlign = 32;
 //    LongWidth = LongAlign = 32;
     LongLongWidth = 64;
@@ -1768,18 +1768,14 @@ DescriptionString = "E-m:e-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-f32:
     return "";
   }
 
-  bool setFeatureEnabled(llvm::StringMap<bool> &Features,
-                                           StringRef Name,
-                                           bool Enabled) const {
+  void setFeatureEnabled(llvm::StringMap<bool> &Features,
+                         StringRef Name,
+                         bool Enabled) const {
     if(std::binary_search(AvailableFeatures.begin(), AvailableFeatures.end(),
                           Name)) {
       Features[Name] = Enabled;
-      return true;
-    } else {
-      return false;
     }
   }
-
 };
 
 /// LM32TargetInfo::getTargetDefines - Return a set of the LM32-specific
