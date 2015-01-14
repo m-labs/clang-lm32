@@ -1616,11 +1616,11 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
     VarTemplateSpecializationDecl *VarSpec =
         cast<VarTemplateSpecializationDecl>(D);
 
-    E = DeclRefExpr::Create(
-        Context,
-        SS ? SS->getWithLocInContext(Context) : NestedNameSpecifierLoc(),
-        VarSpec->getTemplateKeywordLoc(), D, RefersToCapturedVariable,
-        NameInfo.getLoc(), Ty, VK, FoundD, TemplateArgs);
+    E = DeclRefExpr::Create(Context, SS ? SS->getWithLocInContext(Context)
+                                        : NestedNameSpecifierLoc(),
+                            VarSpec->getTemplateKeywordLoc(), D,
+                            RefersToCapturedVariable, NameInfo.getLoc(), Ty, VK,
+                            FoundD, TemplateArgs);
   } else {
     assert(!TemplateArgs && "No template arguments for non-variable"
                             " template specialization references");
@@ -7546,7 +7546,7 @@ QualType Sema::CheckSubtractionOperands(ExprResult &LHS, ExprResult &RHS,
 }
 
 static bool isScopedEnumerationType(QualType T) {
-  if (const EnumType *ET = dyn_cast<EnumType>(T))
+  if (const EnumType *ET = T->getAs<EnumType>())
     return ET->getDecl()->isScoped();
   return false;
 }
@@ -8598,7 +8598,7 @@ static NonConstCaptureKind isReferenceToNonConstCapture(Sema &S, Expr *E) {
   // Must be a reference to a declaration from an enclosing scope.
   DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E);
   if (!DRE) return NCCK_None;
-  if (!DRE->refersToCapturedVariable()) return NCCK_None;
+  if (!DRE->refersToEnclosingVariableOrCapture()) return NCCK_None;
 
   // The declaration must be a variable which is not declared 'const'.
   VarDecl *var = dyn_cast<VarDecl>(DRE->getDecl());
@@ -9380,90 +9380,6 @@ static inline UnaryOperatorKind ConvertTokenKindToUnaryOpcode(
   return Opc;
 }
 
-/// DiagnoseSelfMove - Emits a warning if a value is moved to itself.
-static void DiagnoseSelfMove(Sema &S, const Expr *LHSExpr, const Expr *RHSExpr,
-                             SourceLocation OpLoc) {
-  if (!S.ActiveTemplateInstantiations.empty())
-    return;
-
-  // Strip parens and casts away.
-  LHSExpr = LHSExpr->IgnoreParenImpCasts();
-  RHSExpr = RHSExpr->IgnoreParenImpCasts();
-
-  // Check for a call expression
-  const CallExpr *CE = dyn_cast<CallExpr>(RHSExpr);
-  if (!CE || CE->getNumArgs() != 1)
-    return;
-
-  // Check for a call to std::move
-  const FunctionDecl *FD = CE->getDirectCallee();
-  if (!FD || !FD->isInStdNamespace() || !FD->getIdentifier() ||
-      !FD->getIdentifier()->isStr("move"))
-    return;
-
-  // Get argument from std::move
-  RHSExpr = CE->getArg(0);
-
-  const DeclRefExpr *LHSDeclRef = dyn_cast<DeclRefExpr>(LHSExpr);
-  const DeclRefExpr *RHSDeclRef = dyn_cast<DeclRefExpr>(RHSExpr);
-
-  // Two DeclRefExpr's, check that the decls are the same.
-  if (LHSDeclRef && RHSDeclRef) {
-    if (!LHSDeclRef->getDecl() || !RHSDeclRef->getDecl())
-      return;
-    if (LHSDeclRef->getDecl()->getCanonicalDecl() !=
-        RHSDeclRef->getDecl()->getCanonicalDecl())
-      return;
-
-    S.Diag(OpLoc, diag::warn_self_move) << LHSExpr->getType()
-                                        << LHSExpr->getSourceRange()
-                                        << RHSExpr->getSourceRange();
-    return;
-  }
-
-  // Member variables require a different approach to check for self moves.
-  // MemberExpr's are the same if every nested MemberExpr refers to the same
-  // Decl and that the base Expr's are DeclRefExpr's with the same Decl or
-  // the base Expr's are CXXThisExpr's.
-  const Expr *LHSBase = LHSExpr;
-  const Expr *RHSBase = RHSExpr;
-  const MemberExpr *LHSME = dyn_cast<MemberExpr>(LHSExpr);
-  const MemberExpr *RHSME = dyn_cast<MemberExpr>(RHSExpr);
-  if (!LHSME || !RHSME)
-    return;
-
-  while (LHSME && RHSME) {
-    if (LHSME->getMemberDecl()->getCanonicalDecl() !=
-        RHSME->getMemberDecl()->getCanonicalDecl())
-      return;
-
-    LHSBase = LHSME->getBase();
-    RHSBase = RHSME->getBase();
-    LHSME = dyn_cast<MemberExpr>(LHSBase);
-    RHSME = dyn_cast<MemberExpr>(RHSBase);
-  }
-
-  LHSDeclRef = dyn_cast<DeclRefExpr>(LHSBase);
-  RHSDeclRef = dyn_cast<DeclRefExpr>(RHSBase);
-  if (LHSDeclRef && RHSDeclRef) {
-    if (!LHSDeclRef->getDecl() || !RHSDeclRef->getDecl())
-      return;
-    if (LHSDeclRef->getDecl()->getCanonicalDecl() !=
-        RHSDeclRef->getDecl()->getCanonicalDecl())
-      return;
-
-    S.Diag(OpLoc, diag::warn_self_move) << LHSExpr->getType()
-                                        << LHSExpr->getSourceRange()
-                                        << RHSExpr->getSourceRange();
-    return;
-  }
-
-  if (isa<CXXThisExpr>(LHSBase) && isa<CXXThisExpr>(RHSBase))
-    S.Diag(OpLoc, diag::warn_self_move) << LHSExpr->getType()
-                                        << LHSExpr->getSourceRange()
-                                        << RHSExpr->getSourceRange();
-}
-
 /// DiagnoseSelfAssignment - Emits a warning if a value is assigned to itself.
 /// This warning is only emitted for builtin assignment operations. It is also
 /// suppressed in the event of macro expansions.
@@ -9593,7 +9509,7 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
     }
     if (!ResultTy.isNull()) {
       DiagnoseSelfAssignment(*this, LHS.get(), RHS.get(), OpLoc);
-      DiagnoseSelfMove(*this, LHS.get(), RHS.get(), OpLoc);
+      DiagnoseSelfMove(LHS.get(), RHS.get(), OpLoc);
     }
     RecordModifiableNonNullParam(*this, LHS.get());
     break;

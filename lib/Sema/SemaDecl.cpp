@@ -2155,7 +2155,9 @@ static bool mergeDeclAttribute(Sema &S, NamedDecl *D,
                                        AttrSpellingListIndex,
                                        IA->getSemanticSpelling());
   else if (const auto *AA = dyn_cast<AlwaysInlineAttr>(Attr))
-    NewAttr = S.mergeAlwaysInlineAttr(D, AA->getRange(), AttrSpellingListIndex);
+    NewAttr = S.mergeAlwaysInlineAttr(D, AA->getRange(),
+                                      &S.Context.Idents.get(AA->getSpelling()),
+                                      AttrSpellingListIndex);
   else if (const auto *MA = dyn_cast<MinSizeAttr>(Attr))
     NewAttr = S.mergeMinSizeAttr(D, MA->getRange(), AttrSpellingListIndex);
   else if (const auto *OA = dyn_cast<OptimizeNoneAttr>(Attr))
@@ -3237,8 +3239,15 @@ void Sema::MergeVarDecl(VarDecl *New, LookupResult &Previous) {
   }
 
   // Merge the types.
-  MergeVarDeclTypes(New, Old, mergeTypeWithPrevious(*this, New, Old, Previous));
+  VarDecl *MostRecent = Old->getMostRecentDecl();
+  if (MostRecent != Old) {
+    MergeVarDeclTypes(New, MostRecent,
+                      mergeTypeWithPrevious(*this, New, MostRecent, Previous));
+    if (New->isInvalidDecl())
+      return;
+  }
 
+  MergeVarDeclTypes(New, Old, mergeTypeWithPrevious(*this, New, Old, Previous));
   if (New->isInvalidDecl())
     return;
 
@@ -3283,12 +3292,12 @@ void Sema::MergeVarDecl(VarDecl *New, LookupResult &Previous) {
 
   // Check if extern is followed by non-extern and vice-versa.
   if (New->hasExternalStorage() &&
-      !Old->hasLinkage() && Old->isLocalVarDecl()) {
+      !Old->hasLinkage() && Old->isLocalVarDeclOrParm()) {
     Diag(New->getLocation(), diag::err_extern_non_extern) << New->getDeclName();
     Diag(OldLocation, PrevDiag);
     return New->setInvalidDecl();
   }
-  if (Old->hasLinkage() && New->isLocalVarDecl() &&
+  if (Old->hasLinkage() && New->isLocalVarDeclOrParm() &&
       !New->hasExternalStorage()) {
     Diag(New->getLocation(), diag::err_non_extern_extern) << New->getDeclName();
     Diag(OldLocation, PrevDiag);
@@ -8050,7 +8059,7 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
     // the function returns a UDT (class, struct, or union type) that is not C
     // compatible, and if it does, warn the user.
     // But, issue any diagnostic on the first declaration only.
-    if (NewFD->isExternC() && Previous.empty()) {
+    if (Previous.empty() && NewFD->isExternC()) {
       QualType R = NewFD->getReturnType();
       if (R->isIncompleteType() && !R->isVoidType())
         Diag(NewFD->getLocation(), diag::warn_return_value_udt_incomplete)
@@ -10183,7 +10192,7 @@ static void RebuildLambdaScopeInfo(CXXMethodDecl *CallOperator,
       QualType CaptureType = VD->getType();
       const bool ByRef = C.getCaptureKind() == LCK_ByRef;
       LSI->addCapture(VD, /*IsBlock*/false, ByRef, 
-          /*RefersToCapturedVariable*/true, C.getLocation(),
+          /*RefersToEnclosingVariableOrCapture*/true, C.getLocation(),
           /*EllipsisLoc*/C.isPackExpansion() 
                          ? C.getEllipsisLoc() : SourceLocation(),
           CaptureType, /*Expr*/ nullptr);
@@ -10481,9 +10490,11 @@ Decl *Sema::ActOnFinishFunctionBody(Decl *dcl, Stmt *Body,
       DiagnoseSizeOfParametersAndReturnValue(FD->param_begin(), FD->param_end(),
                                              FD->getReturnType(), FD);
 
-      // If this is a constructor, we need a vtable.
+      // If this is a structor, we need a vtable.
       if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(FD))
         MarkVTableUsed(FD->getLocation(), Constructor->getParent());
+      else if (CXXDestructorDecl *Destructor = dyn_cast<CXXDestructorDecl>(FD))
+        MarkVTableUsed(FD->getLocation(), Destructor->getParent());
       
       // Try to apply the named return value optimization. We have to check
       // if we can do this here because lambdas keep return statements around

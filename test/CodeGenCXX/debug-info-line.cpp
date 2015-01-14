@@ -1,4 +1,7 @@
-// RUN: %clang_cc1 -g -std=c++11 -S -emit-llvm %s -o - | FileCheck %s
+// RUN: %clang_cc1 -gline-tables-only -std=c++11 -fexceptions -fcxx-exceptions -S -emit-llvm %s -o - | FileCheck %s
+// RUN: %clang_cc1 -gline-tables-only -std=c++11 -fexceptions -fcxx-exceptions -S -emit-llvm %s -o - -triple i686-linux-gnu | FileCheck %s
+
+// XFAIL: win32
 
 int &src();
 int *sink();
@@ -110,6 +113,59 @@ void f10() {
       new (void_src()) int(src()));
 }
 
+// noexcept just to simplify the codegen a bit
+void fn() noexcept(true);
+
+struct bar {
+  bar();
+  // noexcept(false) to convolute the global dtor
+  ~bar() noexcept(false);
+};
+// global ctor cleanup
+// CHECK-LABEL: define
+// CHECK: invoke{{ }}
+// CHECK: invoke{{ }}
+// CHECK:   to label {{.*}}, !dbg [[DBG_GLBL_CTOR_B:!.*]]
+
+// terminate caller
+// CHECK-LABEL: define
+
+// global dtor cleanup
+// CHECK-LABEL: define
+// CHECK: invoke{{ }}
+// CHECK: invoke{{ }}
+// CHECK:   to label {{.*}}, !dbg [[DBG_GLBL_DTOR_B:!.*]]
+#line 1500
+bar b[1] = { //
+    (fn(),   //
+     bar())};
+
+// CHECK-LABEL: define
+__complex double f11() {
+  __complex double f;
+// CHECK: store {{.*}} !dbg [[DBG_F11:!.*]]
+#line 1200
+  return f;
+}
+
+// CHECK-LABEL: define
+void f12() {
+  int f12_1();
+  void f12_2(int = f12_1());
+// CHECK: call {{(signext )?}}i32 {{.*}} !dbg [[DBG_F12:!.*]]
+#line 1300
+  f12_2();
+}
+
+// CHECK-LABEL: define
+void f13() {
+// CHECK: call {{.*}} !dbg [[DBG_F13:!.*]]
+#define F13_IMPL 1, src()
+  1,
+#line 1400
+  F13_IMPL;
+}
+
 // CHECK: [[DBG_F1]] = !{i32 100,
 // CHECK: [[DBG_FOO_VALUE]] = !{i32 200,
 // CHECK: [[DBG_FOO_REF]] = !{i32 202,
@@ -124,3 +180,8 @@ void f10() {
 // CHECK: [[DBG_F9]] = !{i32 1000,
 // CHECK: [[DBG_F10_ICMP]] = !{i32 1100,
 // CHECK: [[DBG_F10_STORE]] = !{i32 1100,
+// CHECK: [[DBG_GLBL_CTOR_B]] = !{i32 1500,
+// CHECK: [[DBG_GLBL_DTOR_B]] = !{i32 1500,
+// CHECK: [[DBG_F11]] = !{i32 1200,
+// CHECK: [[DBG_F12]] = !{i32 1300,
+// CHECK: [[DBG_F13]] = !{i32 1400,
