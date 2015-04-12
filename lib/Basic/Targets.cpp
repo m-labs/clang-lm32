@@ -1723,7 +1723,8 @@ public:
 //    UIntMaxType = UnsignedLong;
 //    Int64Type = SignedLongLong;
     // This must match llvm/lib/Target/LM32/LM32Subtarget.cpp
-DescriptionString = "E-m:e-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-f32:32:32-f64:32:32-a0:8:32-S32-s0:32:32-n32-v64:32:32-v128:32:32";
+//DescriptionString = "E-m:e-p:32:32:32-i8:8:32-i16:16:32-i32:32:32-i64:32:32-f32:32:32-f64:32:32-a0:8:32-S32-s0:32:32-n32-v64:32:32-v128:32:32";
+DescriptionString = "E-m:e-p:32:32-i8:8:32-i16:16:32-i64:32-f64:32-v64:32-v128:32-a:8:32-n32-S32";
 
     // Define available target features
     // These must be defined in sorted order!      
